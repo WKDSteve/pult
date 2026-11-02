@@ -1,0 +1,17 @@
+# Rust
+target/
+
+# Python (tools/)
+__pycache__/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Recordings must never be committed
+*.wav
+*.flac
+*.mp3

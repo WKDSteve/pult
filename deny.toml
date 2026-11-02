@@ -1,0 +1,37 @@
+# cargo-deny: what may enter the dependency tree (NREL-01).
+# Run: cargo deny check
+
+[graph]
+all-features = false
+# pult is built for Windows only for now (WASAPI). The Linux and macOS backends of cpal
+# (ALSA, CoreAudio) are not in this graph; add their targets when a build there is planned.
+targets = ["x86_64-pc-windows-msvc"]
+
+[advisories]
+# Known vulnerabilities and unmaintained crates are errors.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+# Only licenses the tree has; a new one is a decision, not a default.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    # assert_no_alloc (the allocation guard of the audio callbacks): permissive, notice only.
+    "BSD-1-Clause",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

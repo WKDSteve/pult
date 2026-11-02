@@ -1,0 +1,22 @@
+[package]
+name = "pult-cli"
+description = "Command line of pult"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pult"
+path = "src/main.rs"
+
+[dependencies]
+pult-core.workspace = true
+pult-engine.workspace = true
+assert_no_alloc.workspace = true
+
+[lints]
+workspace = true

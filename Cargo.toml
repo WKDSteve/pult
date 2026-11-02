@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/pult-core", "crates/pult-engine", "crates/pult-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+authors = ["Stefan Bartl"]
+repository = "https://github.com/WKDSteve/pult"
+publish = false
+
+[workspace.dependencies]
+pult-core = { path = "crates/pult-core" }
+pult-engine = { path = "crates/pult-engine" }
+cpal = "0.18.2"
+rtrb = "0.4.1"
+assert_no_alloc = "1.1.2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Sample math converts between frame counts and float on purpose.
+cast_precision_loss = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# The audio callbacks must keep up in debug builds too.
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,19 @@
+[package]
+name = "pult-engine"
+description = "Audio devices of pult (cpal/WASAPI): capture, mix and play"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+pult-core.workspace = true
+cpal.workspace = true
+rtrb.workspace = true
+assert_no_alloc.workspace = true
+
+[lints]
+workspace = true
