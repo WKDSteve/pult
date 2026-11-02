@@ -1,6 +1,7 @@
 //! The command line, parsed by hand: three subcommands do not need a parser crate.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use pult_engine::{RouteSpec, SourceSpec};
 
@@ -20,17 +21,28 @@ pult - route and mix audio devices
 USAGE:
     pult devices
     pult run --to <OUTPUT> --from <INPUT>[@GAIN_DB] [--from ...] [--latency-ms <MS>]
+             [--log <FILE.csv>]
     pult tone --to <OUTPUT> [--gain-db <DB>] [--freq <HZ>]
     pult help | --help
     pult --version
 
 Device names may be a unique part of the name, ignoring case (see `pult devices`).
 GAIN_DB is a gain in dB, for example \"CABLE Output@-6\". --latency-ms is the buffering per
-input (default 40); raise it if you hear dropouts. `tone` plays a sine (default 440 Hz at
+input (default 40); raise it if you hear dropouts. --log writes a CSV row with the levels
+and counters every 10 s (the file is overwritten). `tone` plays a sine (default 440 Hz at
 -30 dB) to check a chain of devices. Both run until Enter is pressed.
 
 EXAMPLE:
     pult run --from \"CABLE Output\" --to Focusrite";
+
+/// A route to run and how to watch it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunSpec {
+    /// The devices and buffering.
+    pub route: RouteSpec,
+    /// Where `--log` writes its CSV, if given.
+    pub log: Option<PathBuf>,
+}
 
 /// A test tone to play.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +61,7 @@ pub enum Command {
     /// List the devices.
     Devices,
     /// Run a route until stopped.
-    Run(RouteSpec),
+    Run(RunSpec),
     /// Play a test tone until stopped.
     Tone(ToneSpec),
     /// Print the usage.
@@ -99,9 +111,10 @@ fn no_more(mut args: impl Iterator<Item = String>) -> Result<(), UsageError> {
     }
 }
 
-fn parse_run(mut args: impl Iterator<Item = String>) -> Result<RouteSpec, UsageError> {
+fn parse_run(mut args: impl Iterator<Item = String>) -> Result<RunSpec, UsageError> {
     let mut sources = Vec::new();
     let mut sink = None;
+    let mut log = None;
     let mut latency_ms = DEFAULT_LATENCY_MS;
     while let Some(arg) = args.next() {
         let mut value = |name: &str| {
@@ -113,6 +126,11 @@ fn parse_run(mut args: impl Iterator<Item = String>) -> Result<RouteSpec, UsageE
             "--to" => {
                 if sink.replace(value("--to")?).is_some() {
                     return Err(usage("--to may be given only once"));
+                }
+            }
+            "--log" => {
+                if log.replace(PathBuf::from(value("--log")?)).is_some() {
+                    return Err(usage("--log may be given only once"));
                 }
             }
             "--latency-ms" => {
@@ -132,10 +150,13 @@ fn parse_run(mut args: impl Iterator<Item = String>) -> Result<RouteSpec, UsageE
     if sources.is_empty() {
         return Err(usage("run needs at least one input (--from)"));
     }
-    Ok(RouteSpec {
-        sources,
-        sink,
-        latency_ms,
+    Ok(RunSpec {
+        route: RouteSpec {
+            sources,
+            sink,
+            latency_ms,
+        },
+        log,
     })
 }
 
@@ -236,13 +257,18 @@ mod tests {
             "Focusrite",
             "--latency-ms",
             "60",
+            "--log",
+            "abend.csv",
         ]);
         assert_eq!(
             parsed,
-            Ok(Command::Run(RouteSpec {
-                sources: vec![source("CABLE Output", 0.0), source("Analogue 1 + 2", -6.5)],
-                sink: "Focusrite".into(),
-                latency_ms: 60,
+            Ok(Command::Run(RunSpec {
+                route: RouteSpec {
+                    sources: vec![source("CABLE Output", 0.0), source("Analogue 1 + 2", -6.5)],
+                    sink: "Focusrite".into(),
+                    latency_ms: 60,
+                },
+                log: Some(PathBuf::from("abend.csv")),
             }))
         );
     }
@@ -252,8 +278,9 @@ mod tests {
         let Ok(Command::Run(spec)) = run(&["--from", "Mic @ Desk", "--to", "x"]) else {
             panic!("expected a route");
         };
-        assert_eq!(spec.sources, vec![source("Mic @ Desk", 0.0)]);
-        assert_eq!(spec.latency_ms, DEFAULT_LATENCY_MS);
+        assert_eq!(spec.route.sources, vec![source("Mic @ Desk", 0.0)]);
+        assert_eq!(spec.route.latency_ms, DEFAULT_LATENCY_MS);
+        assert_eq!(spec.log, None);
     }
 
     fn tone(args: &[&str]) -> Result<Command, UsageError> {
@@ -302,5 +329,7 @@ mod tests {
         assert!(run(&["--from", "a", "--to", "x", "--latency-ms", "0"]).is_err());
         assert!(run(&["--from", "a", "--to", "x", "--latency-ms", "fast"]).is_err());
         assert!(run(&["--from", "a", "--to", "x", "--loud"]).is_err());
+        assert!(run(&["--from", "a", "--to", "x", "--log"]).is_err());
+        assert!(run(&["--from", "a", "--to", "x", "--log", "a", "--log", "b"]).is_err());
     }
 }

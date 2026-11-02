@@ -1,17 +1,17 @@
 //! `pult`: lists audio devices and runs a route from the command line.
 
 mod args;
+mod monitor;
 
-use std::fmt::Write as _;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use args::{Command, ToneSpec, USAGE};
-use pult_core::linear_to_db;
+use args::{Command, RunSpec, ToneSpec, USAGE};
+use monitor::{LOG_INTERVAL, Log, Snapshot};
 use pult_engine::{Devices, Running, Tone};
 
 // Debug builds abort on any allocation inside an audio callback (see pult-engine).
@@ -42,9 +42,7 @@ fn main() -> ExitCode {
         Command::Devices => pult_engine::list_devices()
             .map(|d| print_devices(&d))
             .map_err(|e| e.to_string()),
-        Command::Run(spec) => pult_engine::start(&spec)
-            .map_err(|e| e.to_string())
-            .and_then(|running| run(&running)),
+        Command::Run(spec) => start_run(&spec),
         Command::Tone(spec) => pult_engine::play_tone(&spec.sink, spec.frequency, spec.gain_db)
             .map_err(|e| e.to_string())
             .and_then(|playing| tone(&playing, &spec)),
@@ -75,17 +73,21 @@ fn print_devices(devices: &Devices) {
     println!("(* = system default)");
 }
 
-fn db(linear: f32) -> String {
-    let value = linear_to_db(linear);
-    if value < -90.0 {
-        "  -inf".to_owned()
-    } else {
-        format!("{value:6.1}")
-    }
+/// Opens the log (before any device, so a bad path costs nothing) and runs the route.
+fn start_run(spec: &RunSpec) -> Result<(), String> {
+    let log = match &spec.log {
+        Some(path) => Some(
+            Log::create(path, spec.route.sources.len())
+                .map_err(|e| format!("cannot write the log {}: {e}", path.display()))?,
+        ),
+        None => None,
+    };
+    let running = pult_engine::start(&spec.route).map_err(|e| e.to_string())?;
+    run(&running, log)
 }
 
 /// Shows levels until Enter is pressed or a device fails.
-fn run(running: &Running) -> Result<(), String> {
+fn run(running: &Running, log: Option<Log>) -> Result<(), String> {
     println!(
         "Routing to {} at {} Hz; press Enter to stop.",
         running.sink, running.sample_rate
@@ -93,7 +95,69 @@ fn run(running: &Running) -> Result<(), String> {
     for (i, input) in running.inputs.iter().enumerate() {
         println!("  [{}] {}", i + 1, input.name);
     }
-    wait_for_enter(|| running.fault(), Some(&|| status_line(running)))
+    let mut recorder = Recorder::new(log);
+    let result = wait_for_enter(|| running.fault(), Some(&mut || recorder.tick(running)));
+    recorder.finish(running);
+    result
+}
+
+/// Takes the snapshots of a run and writes every [`LOG_INTERVAL`] a log row with the
+/// highest peaks of that interval.
+struct Recorder {
+    start: Instant,
+    log: Option<Log>,
+    interval: Option<Snapshot>,
+    next_row: Duration,
+}
+
+impl Recorder {
+    fn new(log: Option<Log>) -> Self {
+        Self {
+            start: Instant::now(),
+            log,
+            interval: None,
+            next_row: LOG_INTERVAL,
+        }
+    }
+
+    /// Takes a snapshot, logs when an interval is full, and returns the status line.
+    fn tick(&mut self, running: &Running) -> String {
+        let snap = Snapshot::take(running, self.start.elapsed());
+        let merged = self
+            .interval
+            .as_ref()
+            .map_or_else(|| snap.clone(), |earlier| earlier.merge(&snap));
+        if snap.elapsed >= self.next_row {
+            self.write(&merged);
+            self.interval = None;
+            while self.next_row <= snap.elapsed {
+                self.next_row += LOG_INTERVAL;
+            }
+        } else {
+            self.interval = Some(merged);
+        }
+        monitor::status_line(&snap)
+    }
+
+    /// Writes the rest of the last interval.
+    fn finish(&mut self, running: &Running) {
+        let snap = Snapshot::take(running, self.start.elapsed());
+        let last = self
+            .interval
+            .take()
+            .map_or_else(|| snap.clone(), |earlier| earlier.merge(&snap));
+        self.write(&last);
+    }
+
+    /// A failed write is reported once and ends logging; the route keeps running.
+    fn write(&mut self, snap: &Snapshot) {
+        if let Some(log) = &mut self.log
+            && let Err(err) = log.row(snap)
+        {
+            eprintln!("\npult: log stopped, {err}");
+            self.log = None;
+        }
+    }
 }
 
 /// Keeps the tone playing until Enter is pressed or the device fails.
@@ -105,11 +169,12 @@ fn tone(playing: &Tone, spec: &ToneSpec) -> Result<(), String> {
     wait_for_enter(|| playing.fault(), None)
 }
 
-/// Blocks until a line arrives on stdin or `fault` reports an error, refreshing the
-/// `status` line meanwhile when stdout is a terminal and printing it once at the end.
+/// Blocks until a line arrives on stdin or `fault` reports an error. `status` runs every
+/// interval; its line is shown live when stdout is a terminal, and the last one is printed
+/// at the end.
 fn wait_for_enter(
     fault: impl Fn() -> Option<String>,
-    status: Option<&dyn Fn() -> String>,
+    mut status: Option<&mut dyn FnMut() -> String>,
 ) -> Result<(), String> {
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -122,53 +187,28 @@ fn wait_for_enter(
         });
     }
     let live = io::stdout().is_terminal();
+    let mut last = String::new();
     while !stop.load(Ordering::Relaxed) {
         thread::sleep(STATUS_INTERVAL);
         if let Some(fault) = fault() {
-            println!();
+            println!("\n{last}");
             return Err(format!("stopped, {fault}"));
         }
-        if let (true, Some(status)) = (live, status) {
-            // A line wider than the terminal wraps, and `\r` then returns only to the start of
-            // its last row: every refresh would stack up. Fit it to the current width instead.
-            let width = terminal_size::terminal_size().map_or(80, |(w, _)| usize::from(w.0));
-            print!("\r{}", fit(&status(), width));
-            let _ = io::stdout().flush();
+        if let Some(status) = status.as_mut() {
+            last = status();
+            if live {
+                // A line wider than the terminal wraps, and `\r` then returns only to the start
+                // of its last row: every refresh would stack up. Fit it to the width instead.
+                let width = terminal_size::terminal_size().map_or(80, |(w, _)| usize::from(w.0));
+                print!("\r{}", fit(&last, width));
+                let _ = io::stdout().flush();
+            }
         }
     }
-    if let Some(status) = status {
-        println!("\n{}", status());
+    if status.is_some() {
+        println!("\n{last}");
     }
     Ok(())
-}
-
-fn status_line(running: &Running) -> String {
-    let mut line = String::new();
-    // Writing into a String cannot fail. Per input: level, dropouts, frames lost at capture
-    // (the ring was full), and the drift fixes as frames dropped, frames repeated and hard
-    // resyncs.
-    for (i, input) in running.inputs.iter().enumerate() {
-        let stats = &input.handle.stats;
-        let _ = write!(
-            line,
-            "[{}] {} dB out {} lost {} fix -{}/+{}/{} ",
-            i + 1,
-            db(stats.peak.take()),
-            stats.underruns.get(),
-            stats.dropped_at_capture.get(),
-            stats.drops.get(),
-            stats.repeats.get(),
-            stats.resyncs.get()
-        );
-    }
-    let _ = write!(
-        line,
-        "| mix {} dB clipped {} | glitches {}",
-        db(running.master.peak.take()),
-        running.master.clipped.get(),
-        running.xruns()
-    );
-    line.trim_end().to_owned()
 }
 
 /// `line` cut or padded to one column less than `width`, so that it never wraps and fully

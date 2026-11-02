@@ -44,7 +44,7 @@ pult run --from "CABLE Output" --to Focusrite
 pult zeigt eine Statuszeile und hört bei Enter auf:
 
 ```
-[1]  -18.3 dB out 0 lost 0 fix -0/+0/0 | mix  -18.3 dB clipped 0 | glitches 0
+0:12:41 [1]  -18.3 dB out 0 lost 0 fix -0/+0/0 | mix  -18.3 dB clipped 0 | glitches 0
 ```
 
 | Feld | Bedeutung |
@@ -57,6 +57,17 @@ pult zeigt eine Statuszeile und hört bei Enter auf:
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
 
 Die Lautstärke regelt weiter der Windows-Lautstärkeregler (er steuert `CABLE Input`) und der Verstärker. Solange pult nicht läuft, bleibt es still, weil alle Programme ins Kabel spielen. Zurück geht es, indem man das Standardgerät wieder auf das Scarlett stellt.
+
+### Langzeit-Test mit Protokoll
+
+```
+pult run --from "CABLE Output" --to Focusrite --log abend.csv
+```
+
+Schreibt alle 10 Sekunden eine Zeile nach `abend.csv` (die Datei wird neu angelegt): Laufzeit, Spitzenpegel des
+Abschnitts in dB, dazu alle Zähler der Statuszeile als laufende Summen. Jede Zeile wird sofort gespeichert, auch wenn
+das Fenster einfach geschlossen wird. Am Verlauf sieht man, ob Korrekturen nur beim Start anfallen oder gleichmäßig
+weiterlaufen (echte Takt-Drift). Die Statuszeile beginnt mit der Laufzeit (`h:mm:ss`).
 
 ### Mehr Eingänge mischen
 
