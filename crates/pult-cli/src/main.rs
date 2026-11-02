@@ -129,7 +129,10 @@ fn wait_for_enter(
             return Err(format!("stopped, {fault}"));
         }
         if let (true, Some(status)) = (live, status) {
-            print!("\r{}", status());
+            // A line wider than the terminal wraps, and `\r` then returns only to the start of
+            // its last row: every refresh would stack up. Fit it to the current width instead.
+            let width = terminal_size::terminal_size().map_or(80, |(w, _)| usize::from(w.0));
+            print!("\r{}", fit(&status(), width));
             let _ = io::stdout().flush();
         }
     }
@@ -148,7 +151,7 @@ fn status_line(running: &Running) -> String {
         let stats = &input.handle.stats;
         let _ = write!(
             line,
-            "[{}] {} dB out {} lost {} fix -{}/+{}/{}  ",
+            "[{}] {} dB out {} lost {} fix -{}/+{}/{} ",
             i + 1,
             db(stats.peak.take()),
             stats.underruns.get(),
@@ -160,10 +163,33 @@ fn status_line(running: &Running) -> String {
     }
     let _ = write!(
         line,
-        "| mix {} dB clipped {} | device glitches {}   ",
+        "| mix {} dB clipped {} | glitches {}",
         db(running.master.peak.take()),
         running.master.clipped.get(),
         running.xruns()
     );
-    line
+    line.trim_end().to_owned()
+}
+
+/// `line` cut or padded to one column less than `width`, so that it never wraps and fully
+/// covers the previous refresh.
+fn fit(line: &str, width: usize) -> String {
+    let columns = width.saturating_sub(1);
+    let mut fitted: String = line.chars().take(columns).collect();
+    let used = fitted.chars().count();
+    fitted.extend(std::iter::repeat_n(' ', columns - used));
+    fitted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit;
+
+    #[test]
+    fn fit_cuts_long_lines_and_pads_short_ones() {
+        assert_eq!(fit("abcdef", 4), "abc");
+        assert_eq!(fit("ab", 5), "ab  ");
+        assert_eq!(fit("äöü-x", 4), "äöü");
+        assert_eq!(fit("abc", 0), "");
+    }
 }

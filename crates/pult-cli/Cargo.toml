@@ -17,6 +17,8 @@ path = "src/main.rs"
 pult-core.workspace = true
 pult-engine.workspace = true
 assert_no_alloc.workspace = true
+# The width of the console for the live status line (no unsafe Windows calls in pult).
+terminal_size.workspace = true
 
 [lints]
 workspace = true
