@@ -214,7 +214,8 @@ impl Mixer {
         (mixer, stats)
     }
 
-    /// Overwrites `out` (interleaved) with the mix of all inputs, clipped to full scale.
+    /// Overwrites `out` (interleaved) with the mix of all inputs, clipped to full scale. A NaN
+    /// (a broken input) becomes silence: a device may turn it into full-scale noise.
     pub fn process(&mut self, out: &mut [f32]) {
         out.fill(0.0);
         if self.out_channels == 0 {
@@ -226,7 +227,10 @@ impl Mixer {
         }
         let mut clipped = 0;
         for sample in out.iter_mut() {
-            if sample.abs() > 1.0 {
+            if sample.is_nan() {
+                clipped += 1;
+                *sample = 0.0;
+            } else if sample.abs() > 1.0 {
                 clipped += 1;
                 *sample = sample.clamp(-1.0, 1.0);
             }
@@ -326,6 +330,17 @@ mod tests {
         assert_eq!(out, [0.05, 0.06, 0.05, 0.06]);
         assert_eq!(handle.stats.repeats.get(), 1);
         assert_eq!(handle.stats.drops.get(), 0);
+    }
+
+    #[test]
+    fn never_passes_nan_or_infinity_to_the_device() {
+        let (mut capture, input, _) = connect(config(1, 0));
+        let (mut mixer, master) = Mixer::new(vec![input], 1);
+        capture.push(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5]);
+        let mut out = [0.0; 4];
+        mixer.process(&mut out);
+        assert_eq!(out, [0.0, 1.0, -1.0, 0.5]);
+        assert_eq!(master.clipped.get(), 3);
     }
 
     #[test]

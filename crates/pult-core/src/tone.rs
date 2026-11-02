@@ -11,13 +11,18 @@ pub struct Sine {
 }
 
 impl Sine {
-    /// A tone of `frequency` Hz at `sample_rate` Hz, scaled by the linear `gain`.
+    /// A tone of `frequency` Hz at `sample_rate` Hz, scaled by the linear `gain`, which is
+    /// held to full scale (0 to 1).
     #[must_use]
     pub fn new(frequency: f32, sample_rate: u32, gain: f32) -> Self {
         Self {
             phase: 0.0,
             step: TAU * frequency / sample_rate.max(1) as f32,
-            gain,
+            gain: if gain.is_nan() {
+                0.0
+            } else {
+                gain.clamp(0.0, 1.0)
+            },
         }
     }
 
@@ -43,6 +48,14 @@ mod tests {
         sine.fill(&mut out, 2);
         let expected = [0.0, 0.0, 0.5, 0.5, 0.0, 0.0, -0.5, -0.5];
         assert!(out.iter().zip(expected).all(|(o, e)| (o - e).abs() < 1e-5));
+    }
+
+    #[test]
+    fn gain_never_exceeds_full_scale() {
+        let mut sine = Sine::new(12_000.0, 48_000, 10.0);
+        let mut out = [0.0; 2];
+        sine.fill(&mut out, 1);
+        assert!((out[1] - 1.0).abs() < 1e-5, "{out:?}");
     }
 
     #[test]

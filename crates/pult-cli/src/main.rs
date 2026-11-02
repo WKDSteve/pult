@@ -141,16 +141,18 @@ fn wait_for_enter(
 
 fn status_line(running: &Running) -> String {
     let mut line = String::new();
-    // Writing into a String cannot fail. Per input: level, dropouts, and the drift fixes as
-    // frames dropped, frames repeated and hard resyncs.
+    // Writing into a String cannot fail. Per input: level, dropouts, frames lost at capture
+    // (the ring was full), and the drift fixes as frames dropped, frames repeated and hard
+    // resyncs.
     for (i, input) in running.inputs.iter().enumerate() {
         let stats = &input.handle.stats;
         let _ = write!(
             line,
-            "[{}] {} dB out {} fix -{}/+{}/{}  ",
+            "[{}] {} dB out {} lost {} fix -{}/+{}/{}  ",
             i + 1,
             db(stats.peak.take()),
             stats.underruns.get(),
+            stats.dropped_at_capture.get(),
             stats.drops.get(),
             stats.repeats.get(),
             stats.resyncs.get()

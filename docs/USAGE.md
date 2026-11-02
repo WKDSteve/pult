@@ -44,15 +44,16 @@ pult run --from "CABLE Output" --to Focusrite
 pult zeigt eine Statuszeile und hört bei Enter auf:
 
 ```
-[1]  -18.3 dB out 0 fix -0/+0/0  | mix  -18.3 dB clipped 0 | device glitches 0
+[1]  -18.3 dB out 0 lost 0 fix -0/+0/0  | mix  -18.3 dB clipped 0 | device glitches 0
 ```
 
 | Feld | Bedeutung |
 |---|---|
 | `[1] -18.3 dB` | Spitzenpegel des Eingangs 1 nach Gain |
 | `out` | Aussetzer: der Puffer des Eingangs lief leer |
+| `lost` | an der Aufnahme verlorene Frames: der Puffer war voll, weil der Ausgang länger als eine Sekunde nichts abgenommen hat |
 | `fix -a/+b/c` | gegen Takt-Drift verworfene (`a`) und wiederholte (`b`) Einzel-Frames, harte Resyncs (`c`) |
-| `mix` / `clipped` | Spitzenpegel der Summe, Samples über Vollaussteuerung (auf ±1 begrenzt) |
+| `mix` / `clipped` | Spitzenpegel der Summe, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt) |
 | `device glitches` | Unter- oder Überläufe, die Windows selbst meldet |
 
 Die Lautstärke regelt weiter der Windows-Lautstärkeregler (er steuert `CABLE Input`) und der Verstärker. Solange pult nicht läuft, bleibt es still, weil alle Programme ins Kabel spielen. Zurück geht es, indem man das Standardgerät wieder auf das Scarlett stellt.
