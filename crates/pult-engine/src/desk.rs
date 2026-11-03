@@ -2,7 +2,7 @@
 //! [`pult_core::Desk`] over [`Running`], so the window sees the same [`MixerView`] it sees of
 //! the demo desk.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ use pult_core::{
     linear_to_db,
 };
 
-use crate::{InputKind, Running};
+use crate::{InputKind, Running, profile};
 
 /// A running route behind the [`Desk`] interface. Taking a view also supervises the devices
 /// (a lost one is looked for again), so call [`Desk::view`] a few times a second.
@@ -37,6 +37,19 @@ impl EngineDesk {
             meter_point: MeterPoint::default(),
             solo,
         }
+    }
+
+    /// Reads the profile at `path`, starts its route and returns its desk: what the window
+    /// does at start.
+    ///
+    /// # Errors
+    ///
+    /// A message when the profile cannot be read or is invalid, or the route does not start
+    /// (a device missing, a stream refused).
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let spec = profile::load(path).map_err(|e| e.to_string())?;
+        let running = crate::start(&spec).map_err(|e| e.to_string())?;
+        Ok(Self::new(running, Some(path.to_path_buf())))
     }
 
     /// The route behind the desk.
@@ -238,6 +251,14 @@ impl Desk for EngineDesk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_names_a_profile_it_cannot_read() {
+        match EngineDesk::open(Path::new("no-such-profile.toml")) {
+            Ok(_) => panic!("opened a missing profile"),
+            Err(why) => assert!(why.contains("cannot read no-such-profile.toml"), "{why}"),
+        }
+    }
 
     #[test]
     fn peaks_and_corrections_read_as_the_view_wants_them() {
