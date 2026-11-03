@@ -2488,6 +2488,7 @@ dependencies = [
  "egui_kittest",
  "pult-core",
  "pult-engine",
+ "windows",
 ]
 
 [[package]]

@@ -191,6 +191,21 @@ fn the_start_screen_offers_a_retry_and_the_demo() {
 }
 
 #[test]
+fn while_the_profile_opens_the_start_screen_offers_nothing() {
+    let mut harness = HarnessBuilder::default()
+        .with_size(vec2(1280.0, 760.0))
+        .build_ui(|ui| {
+            start::starting(ui, Some(std::path::Path::new("studio.toml")));
+        });
+    harness.run_steps(2);
+    assert!(harness.query_by_label("Starting the route").is_some());
+    assert!(harness.query_by_label("studio.toml").is_some());
+    // Nothing to click until the route stands or fails.
+    assert!(harness.query_by_label("Try again").is_none());
+    assert!(harness.query_by_label("Demo desk").is_none());
+}
+
+#[test]
 fn a_cut_name_shows_in_full_on_hover() {
     let device = "Lautsprecher (2- Focusrite USB Audio)";
     let mut harness = harness();

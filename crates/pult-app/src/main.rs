@@ -1,7 +1,14 @@
 //! `pult-app`: the console window over a running route (`pult-app studio.toml`) or the demo
 //! desk (`pult-app --demo`).
+//!
+//! A release build is a window program: no console window opens with it. Text for the
+//! command line goes to the terminal it was started from (`ffi`).
 
-#![forbid(unsafe_code)]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![deny(unsafe_code)]
+
+#[allow(unsafe_code)]
+mod ffi;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -9,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, CentralPanel, Frame, ViewportCommand};
 use pult_app::console::{self, ConsoleState};
-use pult_app::start::{self, Choice, Start, USAGE};
+use pult_app::start::{self, Choice, Opening, Start, USAGE};
 use pult_app::theme::Theme;
 use pult_core::view::{Desk, FakeDesk};
 use pult_engine::EngineDesk;
@@ -28,6 +35,8 @@ struct App {
     /// The profile from the command line, opened again on "Try again".
     profile: Option<PathBuf>,
     desk: Option<Box<dyn Desk>>,
+    /// The profile while it opens in the background.
+    opening: Option<Opening<EngineDesk>>,
     /// Why the profile did not open; shown on the start screen.
     problem: Option<String>,
     state: ConsoleState,
@@ -36,10 +45,11 @@ struct App {
 }
 
 impl App {
-    fn new(start: Start) -> Self {
+    fn new(start: Start, ctx: &egui::Context) -> Self {
         let mut app = Self {
             profile: None,
             desk: None,
+            opening: None,
             problem: None,
             state: ConsoleState::default(),
             clock: Instant::now(),
@@ -48,7 +58,7 @@ impl App {
         match start {
             Start::Profile(path) => {
                 app.profile = Some(path);
-                app.open_profile();
+                app.open_profile(ctx);
             }
             Start::Demo => app.use_desk(Box::new(FakeDesk::new())),
             Start::Nothing | Start::Help | Start::Version => {}
@@ -56,9 +66,22 @@ impl App {
         app
     }
 
-    fn open_profile(&mut self) {
-        let Some(path) = &self.profile else { return };
-        match EngineDesk::open(path) {
+    /// Opens the profile in the background; the start screen says so meanwhile.
+    fn open_profile(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.profile.clone() else {
+            return;
+        };
+        self.problem = None;
+        self.opening = Some(Opening::spawn(ctx, move || EngineDesk::open(&path)));
+    }
+
+    /// Takes the desk or the problem once the profile is open.
+    fn check_opening(&mut self) {
+        let Some(result) = self.opening.as_ref().and_then(Opening::poll) else {
+            return;
+        };
+        self.opening = None;
+        match result {
             Ok(desk) => self.use_desk(Box::new(desk)),
             Err(problem) => self.problem = Some(problem),
         }
@@ -92,6 +115,7 @@ impl eframe::App for App {
                 .send_viewport_cmd(ViewportCommand::Title(title.clone()));
             self.title = title;
         }
+        self.check_opening();
         if let Some(desk) = &mut self.desk {
             let now = self.clock.elapsed().as_secs_f64();
             let view = desk.view();
@@ -104,14 +128,20 @@ impl eframe::App for App {
             return;
         }
         let base = Theme::current().palette.base;
+        let opening = self.opening.is_some();
         let choice = CentralPanel::default()
             .frame(Frame::new().fill(base))
             .show(ui, |ui| {
-                start::screen(ui, self.profile.as_deref(), self.problem.as_deref())
+                if opening {
+                    start::starting(ui, self.profile.as_deref());
+                    None
+                } else {
+                    start::screen(ui, self.profile.as_deref(), self.problem.as_deref())
+                }
             })
             .inner;
         match choice {
-            Some(Choice::Retry) => self.open_profile(),
+            Some(Choice::Retry) => self.open_profile(ui.ctx()),
             Some(Choice::Demo) => {
                 self.profile = None;
                 self.use_desk(Box::new(FakeDesk::new()));
@@ -122,7 +152,11 @@ impl eframe::App for App {
 }
 
 fn main() -> ExitCode {
-    let start = match start::parse(std::env::args().skip(1)) {
+    let start = start::parse(std::env::args().skip(1));
+    if !matches!(start, Ok(Start::Profile(_) | Start::Demo | Start::Nothing)) {
+        ffi::attach_parent_console();
+    }
+    let start = match start {
         Ok(Start::Help) => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -149,12 +183,13 @@ fn main() -> ExitCode {
         options,
         Box::new(|cc| {
             Theme::current().apply(&cc.egui_ctx);
-            Ok(Box::new(App::new(start)))
+            Ok(Box::new(App::new(start, &cc.egui_ctx)))
         }),
     );
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
+            ffi::attach_parent_console();
             eprintln!("pult-app: {err}");
             ExitCode::FAILURE
         }

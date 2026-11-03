@@ -24,6 +24,9 @@ pult-engine.workspace = true
 # Debug builds use its checking allocator, as the command line does.
 assert_no_alloc.workspace = true
 # The same UI stack as takt (egui over eframe, wgpu); glow, x11 and wayland stay out.
+# AttachConsole (src/ffi.rs), so a release build without a console window can still answer
+# --help and say what is wrong with its command line in the terminal it was started from.
+windows = { workspace = true, features = ["Win32_System_Console"] }
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
 
 [dev-dependencies]
