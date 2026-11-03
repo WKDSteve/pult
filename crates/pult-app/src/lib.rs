@@ -11,6 +11,7 @@ pub mod console;
 pub mod layout;
 pub mod log;
 pub mod matrix;
+pub mod settings;
 pub mod start;
 pub mod theme;
 pub mod tray;

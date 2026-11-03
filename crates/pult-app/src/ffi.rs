@@ -1,5 +1,5 @@
 //! The Windows calls of the window that have no safe wrapper: the console of the terminal,
-//! and the one instance per session.
+//! the one instance per session, and the start with Windows.
 //!
 //! This is the only module of `pult-app` with `unsafe` code; it belongs to the binary, the
 //! library forbids `unsafe` outright. Every block names the condition it relies on.
@@ -9,9 +9,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, GetLastError, HANDLE, WAIT_OBJECT_0,
 };
 use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+use windows::Win32::System::Registry::{
+    HKEY_CURRENT_USER, REG_SZ, RegDeleteKeyValueW, RegSetKeyValueW,
+};
 use windows::Win32::System::Threading::{
     CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent,
     WaitForSingleObject,
@@ -23,6 +26,10 @@ use windows::core::HSTRING;
 /// it to show its window.
 pub const INSTANCE: &str = r"Local\pult-app.instance";
 pub const SHOW: &str = r"Local\pult-app.show";
+
+/// Where Windows looks for what to start when the user signs in, and pult's value there.
+pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+pub const RUN_VALUE: &str = "pult";
 
 /// Lets `println!` and `eprintln!` reach the terminal `pult-app` was started from.
 ///
@@ -122,9 +129,47 @@ pub fn listen_for_show(name: &str, mut show: impl FnMut() + Send + 'static) -> b
     spawned.is_ok() && made.recv().unwrap_or(false)
 }
 
+/// Lets Windows start `command` when the user signs in (`HKEY_CURRENT_USER\<key>`, value
+/// `name`), or with `None` no longer; removing a value that is not there is no error.
+///
+/// # Errors
+///
+/// What Windows said when the value could not be written or removed.
+pub fn set_run(key: &str, name: &str, command: Option<&str>) -> Result<(), String> {
+    let (key, name) = (HSTRING::from(key), HSTRING::from(name));
+    let result = match command {
+        Some(command) => {
+            // REG_SZ data is the text in UTF-16 with its closing NUL, counted in bytes.
+            let data: Vec<u16> = command.encode_utf16().chain([0]).collect();
+            let bytes = u32::try_from(data.len() * 2).map_err(|e| e.to_string())?;
+            // SAFETY: `key`, `name` and `data` live across the call, and `bytes` is the size
+            // of `data`; a missing key is created.
+            unsafe {
+                RegSetKeyValueW(
+                    HKEY_CURRENT_USER,
+                    &key,
+                    &name,
+                    REG_SZ.0,
+                    Some(data.as_ptr().cast()),
+                    bytes,
+                )
+            }
+        }
+        None => {
+            // SAFETY: `key` and `name` live across the call.
+            match unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, &key, &name) } {
+                ERROR_FILE_NOT_FOUND => return Ok(()),
+                other => other,
+            }
+        }
+    };
+    result.ok().map_err(|e| e.message())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::System::Registry::{RRF_RT_REG_SZ, RegDeleteTreeW, RegGetValueW};
 
     /// A name of this test run only, so a running pult-app is not disturbed.
     fn name(what: &str) -> String {
@@ -152,6 +197,42 @@ mod tests {
         assert!(shown.recv_timeout(Duration::from_secs(5)).is_ok());
         assert!(ask_to_show(&name, Duration::from_secs(2)));
         assert!(shown.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+
+    /// The value `name` under `key`, as text.
+    fn read_run(key: &str, name: &str) -> Option<String> {
+        let (key, name) = (HSTRING::from(key), HSTRING::from(name));
+        let mut data = [0u16; 512];
+        let mut bytes = u32::try_from(data.len() * 2).unwrap();
+        // SAFETY: `data` holds `bytes` bytes; the strings live across the call.
+        let read = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                &key,
+                &name,
+                RRF_RT_REG_SZ,
+                None,
+                Some(data.as_mut_ptr().cast()),
+                Some(&raw mut bytes),
+            )
+        };
+        read.ok().ok()?;
+        let len = data.iter().position(|&c| c == 0).unwrap_or(data.len());
+        Some(String::from_utf16_lossy(&data[..len]))
+    }
+
+    #[test]
+    fn the_start_with_windows_is_written_and_removed() {
+        // A key of this test run, never the real Run key.
+        let key = format!(r"Software\pult-app-test-{}", std::process::id());
+        let command = r#""C:\Program Files\pult\pult-app.exe" --tray"#;
+        set_run(&key, "pult", Some(command)).unwrap();
+        assert_eq!(read_run(&key, "pult").as_deref(), Some(command));
+        set_run(&key, "pult", None).unwrap();
+        assert_eq!(read_run(&key, "pult"), None);
+        set_run(&key, "pult", None).unwrap();
+        // SAFETY: the key belongs to this test.
+        let _ = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(key.as_str())) };
     }
 
     #[test]

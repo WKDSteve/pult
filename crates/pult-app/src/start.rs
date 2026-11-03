@@ -12,14 +12,16 @@ use eframe::egui::{
 use crate::theme::Theme;
 
 pub const USAGE: &str = "\
-usage: pult-app [PROFILE | --demo]
+usage: pult-app [PROFILE | --demo | --tray]
 
   PROFILE   a pult profile (TOML), for example pult.toml; starts its route
   --demo    a desk in memory with moving meters, no audio device touched
+  --tray    the profile opened last, with the window in the tray (the start with Windows)
   --help    this text
   --version the version
 
-Without an argument the window opens and says how to start.";
+Without an argument the profile opened last starts again; before the first one the window
+says how to start. Settings: %APPDATA%\\pult\\settings.toml.";
 
 /// What the command line asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,8 +30,10 @@ pub enum Start {
     Profile(PathBuf),
     /// The demo desk.
     Demo,
-    /// Nothing given: the window opens on the start screen.
+    /// Nothing given: the profile opened last, else the start screen.
     Nothing,
+    /// As `Nothing`, with the window in the tray: the start with Windows.
+    Tray,
     Help,
     Version,
 }
@@ -44,6 +48,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Start, String> {
     for arg in args {
         let next = match arg.as_str() {
             "--demo" => Start::Demo,
+            "--tray" => Start::Tray,
             "-h" | "--help" => return Ok(Start::Help),
             "-V" | "--version" => return Ok(Start::Version),
             option if option.starts_with('-') && option.len() > 1 => {
@@ -52,11 +57,22 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Start, String> {
             path => Start::Profile(PathBuf::from(path)),
         };
         if start != Start::Nothing {
-            return Err("give one profile or --demo, not both or two".to_owned());
+            return Err("give one profile, --demo or --tray, not two of them".to_owned());
         }
         start = next;
     }
     Ok(start)
+}
+
+/// The profile a start opens: the one given, else for a start without one the profile opened
+/// last (`last`).
+#[must_use]
+pub fn profile_to_open(start: &Start, last: Option<&Path>) -> Option<PathBuf> {
+    match start {
+        Start::Profile(path) => Some(path.clone()),
+        Start::Nothing | Start::Tray => last.map(Path::to_path_buf),
+        Start::Demo | Start::Help | Start::Version => None,
+    }
 }
 
 /// What the user picked on the start screen.
@@ -224,6 +240,28 @@ mod tests {
         assert_eq!(args(&["-V"]), Ok(Start::Version));
         // A lone dash is a file name, as elsewhere.
         assert_eq!(args(&["-"]), Ok(Start::Profile(PathBuf::from("-"))));
+        assert_eq!(args(&["--tray"]), Ok(Start::Tray));
+        assert!(args(&["--tray", "studio.toml"]).is_err());
+    }
+
+    #[test]
+    fn a_start_without_a_profile_opens_the_last_one() {
+        let last = Path::new(r"C:\studio\pult.toml");
+        let given = Start::Profile(PathBuf::from("other.toml"));
+        assert_eq!(
+            profile_to_open(&given, Some(last)),
+            Some(PathBuf::from("other.toml"))
+        );
+        assert_eq!(
+            profile_to_open(&Start::Nothing, Some(last)).as_deref(),
+            Some(last)
+        );
+        assert_eq!(
+            profile_to_open(&Start::Tray, Some(last)).as_deref(),
+            Some(last)
+        );
+        assert_eq!(profile_to_open(&Start::Nothing, None), None);
+        assert_eq!(profile_to_open(&Start::Demo, Some(last)), None);
     }
 
     fn wait<D: Send + 'static>(opening: &Opening<D>) -> Result<D, String> {

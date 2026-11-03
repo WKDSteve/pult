@@ -79,6 +79,11 @@ impl ConsoleState {
         self.log.refused(elapsed, reason);
     }
 
+    /// Notes a problem with the settings of the window at `elapsed`, as the status line shows.
+    pub fn settings_problem(&mut self, elapsed: Duration, problem: &str) {
+        self.log.settings(elapsed, problem);
+    }
+
     #[must_use]
     pub fn log(&self) -> &Log {
         &self.log
@@ -248,8 +253,9 @@ fn status_bar(ui: &mut Ui, view: &MixerView, log: &Log) {
                     .color(p.text_faint),
             );
             let color = match entry.source {
-                Source::Refused => {
-                    ui.label(RichText::new("REFUSED").size(9.5).color(p.mute));
+                Source::Refused | Source::Settings => {
+                    let (tag, color) = entry.source.tag();
+                    ui.label(RichText::new(tag).size(9.5).color(color));
                     p.mute
                 }
                 Source::Done => {

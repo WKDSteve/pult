@@ -1,30 +1,34 @@
 //! The icon in the notification area: the window hides there while the route keeps playing.
 //!
 //! A click on the icon or "Show pult" brings the window back; "Quit pult" ends the route and
-//! the program. Closing the window only hides it while a desk is open, so nothing stops
+//! the program; "Start with Windows" turns the start into the tray on signing in on or off. Closing the window only hides it while a desk is open, so nothing stops
 //! playing by accident; with nothing open, closing quits as before.
 
 use std::sync::mpsc::Sender;
 
 use eframe::egui::{Align, Button, Context, Id, Layout, Modal, RichText, Ui, vec2};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::theme::Theme;
 
 const SHOW: &str = "show";
 const QUIT: &str = "quit";
+const AUTOSTART: &str = "autostart";
 
 /// What the tray, or a second start, asks the window for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     Show,
     Quit,
+    /// Turn the start with Windows over (from the check in the menu).
+    Autostart,
 }
 
 /// The tray icon.
 pub struct Tray {
     icon: TrayIcon,
+    autostart: CheckMenuItem,
 }
 
 impl std::fmt::Debug for Tray {
@@ -34,24 +38,32 @@ impl std::fmt::Debug for Tray {
 }
 
 impl Tray {
-    /// Puts the icon into the notification area; what it is asked goes to `commands` and
-    /// repaints `ctx`, also while the window is hidden. Call it once, on the thread of the
-    /// window.
+    /// Puts the icon into the notification area, with the start with Windows checked as
+    /// `autostart` says; what it is asked goes to `commands` and repaints `ctx`, also while the
+    /// window is hidden. Call it once, on the thread of the window.
     ///
     /// # Errors
     ///
     /// When the shell has no notification area or refuses the icon.
-    pub fn new(ctx: &Context, tooltip: &str, commands: &Sender<Command>) -> Result<Self, String> {
+    pub fn new(
+        ctx: &Context,
+        tooltip: &str,
+        autostart: bool,
+        commands: &Sender<Command>,
+    ) -> Result<Self, String> {
         let menu = Menu::new();
         let show = MenuItem::with_id(SHOW, "Show pult", true, None);
+        let start = CheckMenuItem::with_id(AUTOSTART, "Start with Windows", true, autostart, None);
         let quit = MenuItem::with_id(QUIT, "Quit pult", true, None);
-        menu.append(&show).map_err(|e| e.to_string())?;
-        menu.append(&quit).map_err(|e| e.to_string())?;
+        let line = PredefinedMenuItem::separator();
+        menu.append_items(&[&show, &start, &line, &quit])
+            .map_err(|e| e.to_string())?;
         let (to_window, repaint) = (commands.clone(), ctx.clone());
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let command = match event.id.as_ref() {
                 SHOW => Command::Show,
                 QUIT => Command::Quit,
+                AUTOSTART => Command::Autostart,
                 _ => return,
             };
             let _ = to_window.send(command);
@@ -79,7 +91,16 @@ impl Tray {
             .with_icon(image)
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { icon })
+        Ok(Self {
+            icon,
+            autostart: start,
+        })
+    }
+
+    /// Sets the check of "Start with Windows" to what holds now (the menu turns it over on a
+    /// click, before pult knows whether that worked).
+    pub fn set_autostart(&self, on: bool) {
+        self.autostart.set_checked(on);
     }
 
     /// Sets the text shown over the icon (the window title).

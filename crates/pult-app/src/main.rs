@@ -1,5 +1,6 @@
 //! `pult-app`: the console window over a running route (`pult-app studio.toml`) or the demo
-//! desk (`pult-app --demo`).
+//! desk (`pult-app --demo`). Without an argument it opens the profile opened last again
+//! (`settings`); `--tray` does so with the window in the tray, which is how Windows starts it.
 //!
 //! A release build is a window program: no console window opens with it. Text for the
 //! command line goes to the terminal it was started from (`ffi`).
@@ -10,13 +11,14 @@
 #[allow(unsafe_code)]
 mod ffi;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, CentralPanel, Frame, ViewportCommand};
 use pult_app::console::{self, ConsoleState};
+use pult_app::settings::{self, Settings, Stored};
 use pult_app::start::{self, Choice, Opening, Start, USAGE};
 use pult_app::theme::Theme;
 use pult_app::tray::{self, Answer, Close, Command, Tray};
@@ -49,8 +51,11 @@ struct App {
     /// What the tray and later starts ask for.
     commands: Receiver<Command>,
     window: Window,
-    /// The user saw the hint on the first close; later closes hide at once.
-    told: bool,
+    /// What the window keeps between runs: the profile opened last, the start with Windows,
+    /// and whether the user saw the hint on the first close.
+    settings: Stored,
+    /// Problems with the settings, for the log once a desk is open.
+    notes: Vec<String>,
 }
 
 /// Where the window stands.
@@ -66,9 +71,10 @@ enum Window {
 }
 
 impl App {
-    fn new(start: Start, ctx: &egui::Context) -> Self {
+    fn new(start: &Start, ctx: &egui::Context, settings: Stored, note: Option<String>) -> Self {
         let (send, commands) = mpsc::channel();
         listen_for_later_starts(ctx, &send);
+        let autostart = settings.settings.autostart;
         let mut app = Self {
             profile: None,
             desk: None,
@@ -77,18 +83,27 @@ impl App {
             state: ConsoleState::default(),
             clock: Instant::now(),
             title: String::new(),
-            tray: Tray::new(ctx, "pult", &send).ok(),
+            tray: Tray::new(ctx, "pult", autostart, &send).ok(),
             commands,
             window: Window::Shown,
-            told: false,
+            settings,
+            notes: note.into_iter().collect(),
         };
-        match start {
-            Start::Profile(path) => {
-                app.profile = Some(path);
-                app.open_profile(ctx);
+        let last = app.settings.settings.last_profile.as_deref();
+        if *start == Start::Demo {
+            app.use_desk(Box::new(FakeDesk::new()));
+        } else if let Some(path) = start::profile_to_open(start, last) {
+            // Kept whole, so it opens again from wherever the next start runs.
+            app.profile = Some(std::path::absolute(&path).unwrap_or(path));
+            app.open_profile(ctx);
+        }
+        if *start == Start::Tray {
+            // The window starts hidden (see `main`); it shows when there is no tray to come
+            // back from or nothing to play.
+            app.window = Window::Hidden;
+            if app.tray.is_none() || app.profile.is_none() {
+                app.show(ctx);
             }
-            Start::Demo => app.use_desk(Box::new(FakeDesk::new())),
-            Start::Nothing | Start::Help | Start::Version => {}
         }
         app
     }
@@ -103,14 +118,44 @@ impl App {
     }
 
     /// Takes the desk or the problem once the profile is open.
-    fn check_opening(&mut self) {
+    fn check_opening(&mut self, ctx: &egui::Context) {
         let Some(result) = self.opening.as_ref().and_then(Opening::poll) else {
             return;
         };
         self.opening = None;
         match result {
-            Ok(desk) => self.use_desk(Box::new(desk)),
-            Err(problem) => self.problem = Some(problem),
+            Ok(desk) => {
+                self.use_desk(Box::new(desk));
+                let profile = self.profile.clone();
+                self.change_settings(|s| s.last_profile = profile);
+            }
+            Err(problem) => {
+                self.problem = Some(problem);
+                // From the tray, nobody would see why nothing plays.
+                if self.window == Window::Hidden {
+                    self.show(ctx);
+                }
+            }
+        }
+    }
+
+    /// Changes the settings and keeps them; a problem goes to the log.
+    fn change_settings(&mut self, edit: impl FnOnce(&mut Settings)) {
+        if let Err(problem) = self.settings.change(edit) {
+            self.notes.push(problem);
+        }
+    }
+
+    /// Turns the start with Windows over: the Run value first, then the settings, and the
+    /// check in the tray shows what holds.
+    fn turn_autostart(&mut self) {
+        let on = !self.settings.settings.autostart;
+        match set_autostart(on) {
+            Ok(()) => self.change_settings(|s| s.autostart = on),
+            Err(problem) => self.notes.push(problem),
+        }
+        if let Some(tray) = &self.tray {
+            tray.set_autostart(self.settings.settings.autostart);
         }
     }
 
@@ -118,6 +163,13 @@ impl App {
         self.desk = Some(desk);
         self.problem = None;
         self.state = ConsoleState::default();
+    }
+
+    fn show(&mut self, ctx: &egui::Context) {
+        self.window = Window::Shown;
+        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
     }
 
     fn hide(&mut self, ctx: &egui::Context) {
@@ -134,19 +186,16 @@ impl App {
     fn tray_and_close(&mut self, ctx: &egui::Context) {
         while let Ok(command) = self.commands.try_recv() {
             match command {
-                Command::Show => {
-                    self.window = Window::Shown;
-                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(ViewportCommand::Focus);
-                }
+                Command::Show => self.show(ctx),
                 Command::Quit => self.quit(ctx),
+                Command::Autostart => self.turn_autostart(),
             }
         }
         if !ctx.input(|i| i.viewport().close_requested()) || self.window == Window::Quitting {
             return;
         }
-        match tray::on_close(self.tray.is_some(), self.desk.is_some(), self.told) {
+        let told = self.settings.settings.told_about_tray;
+        match tray::on_close(self.tray.is_some(), self.desk.is_some(), told) {
             Close::Quit => {}
             Close::Hide => {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
@@ -174,39 +223,52 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// What happens whether or not the window shows: eframe calls only this while the window
+    /// is hidden, so the tray, later starts and the opening profile are handled here.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let title = self.wanted_title();
         if title != self.title {
-            ui.ctx()
-                .send_viewport_cmd(ViewportCommand::Title(title.clone()));
+            ctx.send_viewport_cmd(ViewportCommand::Title(title.clone()));
             if let Some(tray) = &self.tray {
                 tray.set_tooltip(&title);
             }
             self.title = title;
         }
-        let ctx = ui.ctx().clone();
-        self.tray_and_close(&ctx);
-        self.check_opening();
+        self.tray_and_close(ctx);
+        self.check_opening(ctx);
         if self.window == Window::Hidden {
             // Still asked for views: the engine looks for lost devices then, and the events
             // view keeps what happened meanwhile.
             if let Some(desk) = &mut self.desk {
                 let view = desk.view();
                 self.state.take(&view);
+                for note in self.notes.drain(..) {
+                    self.state.settings_problem(view.elapsed, &note);
+                }
             }
             ctx.request_repaint_after(FRAME);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if self.window == Window::Hidden {
+            // The last pass before the window goes; `logic` takes over.
             return;
         }
         if let Some(desk) = &mut self.desk {
             let now = self.clock.elapsed().as_secs_f64();
             let view = desk.view();
+            for note in self.notes.drain(..) {
+                self.state.settings_problem(view.elapsed, &note);
+            }
             for action in console::show(ui, &view, &mut self.state, now) {
                 self.state.act(desk.as_mut(), view.elapsed, action);
             }
             if self.window == Window::Asking {
                 match tray::hint(ui) {
                     Some(Answer::ToTray) => {
-                        self.told = true;
+                        self.change_settings(|s| s.told_about_tray = true);
                         self.hide(&ctx);
                     }
                     Some(Answer::Quit) => self.quit(&ctx),
@@ -241,6 +303,23 @@ impl eframe::App for App {
     }
 }
 
+/// The command Windows runs on signing in: this program, into the tray.
+fn autostart_command(exe: &Path) -> String {
+    format!("\"{}\" --tray", exe.display())
+}
+
+/// Lets Windows start pult on signing in, or no longer.
+fn set_autostart(on: bool) -> Result<(), String> {
+    let command = if on {
+        let exe = std::env::current_exe().map_err(|e| format!("where is pult-app? {e}"))?;
+        Some(autostart_command(&exe))
+    } else {
+        None
+    };
+    ffi::set_run(ffi::RUN_KEY, ffi::RUN_VALUE, command.as_deref())
+        .map_err(|e| format!("could not change the start with Windows: {e}"))
+}
+
 /// Shows the window when another start of pult-app asks for it (see `main`).
 fn listen_for_later_starts(ctx: &egui::Context, commands: &Sender<Command>) {
     let (send, ctx) = (commands.clone(), ctx.clone());
@@ -268,7 +347,10 @@ fn later_start(start: &Start, shown: bool) -> (Option<&'static str>, ExitCode) {
 
 fn main() -> ExitCode {
     let start = start::parse(std::env::args().skip(1));
-    if !matches!(start, Ok(Start::Profile(_) | Start::Demo | Start::Nothing)) {
+    if !matches!(
+        start,
+        Ok(Start::Profile(_) | Start::Demo | Start::Nothing | Start::Tray)
+    ) {
         ffi::attach_parent_console();
     }
     let start = match start {
@@ -297,9 +379,13 @@ fn main() -> ExitCode {
         }
         return code;
     };
+    let (settings, note) = Stored::load(settings::default_path());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("pult")
+            // eframe shows the window after its first painted frame, and paints none while it
+            // is hidden: from the tray, nothing flashes up.
+            .with_visible(start != Start::Tray)
             .with_inner_size([1280.0, 760.0])
             .with_min_inner_size([640.0, 560.0]),
         ..Default::default()
@@ -309,7 +395,7 @@ fn main() -> ExitCode {
         options,
         Box::new(|cc| {
             Theme::current().apply(&cc.egui_ctx);
-            Ok(Box::new(App::new(start, &cc.egui_ctx)))
+            Ok(Box::new(App::new(&start, &cc.egui_ctx, settings, note)))
         }),
     );
     match result {
@@ -338,5 +424,13 @@ mod tests {
         let (note, code) = later_start(&Start::Nothing, false);
         assert!(note.unwrap().contains("did not answer"));
         assert_eq!(code, ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn windows_starts_this_program_into_the_tray() {
+        assert_eq!(
+            autostart_command(Path::new(r"C:\Program Files\pult\pult-app.exe")),
+            r#""C:\Program Files\pult\pult-app.exe" --tray"#
+        );
     }
 }

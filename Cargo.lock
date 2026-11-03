@@ -2527,6 +2527,8 @@ dependencies = [
  "egui_kittest",
  "pult-core",
  "pult-engine",
+ "serde",
+ "toml",
  "tray-icon",
  "windows",
 ]

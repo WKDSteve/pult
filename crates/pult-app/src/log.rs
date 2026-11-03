@@ -24,6 +24,9 @@ pub enum Source {
     Refused,
     /// The console: the desk confirmed an action worth noting (a profile saved).
     Done,
+    /// The window: its settings could not be read or written, or the start with Windows not
+    /// changed.
+    Settings,
 }
 
 impl Source {
@@ -35,6 +38,7 @@ impl Source {
             Self::Desk => ("DEVICE", p.text_dim),
             Self::Refused => ("REFUSED", p.mute),
             Self::Done => ("DONE", p.ok),
+            Self::Settings => ("SETTINGS", p.mute),
         }
     }
 }
@@ -65,22 +69,26 @@ impl Log {
         self.trim();
     }
 
-    /// Notes an action the desk refused, with its reason, at `elapsed`.
     /// Notes what an action did, as the desk says it.
     pub fn done(&mut self, elapsed: Duration, text: &str) {
+        self.note(elapsed, text, Source::Done);
+    }
+
+    /// Notes an action the desk refused, with its reason, at `elapsed`.
+    pub fn refused(&mut self, elapsed: Duration, reason: &str) {
+        self.note(elapsed, reason, Source::Refused);
+    }
+
+    /// Notes a problem with the settings of the window at `elapsed`.
+    pub fn settings(&mut self, elapsed: Duration, problem: &str) {
+        self.note(elapsed, problem, Source::Settings);
+    }
+
+    fn note(&mut self, elapsed: Duration, text: &str, source: Source) {
         self.entries.push(Entry {
             elapsed,
             text: text.to_owned(),
-            source: Source::Done,
-        });
-        self.trim();
-    }
-
-    pub fn refused(&mut self, elapsed: Duration, reason: &str) {
-        self.entries.push(Entry {
-            elapsed,
-            text: reason.to_owned(),
-            source: Source::Refused,
+            source,
         });
         self.trim();
     }
