@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use args::{Command, Routing, RunSpec, ToneSpec, USAGE};
 use console::{Console, Input};
 use monitor::{LOG_INTERVAL, Log, Snapshot};
-use pult_core::control;
+use pult_core::{Dropouts, control};
 use pult_engine::{Devices, Running, Tone};
 
 // Debug builds abort on any allocation inside an audio callback (see pult-engine).
@@ -170,6 +170,7 @@ struct Recorder {
     bus_names: Vec<String>,
     interval: Option<Snapshot>,
     next_row: Duration,
+    dropouts: Dropouts,
 }
 
 impl Recorder {
@@ -180,6 +181,7 @@ impl Recorder {
             bus_names,
             interval: None,
             next_row: LOG_INTERVAL,
+            dropouts: Dropouts::default(),
         }
     }
 
@@ -192,7 +194,7 @@ impl Recorder {
             .iter()
             .map(|change| format!("{} {change}", monitor::clock(elapsed)))
             .collect();
-        let snap = Snapshot::take(running, elapsed);
+        let snap = Snapshot::take(running, elapsed, &mut self.dropouts);
         let merged = self
             .interval
             .as_ref()
@@ -214,7 +216,7 @@ impl Recorder {
 
     /// Writes the rest of the last interval and prints the summary of the run.
     fn finish(&mut self, running: &Running) {
-        let snap = Snapshot::take(running, self.start.elapsed());
+        let snap = Snapshot::take(running, self.start.elapsed(), &mut self.dropouts);
         println!("{}", monitor::summary(&snap));
         let last = self
             .interval

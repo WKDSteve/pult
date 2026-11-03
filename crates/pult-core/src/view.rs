@@ -15,7 +15,8 @@ use std::time::Duration;
 pub struct MixerView {
     /// Time since the route started.
     pub elapsed: Duration,
-    /// Dropouts so far (inputs that ran dry, hard resyncs, device glitches) per hour.
+    /// Dropouts so far per hour, as events: inputs that ran dry, hard resyncs and device
+    /// glitches that come together count once ([`crate::dropouts`]).
     pub dropouts_per_hour: f64,
     /// Glitches the devices reported so far.
     pub glitches: u64,

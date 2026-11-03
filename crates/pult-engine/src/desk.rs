@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use pult_core::control::{Command, Target};
 use pult_core::{
-    Action, BusView, Desk, EventView, InputView, MeterPoint, MixerView, Reply, SourceKind,
-    linear_to_db,
+    Action, BusView, Desk, Dropouts, EventView, InputView, MeterPoint, MixerView, Reply,
+    SourceKind, linear_to_db,
 };
 
 use crate::{InputKind, Running, profile};
@@ -23,6 +23,7 @@ pub struct EngineDesk {
     meter_point: MeterPoint,
     /// Which inputs are soloed; the engine only knows who is soloed out.
     solo: Vec<bool>,
+    dropouts: Dropouts,
 }
 
 impl EngineDesk {
@@ -36,6 +37,7 @@ impl EngineDesk {
             profile,
             meter_point: MeterPoint::default(),
             solo,
+            dropouts: Dropouts::default(),
         }
     }
 
@@ -117,7 +119,15 @@ impl Desk for EngineDesk {
             })
             .collect();
         let running = &self.running;
-        let mut dropouts_total = running.xruns();
+        // Over every ring, routed or not, so that routing does not move the sum.
+        let raw = running.xruns()
+            + running
+                .inputs
+                .iter()
+                .flat_map(|input| &input.routes)
+                .map(|route| route.stats.underruns.get() + route.stats.resyncs.get())
+                .sum::<u64>();
+        self.dropouts.update(raw, elapsed);
         let inputs = running
             .inputs
             .iter()
@@ -132,7 +142,6 @@ impl Desk for EngineDesk {
                     drift = farther(drift, route.stats.correction_ppm.load());
                     dropouts += route.stats.underruns.get() + route.stats.resyncs.get();
                 }
-                dropouts_total += dropouts;
                 InputView {
                     name: input.name.clone(),
                     kind: match spec.kind {
@@ -172,16 +181,9 @@ impl Desk for EngineDesk {
                 clipped: bus.handle.stats.clipped.get(),
             })
             .collect();
-        let seconds = elapsed.as_secs_f64();
-        #[allow(clippy::cast_precision_loss)]
-        let dropouts_per_hour = if seconds < 1.0 {
-            0.0
-        } else {
-            dropouts_total as f64 * 3600.0 / seconds
-        };
         MixerView {
             elapsed,
-            dropouts_per_hour,
+            dropouts_per_hour: self.dropouts.per_hour(elapsed),
             glitches: running.xruns(),
             meter_point: self.meter_point,
             inputs,

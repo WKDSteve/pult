@@ -56,7 +56,7 @@ pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.).
 | `resync` | harte Sprünge zurück auf die Ziel-Pufferung, wenn der Puffer weit überlief; sollte 0 bleiben. Der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
 | `A1 … dB` / `clipped` | je Bus: Spitzenpegel der Summe nach dem Bus-Gain, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit `--to` heißt der eine Bus `A1` |
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
-| `dropouts/h` | alle Aussetzer zusammen (`out` aller Eingänge, `resync`, `glitches`) pro Stunde Laufzeit, hochgerechnet; in den ersten Minuten springt der Wert, weil schon ein einzelner Aussetzer stark zählt |
+| `dropouts/h` | Aussetzer pro Stunde Laufzeit, hochgerechnet. Gezählt wird, was man hört: `out`, `resync` und `glitches`, die innerhalb einer Sekunde zusammenkommen (etwa wenn ein stockendes Ausgabegerät beide Eingänge zugleich neu ausrichtet), sind ein Aussetzer; hält eine Störung an, zählt sie einmal pro Sekunde. In den ersten Minuten springt der Wert, weil schon ein einzelner Aussetzer stark zählt |
 | `missing` | statt des Pegels: das Gerät ist gerade weg (siehe unten, Geräte ab- und anstecken) |
 
 Die Lautstärke regelt weiter der Windows-Lautstärkeregler (er steuert `CABLE Input`) und der Verstärker. Solange pult nicht läuft, bleibt es still, weil alle Programme ins Kabel spielen. Zurück geht es, indem man das Standardgerät wieder auf das Scarlett stellt.
@@ -71,7 +71,8 @@ Schreibt alle 10 Sekunden eine Zeile nach `abend.csv` (die Datei wird neu angele
 Abschnitts in dB, dazu alle Zähler der Statuszeile als laufende Summen. Jede Zeile wird sofort gespeichert, auch wenn
 das Fenster einfach geschlossen wird. Die Spalte `drift_ppm` zeigt die Korrektur des Resamplers zum Zeitpunkt der
 Zeile: Sie pendelt sich nach dem Start ein und bleibt dann ungefähr auf dem Unterschied der beiden Gerätetakte. Die
-letzte Spalte `dropouts_per_hour` ist die Kennzahl für die Stabilität: Aussetzer pro Stunde bis zu dieser Zeile. Die
+Spalten `dropouts` (Aussetzer bisher, gezählt wie in der Statuszeile) und `dropouts_per_hour` sind die Kennzahl für
+die Stabilität; die Einzelzähler davor zeigen, woher ein Aussetzer kam. Die
 Statuszeile beginnt mit der Laufzeit (`h:mm:ss`).
 
 Beim Beenden fasst pult den Lauf in einer Zeile zusammen, zum Beispiel:

@@ -14,6 +14,7 @@ static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisable
 
 pub mod control;
 pub mod drift;
+pub mod dropouts;
 pub mod level;
 pub mod mixer;
 pub mod rate;
@@ -23,6 +24,7 @@ pub mod tone;
 pub mod view;
 
 pub use drift::{DriftControl, Event, Plan};
+pub use dropouts::Dropouts;
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
 pub use mixer::{
     BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,

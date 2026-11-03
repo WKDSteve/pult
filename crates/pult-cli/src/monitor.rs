@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use pult_core::linear_to_db;
+use pult_core::{Dropouts, dropouts, linear_to_db};
 use pult_engine::Running;
 
 /// How often `--log` writes a row.
@@ -65,11 +65,14 @@ pub struct Snapshot {
     pub buses: Vec<BusSnapshot>,
     /// Glitches the devices reported so far.
     pub glitches: u64,
+    /// Dropouts so far as events ([`pult_core::dropouts`]).
+    pub dropouts: u64,
 }
 
 impl Snapshot {
-    /// Reads the route's meters (which starts their next measurement) and counters.
-    pub fn take(running: &Running, elapsed: Duration) -> Self {
+    /// Reads the route's meters (which starts their next measurement) and counters, and
+    /// feeds the raw dropouts to `events`.
+    pub fn take(running: &Running, elapsed: Duration, events: &mut Dropouts) -> Self {
         let inputs = running
             .inputs
             .iter()
@@ -105,18 +108,21 @@ impl Snapshot {
                 outages: bus.outages,
             })
             .collect();
-        Self {
+        let mut snap = Self {
             elapsed,
             inputs,
             buses,
             glitches: running.xruns(),
-        }
+            dropouts: 0,
+        };
+        snap.dropouts = events.update(snap.raw_dropouts(), elapsed);
+        snap
     }
 
-    /// Dropouts so far: inputs that ran dry, hard resyncs and the glitches the devices
-    /// reported. Each is a gap or a jump in what the buses play.
+    /// Inputs that ran dry, hard resyncs and the glitches the devices reported, each counted
+    /// on its own; one stall can bring several.
     #[must_use]
-    pub fn dropouts(&self) -> u64 {
+    pub fn raw_dropouts(&self) -> u64 {
         let inputs: u64 = self.inputs.iter().map(|i| i.underruns + i.resyncs).sum();
         inputs + self.glitches
     }
@@ -124,11 +130,7 @@ impl Snapshot {
     /// [`Self::dropouts`] per hour of run time; zero before the first second.
     #[must_use]
     pub fn dropouts_per_hour(&self) -> f64 {
-        if self.elapsed < Duration::from_secs(1) {
-            0.0
-        } else {
-            self.dropouts() as f64 * 3600.0 / self.elapsed.as_secs_f64()
-        }
+        dropouts::per_hour(self.dropouts, self.elapsed)
     }
 
     /// Keeps the higher peaks of `self` and `later`, and everything else of `later`: the
@@ -221,7 +223,7 @@ pub fn summary(snap: &Snapshot) -> String {
     format!(
         "ran {}: {} dropouts ({:.1} per hour), {lost} frames lost, {clipped} samples clipped",
         clock(snap.elapsed),
-        snap.dropouts(),
+        snap.dropouts,
         snap.dropouts_per_hour()
     )
 }
@@ -258,7 +260,7 @@ pub fn csv_header(inputs: usize, bus_names: &[String]) -> String {
             ",{name}_peak_db,{name}_clipped,{name}_present,{name}_outages"
         );
     }
-    line.push_str(",glitches,dropouts_per_hour");
+    line.push_str(",glitches,dropouts,dropouts_per_hour");
     line
 }
 
@@ -289,7 +291,13 @@ pub fn csv_row(snap: &Snapshot) -> String {
             bus.outages
         );
     }
-    let _ = write!(line, ",{},{:.2}", snap.glitches, snap.dropouts_per_hour());
+    let _ = write!(
+        line,
+        ",{},{},{:.2}",
+        snap.glitches,
+        snap.dropouts,
+        snap.dropouts_per_hour()
+    );
     line
 }
 
@@ -348,6 +356,7 @@ mod tests {
                 outages: 0,
             }],
             glitches: 1,
+            dropouts: 1,
         }
     }
 
@@ -397,22 +406,23 @@ mod tests {
         assert!(header.starts_with("elapsed_s,in1_peak_db,in1_dropouts"));
         assert!(header.ends_with(
             ",in2_aligned,in2_present,in2_outages,A1_peak_db,A1_clipped,A1_present,A1_outages,\
-             glitches,dropouts_per_hour"
+             glitches,dropouts,dropouts_per_hour"
         ));
         assert_eq!(
             row,
-            "10.0,-inf,0,0,12.3,0,0,1,0,-inf,0,0,0.0,0,0,0,0,-inf,0,1,0,1,360.00"
+            "10.0,-inf,0,0,12.3,0,0,1,0,-inf,0,0,0.0,0,0,0,0,-inf,0,1,0,1,1,360.00"
         );
     }
 
     #[test]
-    fn dropouts_add_up_and_scale_to_an_hour() {
+    fn dropouts_count_events_and_scale_to_an_hour() {
         let mut half_hour = snap(1_800_000, 0.0, 0.0);
         half_hour.inputs[0].underruns = 2;
         half_hour.inputs[0].resyncs = 1;
         half_hour.inputs[0].lost = 7;
         half_hour.buses[0].clipped = 3;
-        assert_eq!(half_hour.dropouts(), 4);
+        half_hour.dropouts = 4;
+        assert_eq!(half_hour.raw_dropouts(), 4);
         assert!((half_hour.dropouts_per_hour() - 8.0).abs() < 1e-9);
         assert_eq!(
             summary(&half_hour),
@@ -441,6 +451,6 @@ mod tests {
         std::fs::remove_file(&path).expect("remove log");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1], "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,1,0,1,360.00");
+        assert_eq!(lines[1], "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,1,0,1,1,360.00");
     }
 }
