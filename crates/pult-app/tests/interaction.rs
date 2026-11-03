@@ -40,9 +40,7 @@ fn harness() -> Harness<'static, App> {
                     view.inputs[*input].name.clone_from(name);
                 }
                 for action in console::show(ui, &view, &mut app.state, 0.0) {
-                    if let Err(reason) = app.desk.act(action) {
-                        app.state.refused(view.elapsed, &reason);
-                    }
+                    app.state.act(&mut app.desk, view.elapsed, action);
                 }
             },
             app,
@@ -207,8 +205,47 @@ fn while_the_profile_opens_the_start_screen_offers_nothing() {
 }
 
 #[test]
+fn escape_cancels_the_hint() {
+    let mut harness = HarnessBuilder::default()
+        .with_size(vec2(1280.0, 760.0))
+        .build_ui_state(
+            |ui, picked: &mut Vec<Answer>| {
+                if let Some(answer) = tray::hint(ui) {
+                    picked.push(answer);
+                }
+            },
+            Vec::new(),
+        );
+    harness.run_steps(2);
+    harness.key_press(Key::Escape);
+    harness.run_steps(2);
+    assert_eq!(harness.state().first(), Some(&Answer::Cancel));
+}
+
+#[test]
+fn saving_the_profile_says_so() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("Save profile").click();
+    harness.run_steps(2);
+    let entry = harness.state().state.log().last().cloned().unwrap();
+    assert_eq!(entry.source, Source::Done);
+    assert!(entry.text.contains("saved the current state to pult.toml"));
+    // The status line shows it at once.
+    assert!(
+        harness
+            .query_by_label_contains("saved the current state")
+            .is_some()
+    );
+}
+
+#[test]
 fn the_first_close_asks_whether_to_hide_or_quit() {
-    for (button, answer) in [("To the tray", Answer::ToTray), ("Quit pult", Answer::Quit)] {
+    for (button, answer) in [
+        ("To the tray", Answer::ToTray),
+        ("Quit pult", Answer::Quit),
+        ("Cancel", Answer::Cancel),
+    ] {
         let mut harness = HarnessBuilder::default()
             .with_size(vec2(1280.0, 760.0))
             .build_ui_state(

@@ -195,9 +195,7 @@ impl eframe::App for App {
             let now = self.clock.elapsed().as_secs_f64();
             let view = desk.view();
             for action in console::show(ui, &view, &mut self.state, now) {
-                if let Err(reason) = desk.act(action) {
-                    self.state.refused(view.elapsed, &reason);
-                }
+                self.state.act(desk.as_mut(), view.elapsed, action);
             }
             if self.window == Window::Asking {
                 match tray::hint(ui) {
@@ -206,6 +204,7 @@ impl eframe::App for App {
                         self.hide(&ctx);
                     }
                     Some(Answer::Quit) => self.quit(&ctx),
+                    Some(Answer::Cancel) => self.window = Window::Shown,
                     None => {}
                 }
             }

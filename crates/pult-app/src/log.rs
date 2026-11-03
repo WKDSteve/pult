@@ -22,6 +22,8 @@ pub enum Source {
     Desk,
     /// The console: the desk refused an action (a gain out of range, an input left on no bus).
     Refused,
+    /// The console: the desk confirmed an action worth noting (a profile saved).
+    Done,
 }
 
 impl Source {
@@ -32,6 +34,7 @@ impl Source {
         match self {
             Self::Desk => ("DEVICE", p.text_dim),
             Self::Refused => ("REFUSED", p.mute),
+            Self::Done => ("DONE", p.ok),
         }
     }
 }
@@ -63,6 +66,16 @@ impl Log {
     }
 
     /// Notes an action the desk refused, with its reason, at `elapsed`.
+    /// Notes what an action did, as the desk says it.
+    pub fn done(&mut self, elapsed: Duration, text: &str) {
+        self.entries.push(Entry {
+            elapsed,
+            text: text.to_owned(),
+            source: Source::Done,
+        });
+        self.trim();
+    }
+
     pub fn refused(&mut self, elapsed: Duration, reason: &str) {
         self.entries.push(Entry {
             elapsed,

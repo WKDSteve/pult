@@ -143,14 +143,17 @@ pub fn on_close(tray: bool, desk: bool, told: bool) -> Close {
 pub enum Answer {
     ToTray,
     Quit,
+    /// Neither: the window stays, the hint comes again on the next close.
+    Cancel,
 }
 
-/// The hint on the first close: pult keeps playing in the tray. `None` while it waits.
+/// The hint on the first close: pult keeps playing in the tray. `None` while it waits;
+/// Escape or a click beside it cancels.
 pub fn hint(ui: &mut Ui) -> Option<Answer> {
     let theme = Theme::current();
     let p = &theme.palette;
     let mut answer = None;
-    Modal::new(Id::unique("tray-hint")).show(ui.ctx(), |ui| {
+    let modal = Modal::new(Id::unique("tray-hint")).show(ui.ctx(), |ui| {
         ui.set_width(380.0);
         ui.spacing_mut().item_spacing.y = 10.0;
         ui.label(
@@ -180,8 +183,17 @@ pub fn hint(ui: &mut Ui) -> Option<Answer> {
             {
                 answer = Some(Answer::Quit);
             }
+            if ui
+                .add(Button::new(RichText::new("Cancel").color(p.text_dim)).min_size(size))
+                .clicked()
+            {
+                answer = Some(Answer::Cancel);
+            }
         });
     });
+    if answer.is_none() && modal.should_close() {
+        answer = Some(Answer::Cancel);
+    }
     answer
 }
 

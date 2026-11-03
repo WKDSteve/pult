@@ -15,7 +15,7 @@ use crate::theme::Theme;
 use crate::widgets::badge::pill;
 use crate::widgets::strip::{self, Zones};
 use crate::widgets::toggle::{Role, toggle};
-use pult_core::view::{Action, MeterPoint, MixerView};
+use pult_core::view::{Action, Desk, MeterPoint, MixerView};
 
 /// The views of the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,6 +55,22 @@ impl ConsoleState {
             *seen = bus.clipped;
         }
         self.log.take(&view.events);
+    }
+
+    /// Hands `action` to `desk` at `elapsed` and notes the answer: a refusal with its reason,
+    /// and what a save did, so the status line confirms it. Other confirmations stay out of
+    /// the log; a fader drag would fill it.
+    pub fn act(&mut self, desk: &mut dyn Desk, elapsed: Duration, action: Action) {
+        let confirm = matches!(action, Action::SaveProfile { .. });
+        match desk.act(action) {
+            Ok(lines) if confirm => {
+                for line in lines {
+                    self.log.done(elapsed, &line);
+                }
+            }
+            Ok(_) => {}
+            Err(reason) => self.refused(elapsed, &reason),
+        }
     }
 
     /// Notes that the desk refused an action, with its reason, at `elapsed`; the status line and
@@ -235,6 +251,10 @@ fn status_bar(ui: &mut Ui, view: &MixerView, log: &Log) {
                 Source::Refused => {
                     ui.label(RichText::new("REFUSED").size(9.5).color(p.mute));
                     p.mute
+                }
+                Source::Done => {
+                    ui.label(RichText::new("DONE").size(9.5).color(p.ok));
+                    p.text_dim
                 }
                 Source::Desk => p.text_dim,
             };
