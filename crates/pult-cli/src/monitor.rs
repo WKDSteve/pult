@@ -113,6 +113,24 @@ impl Snapshot {
         }
     }
 
+    /// Dropouts so far: inputs that ran dry, hard resyncs and the glitches the devices
+    /// reported. Each is a gap or a jump in what the buses play.
+    #[must_use]
+    pub fn dropouts(&self) -> u64 {
+        let inputs: u64 = self.inputs.iter().map(|i| i.underruns + i.resyncs).sum();
+        inputs + self.glitches
+    }
+
+    /// [`Self::dropouts`] per hour of run time; zero before the first second.
+    #[must_use]
+    pub fn dropouts_per_hour(&self) -> f64 {
+        if self.elapsed < Duration::from_secs(1) {
+            0.0
+        } else {
+            self.dropouts() as f64 * 3600.0 / self.elapsed.as_secs_f64()
+        }
+    }
+
     /// Keeps the higher peaks of `self` and `later`, and everything else of `later`: the
     /// snapshot of a whole log interval.
     #[must_use]
@@ -161,7 +179,8 @@ fn level(present: bool, muted: bool, peak: f32) -> String {
 }
 
 /// The live status line: run time; per input level, dropouts, frames lost at capture, the
-/// resampler's drift correction in ppm and the hard resyncs; then each bus by `bus_names`.
+/// resampler's drift correction in ppm and the hard resyncs; then each bus by `bus_names`;
+/// last the device glitches and all dropouts per hour.
 pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
     // Writing into a String cannot fail.
     let mut line = clock(snap.elapsed);
@@ -185,8 +204,26 @@ pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
             bus.clipped
         );
     }
-    let _ = write!(line, " | glitches {}", snap.glitches);
+    let _ = write!(
+        line,
+        " | glitches {} | {:.1} dropouts/h",
+        snap.glitches,
+        snap.dropouts_per_hour()
+    );
     line
+}
+
+/// The line `pult run` ends with: run time, dropouts in all and per hour, frames lost at
+/// capture and clipped samples, over all inputs and buses.
+pub fn summary(snap: &Snapshot) -> String {
+    let lost: u64 = snap.inputs.iter().map(|i| i.lost).sum();
+    let clipped: u64 = snap.buses.iter().map(|b| b.clipped).sum();
+    format!(
+        "ran {}: {} dropouts ({:.1} per hour), {lost} frames lost, {clipped} samples clipped",
+        clock(snap.elapsed),
+        snap.dropouts(),
+        snap.dropouts_per_hour()
+    )
 }
 
 fn csv_db(linear: f32) -> String {
@@ -221,7 +258,7 @@ pub fn csv_header(inputs: usize, bus_names: &[String]) -> String {
             ",{name}_peak_db,{name}_clipped,{name}_present,{name}_outages"
         );
     }
-    line.push_str(",glitches");
+    line.push_str(",glitches,dropouts_per_hour");
     line
 }
 
@@ -252,7 +289,7 @@ pub fn csv_row(snap: &Snapshot) -> String {
             bus.outages
         );
     }
-    let _ = write!(line, ",{}", snap.glitches);
+    let _ = write!(line, ",{},{:.2}", snap.glitches, snap.dropouts_per_hour());
     line
 }
 
@@ -336,7 +373,8 @@ mod tests {
             ),
             "{line}"
         );
-        assert!(line.ends_with(" | glitches 1"), "{line}");
+        // One glitch in 1:02:03.
+        assert!(line.ends_with(" | glitches 1 | 1.0 dropouts/h"), "{line}");
     }
 
     #[test]
@@ -359,12 +397,28 @@ mod tests {
         assert!(header.starts_with("elapsed_s,in1_peak_db,in1_dropouts"));
         assert!(header.ends_with(
             ",in2_aligned,in2_present,in2_outages,A1_peak_db,A1_clipped,A1_present,A1_outages,\
-             glitches"
+             glitches,dropouts_per_hour"
         ));
         assert_eq!(
             row,
-            "10.0,-inf,0,0,12.3,0,0,1,0,-inf,0,0,0.0,0,0,0,0,-inf,0,1,0,1"
+            "10.0,-inf,0,0,12.3,0,0,1,0,-inf,0,0,0.0,0,0,0,0,-inf,0,1,0,1,360.00"
         );
+    }
+
+    #[test]
+    fn dropouts_add_up_and_scale_to_an_hour() {
+        let mut half_hour = snap(1_800_000, 0.0, 0.0);
+        half_hour.inputs[0].underruns = 2;
+        half_hour.inputs[0].resyncs = 1;
+        half_hour.inputs[0].lost = 7;
+        half_hour.buses[0].clipped = 3;
+        assert_eq!(half_hour.dropouts(), 4);
+        assert!((half_hour.dropouts_per_hour() - 8.0).abs() < 1e-9);
+        assert_eq!(
+            summary(&half_hour),
+            "ran 0:30:00: 4 dropouts (8.0 per hour), 7 frames lost, 3 samples clipped"
+        );
+        assert!(snap(500, 0.0, 0.0).dropouts_per_hour().abs() < f64::EPSILON);
     }
 
     #[test]
@@ -387,6 +441,6 @@ mod tests {
         std::fs::remove_file(&path).expect("remove log");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1], "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,1,0,1");
+        assert_eq!(lines[1], "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,1,0,1,360.00");
     }
 }

@@ -211,9 +211,10 @@ impl Recorder {
         }
     }
 
-    /// Writes the rest of the last interval.
+    /// Writes the rest of the last interval and prints the summary of the run.
     fn finish(&mut self, running: &Running) {
         let snap = Snapshot::take(running, self.start.elapsed());
+        println!("{}", monitor::summary(&snap));
         let last = self
             .interval
             .take()

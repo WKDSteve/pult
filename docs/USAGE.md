@@ -44,7 +44,7 @@ pult run --from "CABLE Output" --to Focusrite
 pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.). Enter auf leerer Zeile beendet:
 
 ```
-0:12:41 [1]  -18.3 dB out 0 lost 0 drift +12 ppm resync 0 | A1  -18.3 dB clipped 0 | glitches 0
+0:12:41 [1]  -18.3 dB out 0 lost 0 drift +12 ppm resync 0 | A1  -18.3 dB clipped 0 | glitches 0 | 0.0 dropouts/h
 ```
 
 | Feld | Bedeutung |
@@ -56,6 +56,7 @@ pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.).
 | `resync` | harte Sprünge zurück auf die Ziel-Pufferung, wenn der Puffer weit überlief; sollte 0 bleiben. Der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
 | `A1 … dB` / `clipped` | je Bus: Spitzenpegel der Summe nach dem Bus-Gain, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit `--to` heißt der eine Bus `A1` |
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
+| `dropouts/h` | alle Aussetzer zusammen (`out` aller Eingänge, `resync`, `glitches`) pro Stunde Laufzeit, hochgerechnet; in den ersten Minuten springt der Wert, weil schon ein einzelner Aussetzer stark zählt |
 | `missing` | statt des Pegels: das Gerät ist gerade weg (siehe unten, Geräte ab- und anstecken) |
 
 Die Lautstärke regelt weiter der Windows-Lautstärkeregler (er steuert `CABLE Input`) und der Verstärker. Solange pult nicht läuft, bleibt es still, weil alle Programme ins Kabel spielen. Zurück geht es, indem man das Standardgerät wieder auf das Scarlett stellt.
@@ -70,7 +71,14 @@ Schreibt alle 10 Sekunden eine Zeile nach `abend.csv` (die Datei wird neu angele
 Abschnitts in dB, dazu alle Zähler der Statuszeile als laufende Summen. Jede Zeile wird sofort gespeichert, auch wenn
 das Fenster einfach geschlossen wird. Die Spalte `drift_ppm` zeigt die Korrektur des Resamplers zum Zeitpunkt der
 Zeile: Sie pendelt sich nach dem Start ein und bleibt dann ungefähr auf dem Unterschied der beiden Gerätetakte. Die
+letzte Spalte `dropouts_per_hour` ist die Kennzahl für die Stabilität: Aussetzer pro Stunde bis zu dieser Zeile. Die
 Statuszeile beginnt mit der Laufzeit (`h:mm:ss`).
+
+Beim Beenden fasst pult den Lauf in einer Zeile zusammen, zum Beispiel:
+
+```
+ran 1:00:00: 0 dropouts (0.0 per hour), 0 frames lost, 0 samples clipped
+```
 
 Nach dem Start (und nach jedem Aussetzer) misst pult zwei Sekunden lang, wo sich der Puffer einpendelt, und
 überspringt einen Überschuss dann auf einmal, statt ihn langsam über den Resampler abzubauen. Die Spalte
