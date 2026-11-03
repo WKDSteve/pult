@@ -6,13 +6,11 @@
 
 use std::time::Duration;
 
-use eframe::egui::{
-    Align2, Color32, CornerRadius, Rect, RichText, ScrollArea, Sense, Ui, pos2, vec2,
-};
+use eframe::egui::{Align2, Color32, CornerRadius, RichText, ScrollArea, Sense, Ui, pos2, vec2};
 use pult_core::view::EventView;
 
 use crate::theme::Theme;
-use crate::widgets::badge::{elided, tag};
+use crate::widgets::badge::{elided, show_elided, tag};
 
 /// Entries the log keeps; older ones fall off.
 pub const CAPACITY: usize = 500;
@@ -166,9 +164,8 @@ pub fn show(ui: &mut Ui, log: &Log) {
                 text_color,
                 rect.right() - left - 10.0,
             );
-            let text_rect =
-                Rect::from_min_size(pos2(left, y - galley.size().y / 2.0), galley.size());
-            painter.galley(text_rect.min, galley, text_color);
+            let at = pos2(left, y - galley.size().y / 2.0);
+            show_elided(ui, at, galley, text_color, &entry.text, row);
         }
     });
 }

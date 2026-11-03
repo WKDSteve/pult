@@ -7,7 +7,7 @@ use eframe::egui::{
 use pult_core::view::{Action, InputView, MixerView, SourceKind};
 
 use crate::theme::Theme;
-use crate::widgets::badge::elided;
+use crate::widgets::badge::{elided, show_elided};
 use crate::widgets::strip::format_rate;
 
 const NAME_WIDTH: f32 = 230.0;
@@ -80,7 +80,7 @@ fn grid(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
 
     // Row and column of the pointer, lit faintly across the whole grid.
     if let Some((row, column)) = hovered {
-        let tint = p.raised.gamma_multiply(0.45);
+        let tint = p.raised.gamma_multiply(theme.shades.hover);
         let row_rect = Rect::from_x_y_ranges(rect.x_range(), cell(row, 0).y_range());
         let column_rect = Rect::from_x_y_ranges(cell(0, column).x_range(), rect.y_range());
         ui.painter()
@@ -101,7 +101,7 @@ fn grid(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
             pos2(rect.left(), cell(row, 0).top()),
             vec2(NAME_WIDTH, CELL_HEIGHT),
         );
-        row_head(ui, name, input);
+        row_head(ui, name, row, input);
         let y = name.bottom().round() - 0.5;
         if row + 1 < rows {
             ui.painter()
@@ -154,11 +154,8 @@ fn column_head(ui: &Ui, rect: Rect, view: &MixerView, column: usize) {
         p.text_dim,
         CELL_WIDTH - 12.0,
     );
-    painter.galley(
-        pos2(x - device.size().x / 2.0, rect.top() + 21.0),
-        device,
-        p.text_dim,
-    );
+    let at = pos2(x - device.size().x / 2.0, rect.top() + 21.0);
+    show_elided(ui, at, device, p.text_dim, &bus.device, ("bus", column));
     let fed = view
         .inputs
         .iter()
@@ -178,7 +175,7 @@ fn column_head(ui: &Ui, rect: Rect, view: &MixerView, column: usize) {
     );
 }
 
-fn row_head(ui: &Ui, rect: Rect, input: &InputView) {
+fn row_head(ui: &Ui, rect: Rect, row: usize, input: &InputView) {
     let p = &Theme::current().palette;
     let painter = ui.painter();
     let name_color = if input.present { p.text } else { p.text_faint };
@@ -190,7 +187,8 @@ fn row_head(ui: &Ui, rect: Rect, input: &InputView) {
         NAME_WIDTH - 24.0,
     );
     let name_height = name.size().y;
-    painter.galley(pos2(rect.left() + 4.0, rect.top() + 5.0), name, name_color);
+    let at = pos2(rect.left() + 4.0, rect.top() + 5.0);
+    show_elided(ui, at, name, name_color, &input.name, ("input", row));
     let kind = match input.kind {
         SourceKind::Device => "DEV",
         SourceKind::Program => "APP",
@@ -230,9 +228,16 @@ fn crosspoint(
     response.widget_info(|| WidgetInfo::selected(eframe::egui::Role::CheckBox, true, on, label));
     let painter = ui.painter();
     let center = rect.center();
-    let dim = |c: eframe::egui::Color32| if present { c } else { c.gamma_multiply(0.45) };
+    let shades = &Theme::current().shades;
+    let dim = |c: eframe::egui::Color32| {
+        if present {
+            c
+        } else {
+            c.gamma_multiply(shades.absent)
+        }
+    };
     if on {
-        painter.circle_filled(center, 11.0, dim(p.accent.gamma_multiply(0.18)));
+        painter.circle_filled(center, 11.0, dim(p.accent.gamma_multiply(shades.halo)));
         painter.circle_filled(center, 7.0, dim(p.accent));
     } else {
         let ring = if response.hovered() {

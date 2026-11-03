@@ -94,8 +94,11 @@ pub fn screen(ui: &mut Ui, profile: Option<&Path>, problem: Option<&str>) -> Opt
                 }
                 if let Some(problem) = problem {
                     Frame::new()
-                        .fill(p.mute.gamma_multiply(0.1))
-                        .stroke(Stroke::new(1.0, p.mute.gamma_multiply(0.45)))
+                        .fill(p.mute.gamma_multiply(theme.shades.wash))
+                        .stroke(Stroke::new(
+                            1.0,
+                            p.mute.gamma_multiply(theme.shades.outline),
+                        ))
                         .corner_radius(CornerRadius::same(m.radius_small))
                         .inner_margin(Margin::same(10))
                         .show(ui, |ui| {

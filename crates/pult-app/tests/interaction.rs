@@ -189,3 +189,16 @@ fn the_start_screen_offers_a_retry_and_the_demo() {
         });
     assert!(harness.query_by_label("Try again").is_none());
 }
+
+#[test]
+fn a_cut_name_shows_in_full_on_hover() {
+    let device = "Lautsprecher (2- Focusrite USB Audio)";
+    let mut harness = harness();
+    harness.state_mut().state.tab = Tab::Matrix;
+    harness.run_steps(2);
+    // The matrix head cuts the device name; only the hover area carries it in full.
+    assert_eq!(harness.get_all_by_label(device).count(), 1);
+    harness.get_by_label(device).hover();
+    harness.run_steps(30);
+    assert_eq!(harness.get_all_by_label(device).count(), 2, "no tooltip");
+}

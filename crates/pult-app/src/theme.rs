@@ -76,11 +76,34 @@ pub struct Metrics {
     pub header_height: f32,
 }
 
+/// How strongly a palette color is laid over something, 0 (not at all) to 1 (fully): for
+/// washes, outlines and veils derived from a role color, so a look can change them too.
+#[derive(Clone, Copy, Debug)]
+pub struct Shades {
+    /// The unlit part of a meter zone.
+    pub unlit: f32,
+    /// The fill of a tag, pill or warning box in its role color.
+    pub wash: f32,
+    /// The outline of a tag, pill or warning box in its role color.
+    pub outline: f32,
+    /// The halo around a lit crosspoint.
+    pub halo: f32,
+    /// The row and column under the pointer in the matrix.
+    pub hover: f32,
+    /// Controls of a device that is missing.
+    pub absent: f32,
+    /// The veil over a strip whose device is missing.
+    pub veil: f32,
+    /// The body of a bus strip, from `raised`.
+    pub bus_body: f32,
+}
+
 /// The one theme: dark.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     pub palette: Palette,
     pub metrics: Metrics,
+    pub shades: Shades,
 }
 
 pub const DARK: Theme = Theme {
@@ -103,6 +126,16 @@ pub const DARK: Theme = Theme {
         meter_mid: Color32::from_rgb(0xD8, 0xC3, 0x48),
         meter_high: Color32::from_rgb(0xE0, 0x55, 0x4B),
         ok: Color32::from_rgb(0x48, 0xC2, 0x6E),
+    },
+    shades: Shades {
+        unlit: 0.12,
+        wash: 0.14,
+        outline: 0.45,
+        halo: 0.18,
+        hover: 0.45,
+        absent: 0.45,
+        veil: 0.55,
+        bus_body: 0.55,
     },
     metrics: Metrics {
         strip_width: 88.0,

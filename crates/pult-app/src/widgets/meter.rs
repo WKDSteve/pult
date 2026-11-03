@@ -125,7 +125,7 @@ pub fn meter(
         painter.rect_filled(
             zone.shrink2(vec2(1.0, 0.0)),
             0.0,
-            color.gamma_multiply(0.12),
+            color.gamma_multiply(theme.shades.unlit),
         );
         if level > from {
             let lit = Rect::from_x_y_ranges(bar.x_range(), y_of(level.min(to))..=y_of(from));

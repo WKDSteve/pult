@@ -333,7 +333,7 @@ pub fn input_strip(
         ui.painter().rect_filled(
             rect,
             CornerRadius::same(m.radius),
-            p.base.gamma_multiply(0.55),
+            p.base.gamma_multiply(theme.shades.veil),
         );
     }
     actions
@@ -353,7 +353,12 @@ pub fn bus_strip(
     let (p, m) = (&theme.palette, &theme.metrics);
     let zones = Zones::new(rect, buses);
     let mut actions = Vec::new();
-    strip_frame(ui, rect, p.raised.gamma_multiply(0.55), &zones);
+    strip_frame(
+        ui,
+        rect,
+        p.raised.gamma_multiply(theme.shades.bus_body),
+        &zones,
+    );
 
     header(
         ui,
