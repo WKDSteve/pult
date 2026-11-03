@@ -10,6 +10,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub use crate::binding::{AddressError, Binding, BusParam, InputParam, Value, action_gain};
+
 /// A snapshot of the whole mixer, taken about 30 times a second.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MixerView {

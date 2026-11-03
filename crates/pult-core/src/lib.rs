@@ -12,6 +12,7 @@
 #[global_allocator]
 static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+mod binding;
 pub mod control;
 pub mod drift;
 pub mod dropouts;
