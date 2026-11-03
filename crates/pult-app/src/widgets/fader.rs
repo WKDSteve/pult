@@ -73,6 +73,16 @@ pub fn fader(ui: &mut Ui, gain_db: &mut f32, size: Vec2, label: &str) -> Respons
         }
     }
     if response.has_focus() {
+        // Up and down are the fader's own; without the lock egui would also move the focus.
+        ui.memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
         *gain_db = ui.input(|i| keys(i, *gain_db));
     }
     // Bits, not `!=`: -inf to -inf is no change, and any other difference is one.
@@ -113,7 +123,8 @@ fn keys(input: &egui::InputState, db: f32) -> f32 {
             }
         }
     }
-    step(step(db, steps, size), page, PAGE_DB)
+    // A page is a run of normal steps, so it keeps the 0.5 dB grid instead of snapping to 3 dB.
+    step(step(db, steps, size), page * PAGE_DB / STEP_DB, STEP_DB)
 }
 
 fn paint(ui: &Ui, rect: Rect, gain_db: f32, response: &Response) {

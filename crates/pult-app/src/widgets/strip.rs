@@ -181,6 +181,51 @@ fn fader_and_meter(
     changed
 }
 
+/// The bus assignment buttons of input `index`, three to a row.
+fn assign_row(
+    ui: &mut Ui,
+    zone: Rect,
+    index: usize,
+    input: &InputView,
+    bus_names: &[String],
+    actions: &mut Vec<Action>,
+) {
+    within(
+        ui,
+        zone.shrink2(vec2(0.0, 3.0)),
+        Layout::left_to_right(Align::Min),
+        |ui| {
+            let gap = 3.0;
+            #[allow(clippy::cast_precision_loss)]
+            let per_row = ASSIGN_PER_ROW as f32;
+            let width = (zone.width() - gap * (per_row - 1.0)) / per_row;
+            ui.spacing_mut().item_spacing = vec2(gap, 4.0);
+            ui.horizontal_wrapped(|ui| {
+                for (bus, name) in bus_names.iter().enumerate() {
+                    let mut on = input.buses.contains(&bus);
+                    let size = vec2(width, ASSIGN_ROW_HEIGHT - 4.0);
+                    if toggle(
+                        ui,
+                        &mut on,
+                        name,
+                        &format!("{} to {name}", input.name),
+                        Role::Assign,
+                        size,
+                    )
+                    .changed()
+                    {
+                        actions.push(Action::Route {
+                            input: index,
+                            bus,
+                            on,
+                        });
+                    }
+                }
+            });
+        },
+    );
+}
+
 /// Draws the strip of input `index` into `rect`; returns what the user changed.
 pub fn input_strip(
     ui: &mut Ui,
@@ -218,31 +263,7 @@ pub fn input_strip(
         );
     });
 
-    within(
-        ui,
-        zones.assign.shrink2(vec2(0.0, 3.0)),
-        Layout::left_to_right(Align::Min),
-        |ui| {
-            let gap = 3.0;
-            #[allow(clippy::cast_precision_loss)]
-            let per_row = ASSIGN_PER_ROW as f32;
-            let width = (zones.assign.width() - gap * (per_row - 1.0)) / per_row;
-            ui.spacing_mut().item_spacing = vec2(gap, 4.0);
-            ui.horizontal_wrapped(|ui| {
-                for (bus, name) in bus_names.iter().enumerate() {
-                    let mut on = input.buses.contains(&bus);
-                    let size = vec2(width, ASSIGN_ROW_HEIGHT - 4.0);
-                    if toggle(ui, &mut on, name, Role::Assign, size).changed() {
-                        actions.push(Action::Route {
-                            input: index,
-                            bus,
-                            on,
-                        });
-                    }
-                }
-            });
-        },
-    );
+    assign_row(ui, zones.assign, index, input, bus_names, &mut actions);
 
     within(
         ui,
@@ -252,14 +273,32 @@ pub fn input_strip(
             ui.spacing_mut().item_spacing.x = 4.0;
             let size = vec2((zones.mute_solo.width() - 4.0) / 2.0, m.button_height + 2.0);
             let mut mute = input.muted;
-            if toggle(ui, &mut mute, "M", Role::Mute, size).changed() {
+            if toggle(
+                ui,
+                &mut mute,
+                "M",
+                &format!("{} mute", input.name),
+                Role::Mute,
+                size,
+            )
+            .changed()
+            {
                 actions.push(Action::InputMute {
                     input: index,
                     muted: mute,
                 });
             }
             let mut solo = input.solo;
-            if toggle(ui, &mut solo, "S", Role::Solo, size).changed() {
+            if toggle(
+                ui,
+                &mut solo,
+                "S",
+                &format!("{} solo", input.name),
+                Role::Solo,
+                size,
+            )
+            .changed()
+            {
                 actions.push(Action::InputSolo { input: index, solo });
             }
         },
@@ -343,7 +382,16 @@ pub fn bus_strip(
         |ui| {
             let mut mute = bus.muted;
             let size = vec2(zones.mute_solo.width(), m.button_height + 2.0);
-            if toggle(ui, &mut mute, "MUTE", Role::Mute, size).changed() {
+            if toggle(
+                ui,
+                &mut mute,
+                "MUTE",
+                &format!("{} mute", bus.name),
+                Role::Mute,
+                size,
+            )
+            .changed()
+            {
                 actions.push(Action::BusMute {
                     bus: index,
                     muted: mute,

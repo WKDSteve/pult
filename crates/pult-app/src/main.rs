@@ -24,8 +24,8 @@ impl eframe::App for App {
         let now = self.start.elapsed().as_secs_f64();
         let view = self.desk.view();
         for action in console::show(ui, &view, &mut self.state, now) {
-            if let Err(error) = self.desk.act(action) {
-                eprintln!("pult-app: {error}");
+            if let Err(reason) = self.desk.act(action) {
+                self.state.refused(view.elapsed, &reason);
             }
         }
         ui.ctx().request_repaint_after(FRAME);

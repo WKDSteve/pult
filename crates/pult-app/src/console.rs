@@ -4,14 +4,17 @@ use std::time::Duration;
 
 use eframe::egui::{
     self, Align, CornerRadius, Frame, Layout, Margin, Rect, RichText, ScrollArea, Sense, Stroke,
-    StrokeKind, Ui, pos2, vec2,
+    Ui, pos2, vec2,
 };
 
+use crate::log::{self, Log, Source, format_elapsed};
+use crate::matrix;
 use crate::theme::Theme;
+use crate::widgets::badge::pill;
 use crate::widgets::meter::MeterState;
 use crate::widgets::strip::{Zones, bus_strip, input_strip};
 use crate::widgets::toggle::{Role, toggle};
-use pult_core::view::{Action, EventView, MeterPoint, MixerView};
+use pult_core::view::{Action, MeterPoint, MixerView};
 
 /// The views of the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -22,9 +25,6 @@ pub enum Tab {
     Events,
 }
 
-/// Events the console keeps; older ones fall off.
-pub const EVENT_LOG: usize = 500;
-
 /// What the console keeps between frames.
 #[derive(Clone, Debug, Default)]
 pub struct ConsoleState {
@@ -33,8 +33,8 @@ pub struct ConsoleState {
     bus_meters: Vec<MeterState>,
     /// Clipped samples per bus at the previous view, to light the lamp on new ones.
     bus_clipped: Vec<u64>,
-    /// Every event seen, oldest first; a view brings only the new ones.
-    events: Vec<EventView>,
+    /// What the desk reported and refused, oldest first.
+    log: Log,
 }
 
 impl ConsoleState {
@@ -56,23 +56,19 @@ impl ConsoleState {
             }
             *seen = bus.clipped;
         }
-        self.events.extend(view.events.iter().cloned());
-        let excess = self.events.len().saturating_sub(EVENT_LOG);
-        self.events.drain(..excess);
+        self.log.take(&view.events);
     }
 
-    /// Every event seen, oldest first.
+    /// Notes that the desk refused an action, with its reason, at `elapsed`; the status line and
+    /// the events view show it.
+    pub fn refused(&mut self, elapsed: Duration, reason: &str) {
+        self.log.refused(elapsed, reason);
+    }
+
     #[must_use]
-    pub fn events(&self) -> &[EventView] {
-        &self.events
+    pub fn log(&self) -> &Log {
+        &self.log
     }
-}
-
-/// `02:14:07`
-#[must_use]
-pub fn format_runtime(runtime: Duration) -> String {
-    let s = runtime.as_secs();
-    format!("{:02}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
 }
 
 /// Draws the window into `ui` at time `now` (seconds); returns what the user changed.
@@ -100,14 +96,14 @@ pub fn show(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, now: f64) -
                 .stroke(Stroke::new(1.0, p.line))
                 .inner_margin(Margin::symmetric(14, 0)),
         )
-        .show(ui, |ui| status_bar(ui, view, &state.events));
+        .show(ui, |ui| status_bar(ui, view, &state.log));
 
     egui::CentralPanel::default()
         .frame(Frame::new().fill(p.base).inner_margin(Margin::same(10)))
         .show(ui, |ui| match state.tab {
             Tab::Console => console(ui, view, state, now, &mut actions),
-            Tab::Matrix => matrix(ui, view, &mut actions),
-            Tab::Events => events(ui, &state.events),
+            Tab::Matrix => matrix::show(ui, view, &mut actions),
+            Tab::Events => log::show(ui, &state.log),
         });
     actions
 }
@@ -128,7 +124,7 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
         ui.label(RichText::new(profile).size(11.5).color(p.text_dim));
         ui.add_space(18.0);
 
-        stat(ui, "RUNTIME", &format_runtime(view.elapsed), p.text);
+        stat(ui, "RUNTIME", &format_elapsed(view.elapsed), p.text);
         let dropouts = if view.dropouts_per_hour > 0.0 {
             p.solo
         } else {
@@ -152,7 +148,16 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
             ui.add_space(8.0);
             let mut post = view.meter_point == MeterPoint::PostFader;
             let label = if post { "POST" } else { "PRE" };
-            if toggle(ui, &mut post, label, Role::Assign, vec2(46.0, 22.0)).changed() {
+            if toggle(
+                ui,
+                &mut post,
+                label,
+                "Meter after fader",
+                Role::Assign,
+                vec2(46.0, 22.0),
+            )
+            .changed()
+            {
                 actions.push(Action::SetMeterPoint(if post {
                     MeterPoint::PostFader
                 } else {
@@ -181,27 +186,6 @@ fn stat(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
             .color(color),
     );
     ui.add_space(10.0);
-}
-
-fn pill(ui: &mut Ui, text: &str, color: egui::Color32) {
-    let font = Theme::label_font(9.5);
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
-    let size = galley.size() + vec2(18.0, 6.0);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(9), color.gamma_multiply(0.14));
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(9),
-        Stroke::new(1.0, color.gamma_multiply(0.5)),
-        StrokeKind::Inside,
-    );
-    painter.circle_filled(pos2(rect.left() + 8.0, rect.center().y), 2.5, color);
-    painter.galley(
-        pos2(rect.left() + 13.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        color,
-    );
 }
 
 fn tab_button(ui: &mut Ui, current: &mut Tab, tab: Tab, name: &str) {
@@ -240,16 +224,23 @@ fn tab_button(ui: &mut Ui, current: &mut Tab, tab: Tab, name: &str) {
     }
 }
 
-fn status_bar(ui: &mut Ui, view: &MixerView, log: &[EventView]) {
+fn status_bar(ui: &mut Ui, view: &MixerView, log: &Log) {
     let p = &Theme::current().palette;
     ui.horizontal_centered(|ui| {
-        if let Some(event) = log.last() {
+        if let Some(entry) = log.last() {
             ui.label(
-                RichText::new(format_runtime(event.elapsed))
+                RichText::new(format_elapsed(entry.elapsed))
                     .font(Theme::value_font(10.5))
                     .color(p.text_faint),
             );
-            ui.label(RichText::new(&event.text).size(11.0).color(p.text_dim));
+            let color = match entry.source {
+                Source::Refused => {
+                    ui.label(RichText::new("REFUSED").size(9.5).color(p.mute));
+                    p.mute
+                }
+                Source::Desk => p.text_dim,
+            };
+            ui.label(RichText::new(&entry.text).size(11.0).color(color));
         } else {
             ui.label(RichText::new("no events").size(11.0).color(p.text_faint));
         }
@@ -337,55 +328,10 @@ fn console(
     });
 }
 
-fn matrix(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
-    let p = &Theme::current().palette;
-    ui.label(RichText::new("ROUTING").size(10.0).color(p.text_faint));
-    ui.add_space(4.0);
-    egui::Grid::new("matrix")
-        .spacing(vec2(6.0, 6.0))
-        .show(ui, |ui| {
-            ui.label("");
-            for bus in &view.buses {
-                ui.label(RichText::new(&bus.name).strong().color(p.text));
-            }
-            ui.end_row();
-            for (i, input) in view.inputs.iter().enumerate() {
-                ui.label(RichText::new(&input.name).color(if input.present {
-                    p.text
-                } else {
-                    p.text_faint
-                }));
-                for (bus, name) in view.buses.iter().enumerate() {
-                    let mut on = input.buses.contains(&bus);
-                    if toggle(ui, &mut on, &name.name, Role::Assign, vec2(44.0, 22.0)).changed() {
-                        actions.push(Action::Route { input: i, bus, on });
-                    }
-                }
-                ui.end_row();
-            }
-        });
-}
-
-fn events(ui: &mut Ui, log: &[EventView]) {
-    let p = &Theme::current().palette;
-    ui.label(RichText::new("EVENTS").size(10.0).color(p.text_faint));
-    ui.add_space(4.0);
-    for event in log.iter().rev() {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format_runtime(event.elapsed))
-                    .font(Theme::value_font(11.0))
-                    .color(p.text_faint),
-            );
-            ui.label(RichText::new(&event.text).color(p.text));
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pult_core::view::Desk;
+    use pult_core::view::{Desk, EventView};
 
     fn view_with(events: &[&str], clipped: u64) -> MixerView {
         let mut view = pult_core::view::FakeDesk::new().view();
@@ -401,18 +347,27 @@ mod tests {
     }
 
     #[test]
-    fn events_pile_up_and_old_ones_fall_off() {
+    fn view_events_and_refusals_reach_the_log() {
         let mut state = ConsoleState::default();
         state.take(&view_with(&["a", "b"], 0));
         state.take(&view_with(&[], 0));
+        state.refused(Duration::from_secs(1), "no");
         state.take(&view_with(&["c"], 0));
-        let texts: Vec<&str> = state.events().iter().map(|e| e.text.as_str()).collect();
-        assert_eq!(texts, ["a", "b", "c"]);
-        for _ in 0..EVENT_LOG {
-            state.take(&view_with(&["x"], 0));
-        }
-        assert_eq!(state.events().len(), EVENT_LOG);
-        assert_eq!(state.events()[0].text, "x");
+        let lines: Vec<(&str, Source)> = state
+            .log()
+            .entries()
+            .iter()
+            .map(|e| (e.text.as_str(), e.source))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("a", Source::Desk),
+                ("b", Source::Desk),
+                ("no", Source::Refused),
+                ("c", Source::Desk),
+            ]
+        );
     }
 
     #[test]
@@ -425,15 +380,5 @@ mod tests {
         state.bus_meters[0].reset_clip();
         state.take(&view_with(&[], 5));
         assert!(!state.bus_meters[0].clipped());
-    }
-
-    #[test]
-    fn runtime() {
-        assert_eq!(format_runtime(Duration::from_secs(0)), "00:00:00");
-        assert_eq!(
-            format_runtime(Duration::from_secs(2 * 3600 + 14 * 60 + 7)),
-            "02:14:07"
-        );
-        assert_eq!(format_runtime(Duration::from_secs(100 * 3600)), "100:00:00");
     }
 }

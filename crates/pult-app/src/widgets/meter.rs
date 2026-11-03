@@ -154,6 +154,25 @@ pub fn meter(
     response
 }
 
+/// A thin horizontal meter without hold or lamp, for lists (the matrix rows): the same zones
+/// and scale as the strip meter.
+pub fn level_bar(painter: &eframe::egui::Painter, rect: Rect, level_db: Option<f32>) {
+    let p = &Theme::current().palette;
+    painter.rect_filled(rect, CornerRadius::same(1), p.well);
+    let level = level_db.unwrap_or(f32::NEG_INFINITY);
+    let x_of = |db: f32| rect.left() + rect.width() * scale::meter_pos(db);
+    for (from, to, color) in [
+        (scale::METER_FLOOR_DB, MID_DBFS, p.meter_low),
+        (MID_DBFS, HIGH_DBFS, p.meter_mid),
+        (HIGH_DBFS, 0.0, p.meter_high),
+    ] {
+        if level > from {
+            let lit = Rect::from_x_y_ranges(x_of(from)..=x_of(level.min(to)), rect.y_range());
+            painter.rect_filled(lit, 0.0, color);
+        }
+    }
+}
+
 /// Draws the dBFS numbers of a meter into a strip of `size`, aligned with a meter of the same
 /// height drawn next to it.
 pub fn meter_scale(ui: &mut Ui, size: Vec2) {

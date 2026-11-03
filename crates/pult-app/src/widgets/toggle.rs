@@ -27,7 +27,15 @@ impl Role {
 }
 
 /// Draws a toggle of `size` with `text`; a click flips `on` and marks the response changed.
-pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, role: Role, size: Vec2) -> Response {
+/// `label` names it for screen readers and tests (`Guitar mute`), where `text` is too short.
+pub fn toggle(
+    ui: &mut Ui,
+    on: &mut bool,
+    text: &str,
+    label: &str,
+    role: Role,
+    size: Vec2,
+) -> Response {
     let theme = Theme::current();
     let (p, m) = (&theme.palette, &theme.metrics);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
@@ -35,7 +43,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str, role: Role, size: Vec2) ->
         *on = !*on;
         response.mark_changed();
     }
-    response.widget_info(|| WidgetInfo::selected(eframe::egui::Role::CheckBox, true, *on, text));
+    response.widget_info(|| WidgetInfo::selected(eframe::egui::Role::CheckBox, true, *on, label));
     if !ui.is_rect_visible(rect) {
         return response;
     }

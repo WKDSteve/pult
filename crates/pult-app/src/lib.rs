@@ -6,5 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod console;
+pub mod log;
+pub mod matrix;
 pub mod theme;
 pub mod widgets;

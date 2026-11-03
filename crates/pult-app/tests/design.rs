@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use eframe::egui::{Rect, pos2, vec2};
 use egui_kittest::Harness;
-use pult_app::console::{self, ConsoleState};
+use pult_app::console::{self, ConsoleState, Tab};
 use pult_app::theme::Theme;
 use pult_app::widgets::meter::MeterState;
 use pult_app::widgets::strip::{bus_strip, input_strip};
@@ -176,9 +176,10 @@ fn channel_strip() {
     harness.snapshot("channel_strip");
 }
 
-#[test]
-fn console_overview() {
+/// The whole window on `tab`, with one refused action in the log.
+fn console_shot(tab: Tab, name: &str) {
     let mut state = ConsoleState::default();
+    state.tab = tab;
     let mut frame = 0_u32;
     let mut harness = Harness::builder()
         .with_size(vec2(1280.0, 760.0))
@@ -190,9 +191,30 @@ fn console_overview() {
             if frame == 0 {
                 view.events = first_events();
             }
+            if frame == 1 {
+                state.refused(
+                    Duration::from_secs(8040),
+                    "[3] would feed no bus; mute it instead",
+                );
+            }
             frame += 1;
             let _ = console::show(ui, &view, &mut state, now);
         });
     harness.run_steps(FRAMES);
-    harness.snapshot("console_overview");
+    harness.snapshot(name);
+}
+
+#[test]
+fn console_overview() {
+    console_shot(Tab::Console, "console_overview");
+}
+
+#[test]
+fn matrix_view() {
+    console_shot(Tab::Matrix, "matrix_view");
+}
+
+#[test]
+fn events_view() {
+    console_shot(Tab::Events, "events_view");
 }
