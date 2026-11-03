@@ -15,3 +15,6 @@ Thumbs.db
 *.wav
 *.flac
 *.mp3
+
+# Logs of pult run in the repository root
+/*.csv
