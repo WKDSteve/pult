@@ -24,7 +24,7 @@ use windows::core::HSTRING;
 
 /// The names of the instance in the session of the user (`Local\`): who runs, and how to ask
 /// it to show its window.
-pub const INSTANCE: &str = r"Local\pult-app.instance";
+pub const INSTANCE: &str = pult_engine::APP_INSTANCE;
 pub const SHOW: &str = r"Local\pult-app.show";
 
 /// Where Windows looks for what to start when the user signs in, and pult's value there.

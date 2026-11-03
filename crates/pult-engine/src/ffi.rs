@@ -9,7 +9,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use windows::Win32::Foundation::{
-    CloseHandle, E_OUTOFMEMORY, ERROR_TIMEOUT, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, E_OUTOFMEMORY, ERROR_ALREADY_EXISTS, ERROR_TIMEOUT, GetLastError, HANDLE,
+    WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
@@ -31,11 +32,52 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, OpenProcess,
-    PROCESS_SYNCHRONIZE, WaitForMultipleObjects,
+    AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, CreateMutexW,
+    OpenMutexW, OpenProcess, PROCESS_SYNCHRONIZE, SYNCHRONIZATION_SYNCHRONIZE,
+    WaitForMultipleObjects,
 };
 use windows::Win32::System::Variant::VT_BLOB;
-use windows::core::{Interface, PCWSTR, Result, w};
+use windows::core::{HSTRING, Interface, PCWSTR, Result, w};
+
+/// A named mark in the user's session, held while it lives: a mutex that is only named, never
+/// waited on, so nothing can deadlock on it.
+#[derive(Debug)]
+pub(crate) struct SessionMark(HANDLE);
+
+// SAFETY: the handle is a kernel object of this process, usable and closable from any thread.
+unsafe impl Send for SessionMark {}
+
+impl SessionMark {
+    /// Holds the mark `name`, and tells whether someone held it already. `None` when Windows
+    /// refuses the mark.
+    pub(crate) fn join(name: &str) -> (Option<Self>, bool) {
+        // SAFETY: no security attributes (None) and a name that lives across the call.
+        match unsafe { CreateMutexW(None, false, &HSTRING::from(name)) } {
+            Ok(handle) => {
+                // SAFETY: GetLastError only reads the thread's last error, set by the call
+                // just now.
+                let held = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+                (Some(Self(handle)), held)
+            }
+            Err(_) => (None, false),
+        }
+    }
+
+    /// Whether someone holds the mark `name`, without taking part.
+    pub(crate) fn exists(name: &str) -> bool {
+        // SAFETY: a name that lives across the call; the handle is closed by the drop.
+        unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, &HSTRING::from(name)) }
+            .map(Self)
+            .is_ok()
+    }
+}
+
+impl Drop for SessionMark {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from a successful Create/Open call and is closed only here.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
 
 /// The calling thread's place in the multimedia class "Pro Audio" (MMCSS), which runs it
 /// ahead of ordinary work such as a build on every core. Dropping it leaves the class; drop

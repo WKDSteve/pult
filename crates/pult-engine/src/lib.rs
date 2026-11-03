@@ -20,6 +20,7 @@ mod desk;
 #[allow(unsafe_code)]
 mod ffi;
 mod live;
+mod presence;
 mod process;
 pub mod profile;
 mod slot;
@@ -38,6 +39,7 @@ use pult_core::{
 };
 
 pub use desk::EngineDesk;
+pub use presence::{APP_INSTANCE, Presence};
 use process::PROCESS_CHANNELS;
 pub use process::program_names;
 use slot::{Feed, Health, OPEN_TIMEOUT, Slot, Source, fault_recorder};

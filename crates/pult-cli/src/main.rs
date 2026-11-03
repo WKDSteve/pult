@@ -104,6 +104,10 @@ fn start_run(spec: &RunSpec) -> Result<(), String> {
         None => None,
     };
     let mut running = pult_engine::start(&route).map_err(|e| e.to_string())?;
+    let presence = pult_engine::Presence::announce();
+    if let Some(note) = presence.note() {
+        println!("{note}");
+    }
     run(&mut running, log, bus_names);
     Ok(())
 }
