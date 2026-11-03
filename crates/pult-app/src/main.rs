@@ -250,6 +250,22 @@ fn listen_for_later_starts(ctx: &egui::Context, commands: &Sender<Command>) {
     });
 }
 
+/// What a start says and how it ends when another pult-app runs already, which `shown` its
+/// window or did not answer. Quiet when it only meant to bring the window up.
+fn later_start(start: &Start, shown: bool) -> (Option<&'static str>, ExitCode) {
+    match (shown, start) {
+        (true, Start::Nothing) => (None, ExitCode::SUCCESS),
+        (true, _) => (
+            Some("already running; showed its window and left this start out"),
+            ExitCode::SUCCESS,
+        ),
+        (false, _) => (
+            Some("already running, but its window did not answer"),
+            ExitCode::FAILURE,
+        ),
+    }
+}
+
 fn main() -> ExitCode {
     let start = start::parse(std::env::args().skip(1));
     if !matches!(start, Ok(Start::Profile(_) | Start::Demo | Start::Nothing)) {
@@ -274,15 +290,12 @@ fn main() -> ExitCode {
     // a second route on the same devices.
     let Some(_instance) = ffi::claim(ffi::INSTANCE) else {
         let shown = ffi::ask_to_show(ffi::SHOW, Duration::from_secs(3));
-        if start != Start::Nothing || !shown {
+        let (note, code) = later_start(&start, shown);
+        if let Some(note) = note {
             ffi::attach_parent_console();
-            if shown {
-                eprintln!("pult-app: already running; showed its window and left this start out");
-            } else {
-                eprintln!("pult-app: already running, but its window did not answer");
-            }
+            eprintln!("pult-app: {note}");
         }
-        return ExitCode::SUCCESS;
+        return code;
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -306,5 +319,24 @@ fn main() -> ExitCode {
             eprintln!("pult-app: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_later_start_says_what_happened() {
+        assert_eq!(
+            later_start(&Start::Nothing, true),
+            (None, ExitCode::SUCCESS)
+        );
+        let (note, code) = later_start(&Start::Demo, true);
+        assert!(note.unwrap().contains("showed its window"));
+        assert_eq!(code, ExitCode::SUCCESS);
+        let (note, code) = later_start(&Start::Nothing, false);
+        assert!(note.unwrap().contains("did not answer"));
+        assert_eq!(code, ExitCode::FAILURE);
     }
 }
