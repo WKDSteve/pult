@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod control;
 pub mod drift;
 pub mod level;
 pub mod mixer;

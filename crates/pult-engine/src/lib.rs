@@ -18,6 +18,7 @@
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod ffi;
+mod live;
 mod process;
 pub mod profile;
 mod slot;
@@ -469,6 +470,8 @@ pub struct Running {
     /// The route's sample rate in Hz.
     pub sample_rate: u32,
     xruns: Arc<Counter>,
+    /// The spec as it stands now: changed by `apply` along with the controls.
+    spec: RouteSpec,
 }
 
 impl fmt::Debug for Running {
@@ -894,6 +897,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         buses,
         sample_rate,
         xruns: Arc::new(Counter::default()),
+        spec: spec.clone(),
     };
     // Inputs first, so the outputs find their rings filling.
     for (index, opening) in opening.iter().enumerate() {

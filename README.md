@@ -2,7 +2,7 @@
 
 Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mikrofon und Interface-Eingängen mischen und auf Hardware- und virtuelle Ausgänge verteilen. Der Name kommt vom *Mischpult*. pult ist die Schwester-App von [takt](https://github.com/WKDSteve/takt), der Medien-Suite: zwei eigenständige Programme, und läuft pult, kann takt sich später damit verbinden.
 
-> **Status (2026-11-03): Meilenstein 1 bestanden, Stufe 1 im Bau.** Ein Kommandozeilen-Programm, das Eingangsgeräte mischt und auf einen oder mehrere Ausgänge (Busse) spielt, zum Beispiel alle Programme über ein virtuelles Kabel auf das Scarlett 2i2 und weiter zum Verstärker; am echten Aufbau 2 Stunden ohne Aussetzer gelaufen. Welcher Eingang auf welchen Bus geht, mit Gain, Mute und Pan, steht in einem Profil (TOML). Pegel, Aussetzer und Drift-Korrekturen erscheinen live in der Konsole. Ein abgestecktes Gerät beendet den Lauf nicht: der Rest spielt weiter, das Gerät wird wieder aufgenommen, sobald es zurück ist. Auch der Ton eines einzelnen Programms kann ein Eingang sein (Prozess-Loopback). Noch ohne Oberfläche und Resampler. Einrichtung und Bedienung: [docs/USAGE.md](docs/USAGE.md).
+> **Status (2026-11-03): Meilenstein 1 bestanden, Stufe 1 im Bau.** Ein Kommandozeilen-Programm, das Eingangsgeräte mischt und auf einen oder mehrere Ausgänge (Busse) spielt, zum Beispiel alle Programme über ein virtuelles Kabel auf das Scarlett 2i2 und weiter zum Verstärker; am echten Aufbau 2 Stunden ohne Aussetzer gelaufen. Welcher Eingang auf welchen Bus geht, mit Gain, Mute und Pan, steht in einem Profil (TOML); während des Laufs lassen sich die Regler per Befehl ändern und als Profil speichern. Pegel, Aussetzer und Drift-Korrekturen erscheinen live in der Konsole. Ein abgestecktes Gerät beendet den Lauf nicht: der Rest spielt weiter, das Gerät wird wieder aufgenommen, sobald es zurück ist. Auch der Ton eines einzelnen Programms kann ein Eingang sein (Prozess-Loopback). Noch ohne Oberfläche und Resampler. Einrichtung und Bedienung: [docs/USAGE.md](docs/USAGE.md).
 
 **English.** pult is a personal virtual audio mixer for Windows written in Rust (so far a command line router that mixes input devices onto one or more output buses, configured by a TOML profile). Private, non-commercial; the documentation is in German on purpose, code and commit messages are in English.
 
@@ -12,7 +12,8 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 |---|---|
 | Geräte auflisten (`pult devices`) | fertig |
 | Eingänge mischen und auf einen Ausgang spielen (`pult run --from … --to …`), Gain je Eingang | fertig |
-| Mehrere Busse (Ausgänge) mit Routing-Matrix, Gain/Mute/Pan je Eingang, Gain/Mute je Bus, als Profil-Datei (`pult run --profile`) | fertig; Regler ändern sich noch nicht während des Laufs |
+| Mehrere Busse (Ausgänge) mit Routing-Matrix, Gain/Mute/Pan je Eingang, Gain/Mute je Bus, als Profil-Datei (`pult run --profile`) | fertig |
+| Regler während des Laufs: `gain A1 -6`, `mute 2`, `pan`, `show`, `save profil.toml` in einer Eingabezeile unter der Statuszeile | fertig |
 | Testton auf ein Gerät (`pult tone`) | fertig |
 | Ausgleich der Takt-Drift zwischen Geräten (einzelne Frames, geglätteter Füllstand) | fertig; der adaptive Resampler folgt in Stufe 2 |
 | Pegel, Aussetzer, Korrekturen, Clipping, Geräte-Glitches live | fertig |

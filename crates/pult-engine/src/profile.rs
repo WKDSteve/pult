@@ -29,6 +29,9 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use std::fmt::Write as _;
+
+use crate::live::quoted;
 use crate::{BusSpec, Error, InputKind, InputSpec, RouteSpec};
 
 /// Buffering per input when a profile or the command line names none.
@@ -204,6 +207,45 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
     Ok(spec)
 }
 
+/// Writes `spec` as a profile that [`parse`] reads back to the same spec.
+#[must_use]
+pub fn render(spec: &RouteSpec) -> String {
+    // Writing into a String cannot fail.
+    let mut text = String::from("# pult profile, saved from a running route.\n\n");
+    let _ = writeln!(text, "latency_ms = {}", spec.latency_ms);
+    for bus in &spec.buses {
+        let _ = write!(
+            text,
+            "\n[[bus]]\nname = {}\ndevice = {}\ngain_db = {}\nmute = {}\n",
+            quoted(&bus.name),
+            quoted(&bus.device),
+            bus.gain_db,
+            bus.muted
+        );
+    }
+    for input in &spec.inputs {
+        let key = match input.kind {
+            InputKind::Device => "device",
+            InputKind::Process => "process",
+        };
+        let buses: Vec<String> = input
+            .buses
+            .iter()
+            .map(|&bus| quoted(&spec.buses[bus].name))
+            .collect();
+        let _ = write!(
+            text,
+            "\n[[input]]\n{key} = {}\nbuses = [{}]\ngain_db = {}\npan = {}\nmute = {}\n",
+            quoted(&input.device),
+            buses.join(", "),
+            input.gain_db,
+            input.pan,
+            input.muted
+        );
+    }
+    text
+}
+
 /// Reads the profile at `path`.
 ///
 /// # Errors
@@ -286,6 +328,18 @@ mod tests {
         assert_eq!(spec.inputs[0].device, "Spotify");
         assert!(error(&format!("{bus}process = \"a\"\ndevice = \"b\"")).contains("not both"));
         assert!(error(bus).contains("input 1: needs a device or a process"));
+    }
+
+    #[test]
+    fn render_reads_back_to_the_same_route() {
+        let mut spec = parse(TWO_BUSES).expect("valid profile");
+        spec.inputs[0].kind = InputKind::Process;
+        spec.inputs[0].device = "Spo\"ti\\fy".into();
+        spec.inputs[1].gain_db = -96.0;
+        spec.buses[0].gain_db = 24.0;
+        spec.latency_ms = 80;
+        let text = render(&spec);
+        assert_eq!(parse(&text), Ok(spec), "{text}");
     }
 
     #[test]

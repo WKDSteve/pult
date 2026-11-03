@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use pult_core::linear_to_db;
@@ -33,6 +34,8 @@ pub struct InputSnapshot {
     pub aligned: u64,
     /// Whether the device is playing.
     pub present: bool,
+    /// Whether it is muted.
+    pub muted: bool,
     /// Times the device was lost so far.
     pub outages: u64,
 }
@@ -46,6 +49,8 @@ pub struct BusSnapshot {
     pub clipped: u64,
     /// Whether the device is playing.
     pub present: bool,
+    /// Whether it is muted.
+    pub muted: bool,
     /// Times the device was lost so far.
     pub outages: u64,
 }
@@ -72,6 +77,7 @@ impl Snapshot {
             .map(|input| {
                 let start = InputSnapshot {
                     present: input.present,
+                    muted: input.controls.muted.load(Ordering::Relaxed),
                     outages: input.outages,
                     ..InputSnapshot::default()
                 };
@@ -97,6 +103,7 @@ impl Snapshot {
                 peak: bus.handle.stats.peak.take(),
                 clipped: bus.handle.stats.clipped.get(),
                 present: bus.present,
+                muted: bus.handle.controls.muted.load(Ordering::Relaxed),
                 outages: bus.outages,
             })
             .collect();
@@ -138,12 +145,15 @@ fn db(linear: f32) -> String {
     }
 }
 
-/// The level column of the status line: `-18.3 dB`, or `missing` while the device is gone.
-fn level(present: bool, peak: f32) -> String {
-    if present {
-        format!("{} dB", db(peak))
-    } else {
+/// The level column of the status line: `-18.3 dB`, `missing` while the device is gone,
+/// `muted` while it is muted.
+fn level(present: bool, muted: bool, peak: f32) -> String {
+    if !present {
         format!("{:>9}", "missing")
+    } else if muted {
+        format!("{:>9}", "muted")
+    } else {
+        format!("{} dB", db(peak))
     }
 }
 
@@ -157,7 +167,7 @@ pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
             line,
             " [{}] {} out {} lost {} fix -{}/+{}/{}",
             i + 1,
-            level(input.present, input.peak),
+            level(input.present, input.muted, input.peak),
             input.underruns,
             input.lost,
             input.drops,
@@ -169,7 +179,7 @@ pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
         let _ = write!(
             line,
             " | {name} {} clipped {}",
-            level(bus.present, bus.peak),
+            level(bus.present, bus.muted, bus.peak),
             bus.clipped
         );
     }
@@ -290,6 +300,7 @@ mod tests {
                 peak,
                 clipped: 0,
                 present: true,
+                muted: false,
                 outages: 0,
             }],
             glitches: 1,
@@ -307,6 +318,7 @@ mod tests {
             peak: 0.0,
             clipped: 4,
             present: true,
+            muted: false,
             outages: 0,
         });
         let line = status_line(&two, &names(&["A1", "B1"]));
@@ -322,10 +334,10 @@ mod tests {
     fn status_line_marks_missing_devices() {
         let mut gone = snap(0, 0.5, 0);
         gone.inputs[0].present = false;
-        gone.buses[0].present = false;
+        gone.buses[0].muted = true;
         let line = status_line(&gone, &names(&["A1"]));
         assert!(line.starts_with("0:00:00 [1]   missing out 0"), "{line}");
-        assert!(line.contains(" | A1   missing clipped 0 |"), "{line}");
+        assert!(line.contains(" | A1     muted clipped 0 |"), "{line}");
     }
 
     #[test]

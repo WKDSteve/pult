@@ -36,8 +36,9 @@ GAIN_DB is a gain in dB, for example \"CABLE Output@-6\". --latency-ms is the bu
 input (default 40); raise it if you hear dropouts. --profile reads inputs, buses (several
 outputs) and which input feeds which bus from a TOML file (see examples/pult.toml).
 --log writes a CSV row with the levels and counters every 10 s (the file is overwritten).
-`tone` plays a sine (default 440 Hz at -30 dB) to check a chain of devices. Both run until
-Enter is pressed.
+`tone` plays a sine (default 440 Hz at -30 dB) to check a chain of devices and stops on
+Enter. `run` takes commands while it runs (type help: gain, mute, pan, show, save) and
+stops on an empty line, quit or Ctrl+C.
 
 EXAMPLE:
     pult run --from \"CABLE Output\" --to Focusrite";

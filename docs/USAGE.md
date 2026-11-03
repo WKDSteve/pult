@@ -41,7 +41,7 @@ Spielt einen Sinus mit 440 Hz bei -30 dB, bis Enter gedrückt wird. Lauter oder 
 pult run --from "CABLE Output" --to Focusrite
 ```
 
-pult zeigt eine Statuszeile und hört bei Enter auf:
+pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.). Enter auf leerer Zeile beendet:
 
 ```
 0:12:41 [1]  -18.3 dB out 0 lost 0 fix -0/+0/0 | A1  -18.3 dB clipped 0 | glitches 0
@@ -153,7 +153,7 @@ pult run --profile meinprofil.toml --log abend.csv
 - **Pan:** Bei Mono-Eingängen ein Panorama, bei Stereo-Eingängen eine Balance: in der Mitte beide Seiten voll, zur
   Seite hin wird die andere leiser. Wirkt nur auf Ausgänge mit mindestens zwei Kanälen.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
-  ohne Versatz einsetzt. Umschalten während des Laufs kommt mit der Steuerschnittstelle; bis dahin Profil ändern und neu starten.
+  ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
 - **Tippfehler:** Unbekannte Schlüssel, Werte außerhalb der Bereiche und Busse, die es nicht gibt, sind Fehler mit
   Zeilenangabe; pult startet dann nicht.
 
@@ -188,6 +188,37 @@ buses = ["A2"]
   Spielt es ins Kabel und geht `CABLE Output` ebenfalls über pult, kommt es doppelt. Abhilfe: in Windows unter
   *Einstellungen, System, Sound, Lautstärkemixer* dem Programm ein Ausgabegerät geben, das sonst nicht zu hören ist.
 
+## 7. Während des Laufs regeln
+
+Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an, die Meldungen erscheinen darüber:
+
+```
+> gain A1 -6
+  A1: gain -6.0 dB
+> mute 2
+  [2] Analogue 1 + 2 (2- Focusrite USB Audio): muted
+> save abend.toml
+  saved the current state to abend.toml
+```
+
+| Befehl | Wirkung |
+|---|---|
+| `gain <Ziel> <dB>` | Gain eines Eingangs oder Busses setzen, -96 bis 24 dB |
+| `mute <Ziel>`, `unmute <Ziel>` | stumm schalten, wieder einschalten; die Statuszeile zeigt dann `muted` |
+| `pan <Eingang> <-1..1>` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
+| `show` | alle Eingänge und Busse mit Gain, Pan und Mute |
+| `save <Datei>` | den aktuellen Stand als Profil schreiben (eine vorhandene Datei wird ersetzt), später mit `--profile` laden |
+| `help` | die Befehle |
+| `quit`, Enter auf leerer Zeile, Strg+C | beenden |
+
+- **Ziel:** ein Eingang über seine Nummer (`1`) oder einen eindeutigen Teil seines Namens (`cable`), ein Bus über seinen
+  Namen (`A1`). Groß- und Kleinschreibung zählen nicht.
+- **Bedienen:** Pfeil hoch und runter holen frühere Befehle zurück, Esc leert die Zeile.
+- **Gespeichert** wird nur mit `save`; beim nächsten Start gilt wieder das Profil bzw. die Kommandozeile. Ein mit
+  `--from`/`--to` gestarteter Lauf lässt sich so in ein Profil verwandeln.
+- Läuft pult nicht in einer Konsole (Eingabe aus einer Datei oder Pipe), ist jede Zeile ein Befehl, eine leere beendet.
+- Welcher Eingang auf welchen Bus geht, lässt sich während des Laufs noch nicht ändern: dafür Profil ändern und neu starten.
+
 ## Fehlermeldungen
 
 | Meldung | Ursache und Abhilfe |
@@ -201,6 +232,7 @@ buses = ["A2"]
 | `buses … both play on …` | zwei Busse eines Profils nennen dasselbe Ausgangsgerät |
 | `… feeds bus "…", which is not defined` | im Profil fehlt ein `[[bus]]` mit diesem Namen, oder er ist anders geschrieben |
 | `unknown field …` | Tippfehler im Profil; die Meldung nennt Zeile und erlaubte Schlüssel |
+| `not done: …` | ein Befehl während des Laufs passte nicht (Tippfehler, Wert außerhalb des Bereichs); nichts wurde geändert |
 | `no running program matches "…"` | das Programm läuft nicht oder heißt anders: `pult programs` |
 | `capturing …: …` | Windows hat die Aufnahme des Programms abgelehnt (älter als Windows 10 2004?) |
 

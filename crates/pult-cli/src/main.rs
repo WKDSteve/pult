@@ -3,9 +3,10 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod console;
 mod monitor;
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +14,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use args::{Command, Routing, RunSpec, ToneSpec, USAGE};
+use console::{Console, Input};
 use monitor::{LOG_INTERVAL, Log, Snapshot};
+use pult_core::control;
 use pult_engine::{Devices, Running, Tone};
 
 // Debug builds abort on any allocation inside an audio callback (see pult-engine).
@@ -105,11 +108,11 @@ fn start_run(spec: &RunSpec) -> Result<(), String> {
     Ok(())
 }
 
-/// Shows levels until Enter is pressed. A device that disappears is reported and taken
-/// back when it returns; the run goes on.
+/// Shows levels and takes commands until an empty line, `quit` or Ctrl+C. A device that
+/// disappears is reported and taken back when it returns; the run goes on.
 fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
     println!(
-        "Routing at {} Hz; press Enter to stop.",
+        "Routing at {} Hz; type help for commands, Enter on an empty line stops.",
         running.sample_rate
     );
     for bus in &running.buses {
@@ -124,8 +127,34 @@ fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
         println!("  [{}] {} -> {}", i + 1, input.name, buses.join(", "));
     }
     let mut recorder = Recorder::new(log, bus_names);
-    // Nothing ends a run but Enter: lost devices are the supervisor's business.
-    let _ = wait_for_enter(|| None, Some(&mut || recorder.tick(running)));
+    let mut console = Console::open();
+    let mut next = Instant::now();
+    // Nothing but the user ends a run: lost devices are the supervisor's business.
+    loop {
+        match console.wait(next) {
+            Some(Input::Interrupt) => break,
+            Some(Input::Line(line)) => {
+                let parsed = control::parse(&line, &running.input_names(), &running.bus_names());
+                let answer = match parsed {
+                    Ok(control::Command::Stop) => break,
+                    Ok(command) => running.apply(&command),
+                    Err(err) => Err(err.to_string()),
+                };
+                let lines = match answer {
+                    Ok(lines) => lines.into_iter().map(|l| format!("  {l}")).collect(),
+                    Err(err) => vec![format!("  not done: {err}")],
+                };
+                console.notes(&lines);
+            }
+            None => {
+                let tick = recorder.tick(running);
+                console.notes(&tick.notes);
+                console.status(tick.line);
+                next = Instant::now() + STATUS_INTERVAL;
+            }
+        }
+    }
+    console.close();
     recorder.finish(running);
 }
 
@@ -154,7 +183,7 @@ impl Recorder {
     /// what changed (one line each) and the status line.
     fn tick(&mut self, running: &mut Running) -> Tick {
         let elapsed = self.start.elapsed();
-        let notes = running
+        let mut notes: Vec<String> = running
             .supervise()
             .iter()
             .map(|change| format!("{} {change}", monitor::clock(elapsed)))
@@ -165,7 +194,7 @@ impl Recorder {
             .as_ref()
             .map_or_else(|| snap.clone(), |earlier| earlier.merge(&snap));
         if snap.elapsed >= self.next_row {
-            self.write(&merged);
+            notes.extend(self.write(&merged));
             self.interval = None;
             while self.next_row <= snap.elapsed {
                 self.next_row += LOG_INTERVAL;
@@ -186,17 +215,20 @@ impl Recorder {
             .interval
             .take()
             .map_or_else(|| snap.clone(), |earlier| earlier.merge(&snap));
-        self.write(&last);
+        if let Some(note) = self.write(&last) {
+            eprintln!("pult: {note}");
+        }
     }
 
-    /// A failed write is reported once and ends logging; the route keeps running.
-    fn write(&mut self, snap: &Snapshot) {
+    /// A failed write ends logging, and its note says so once; the route keeps running.
+    fn write(&mut self, snap: &Snapshot) -> Option<String> {
         if let Some(log) = &mut self.log
             && let Err(err) = log.row(snap)
         {
-            eprintln!("\npult: log stopped, {err}");
             self.log = None;
+            return Some(format!("log stopped, {err}"));
         }
+        None
     }
 }
 
@@ -212,79 +244,26 @@ fn tone(playing: &Tone, spec: &ToneSpec) -> Result<(), String> {
         "Playing {} Hz at {} dB on {} ({} Hz); press Enter to stop.",
         spec.frequency, spec.gain_db, playing.sink, playing.sample_rate
     );
-    wait_for_enter(|| playing.fault(), None)
+    wait_for_enter(|| playing.fault())
 }
 
-/// Blocks until a line arrives on stdin or `fault` reports an error. `status` runs every
-/// interval; its notes are printed as lines of their own, its status line is shown live
-/// when stdout is a terminal, and the last one is printed at the end.
-fn wait_for_enter(
-    fault: impl Fn() -> Option<String>,
-    mut status: Option<&mut dyn FnMut() -> Tick>,
-) -> Result<(), String> {
+/// Blocks until a line arrives on stdin or `fault` reports an error.
+fn wait_for_enter(fault: impl Fn() -> Option<String>) -> Result<(), String> {
     let stop = Arc::new(AtomicBool::new(false));
     {
         let stop = Arc::clone(&stop);
-        // Only a line stops the route; a closed stdin (started without a console) does not.
+        // Only a line stops; a closed stdin (started without a console) does not.
         thread::spawn(move || {
             if matches!(io::stdin().lock().read_line(&mut String::new()), Ok(n) if n > 0) {
                 stop.store(true, Ordering::Relaxed);
             }
         });
     }
-    let live = io::stdout().is_terminal();
-    let mut last = String::new();
     while !stop.load(Ordering::Relaxed) {
         thread::sleep(STATUS_INTERVAL);
         if let Some(fault) = fault() {
-            println!("\n{last}");
             return Err(format!("stopped, {fault}"));
         }
-        if let Some(status) = status.as_mut() {
-            let tick = status();
-            last = tick.line;
-            // A line wider than the terminal wraps, and `\r` then returns only to the start
-            // of its last row: every refresh would stack up. Fit it to the width instead.
-            let width = terminal_size::terminal_size().map_or(80, |(w, _)| usize::from(w.0));
-            for note in &tick.notes {
-                if live {
-                    // Padded to cover the status line it replaces; a long note may wrap.
-                    println!("\r{note:<columns$}", columns = width.saturating_sub(1));
-                } else {
-                    println!("{note}");
-                }
-            }
-            if live {
-                print!("\r{}", fit(&last, width));
-                let _ = io::stdout().flush();
-            }
-        }
-    }
-    if status.is_some() {
-        println!("\n{last}");
     }
     Ok(())
-}
-
-/// `line` cut or padded to one column less than `width`, so that it never wraps and fully
-/// covers the previous refresh.
-fn fit(line: &str, width: usize) -> String {
-    let columns = width.saturating_sub(1);
-    let mut fitted: String = line.chars().take(columns).collect();
-    let used = fitted.chars().count();
-    fitted.extend(std::iter::repeat_n(' ', columns - used));
-    fitted
-}
-
-#[cfg(test)]
-mod tests {
-    use super::fit;
-
-    #[test]
-    fn fit_cuts_long_lines_and_pads_short_ones() {
-        assert_eq!(fit("abcdef", 4), "abc");
-        assert_eq!(fit("ab", 5), "ab  ");
-        assert_eq!(fit("äöü-x", 4), "äöü");
-        assert_eq!(fit("abc", 0), "");
-    }
 }
