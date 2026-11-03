@@ -454,7 +454,7 @@ impl Running {
                     reason,
                 });
             } else if self.slots[index].retry_due(now) {
-                match self.reopen(index, now) {
+                match self.reopen(index) {
                     Ok(()) => {
                         self.mark(index, true);
                         changes.push(Change::Back {
@@ -483,7 +483,7 @@ impl Running {
     }
 
     /// Looks for the device of a closed slot and opens it, if it fits the route.
-    fn reopen(&mut self, index: usize, now: Instant) -> Result<(), Error> {
+    fn reopen(&mut self, index: usize) -> Result<(), Error> {
         let slot = &self.slots[index];
         let (device, name, config) = find_device(&self.host, slot.role, &slot.wanted)?;
         if config.sample_rate() != self.sample_rate {
@@ -494,7 +494,7 @@ impl Running {
                 reference_rate: self.sample_rate,
             });
         }
-        self.slots[index].open(&device, &config, &self.xruns, now)
+        self.slots[index].open(&device, &config, &self.xruns)
     }
 
     /// Updates the input or bus behind a slot after it closed or opened.
@@ -812,7 +812,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     };
     // Inputs first, so the outputs find their rings filling.
     for (index, (device, config)) in opening.iter().enumerate() {
-        running.slots[index].open(device, config, &running.xruns, now)?;
+        running.slots[index].open(device, config, &running.xruns)?;
         running.mark(index, true);
     }
     Ok(running)

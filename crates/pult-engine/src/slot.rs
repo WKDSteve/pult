@@ -176,13 +176,13 @@ impl Slot {
 
     /// Opens and starts a stream on `device` in `config`, handing it the feed. A bus's
     /// mixer starts on empty rings; an input must keep its channel count, since its rings
-    /// were made for it.
+    /// were made for it. The stall watch starts once the stream plays, since opening
+    /// several devices in a row can take seconds.
     pub(crate) fn open(
         &mut self,
         device: &Device,
         config: &SupportedStreamConfig,
         xruns: &Arc<Counter>,
-        now: Instant,
     ) -> Result<(), Error> {
         let name = device.to_string();
         let channels = usize::from(config.channels());
@@ -255,7 +255,7 @@ impl Slot {
         }
         self.stream = Some(stream);
         self.health = health;
-        self.watch = Watch::new(now);
+        self.watch = Watch::new(Instant::now());
         self.name = name;
         self.refused = None;
         Ok(())
