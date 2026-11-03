@@ -721,17 +721,40 @@ mod tests {
     }
 
     #[test]
-    fn mixes_without_allocating() {
-        let (mut capture, input, _) = connect(config(2, 480));
+    fn mixes_without_allocating_on_every_path() {
+        let (mut capture, input, handle) = connect(InputConfig {
+            settle: 4800,
+            ..config(2, 480)
+        });
         let (mut mixer, _) = Mixer::new(vec![input], 2);
         let data = vec![0.2; PERIOD * 2];
+        let flood = vec![0.2; 8000 * 2];
         let mut out = vec![0.0; PERIOD * 2];
+        let mut long = vec![0.0; 3000 * 2];
         assert_no_alloc::assert_no_alloc(|| {
+            // Priming, then steady playing with the rate control steering.
             for _ in 0..50 {
                 capture.push(&data);
                 mixer.process(&mut out);
             }
+            // A flood beyond the hard limit: one resync.
+            capture.push(&flood);
+            mixer.process(&mut out);
+            // Running dry: an underrun with its resampler reset, then priming again.
+            for _ in 0..30 {
+                mixer.process(&mut out);
+            }
+            // A callback longer than one chunk, and a suspended and resumed bus.
+            capture.push(&flood);
+            mixer.process(&mut long);
+            mixer.suspend();
+            mixer.resume(2);
+            capture.push(&flood);
+            mixer.process(&mut out);
         });
+        // Every path was taken (the long callback may resync or run dry once more).
+        assert!(handle.stats.resyncs.get() >= 1);
+        assert!(handle.stats.underruns.get() >= 1);
     }
 
     #[test]
