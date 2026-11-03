@@ -20,6 +20,7 @@ pub mod rate;
 pub mod remix;
 pub mod select;
 pub mod tone;
+pub mod view;
 
 pub use drift::{DriftControl, Event, Plan};
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
@@ -31,3 +32,6 @@ pub use rate::RateControl;
 pub use remix::remix_add;
 pub use select::{SelectError, select};
 pub use tone::Sine;
+pub use view::{
+    Action, BusView, Desk, EventView, FakeDesk, InputView, MeterPoint, MixerView, Reply, SourceKind,
+};

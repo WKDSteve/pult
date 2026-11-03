@@ -1,0 +1,23 @@
+[package]
+name = "pult-app"
+description = "The window of pult: a mixing console on screen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Owned by the interface strand (stage 3b): its dependencies (eframe, egui) go here, not into the
+# workspace's Cargo.toml. It sees the mixer only through pult_core::view.
+
+[[bin]]
+name = "pult-app"
+path = "src/main.rs"
+
+[dependencies]
+pult-core.workspace = true
+
+[lints]
+workspace = true

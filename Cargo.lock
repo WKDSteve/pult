@@ -613,6 +613,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pult-app"
+version = "0.1.0"
+dependencies = [
+ "pult-core",
+]
+
+[[package]]
 name = "pult-cli"
 version = "0.1.0"
 dependencies = [
