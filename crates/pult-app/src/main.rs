@@ -329,6 +329,12 @@ fn listen_for_later_starts(ctx: &egui::Context, commands: &Sender<Command>) {
     });
 }
 
+/// Whether a start that finds pult-app running brings its window up: all but the start with
+/// Windows (`--tray`), which then has nothing to do and leaves the window where it is.
+fn brings_up_the_window(start: &Start) -> bool {
+    *start != Start::Tray
+}
+
 /// What a start says and how it ends when another pult-app runs already, which `shown` its
 /// window or did not answer. Quiet when it only meant to bring the window up.
 fn later_start(start: &Start, shown: bool) -> (Option<&'static str>, ExitCode) {
@@ -371,6 +377,9 @@ fn main() -> ExitCode {
     // One instance per session: a second start shows the running window and ends, instead of
     // a second route on the same devices.
     let Some(_instance) = ffi::claim(ffi::INSTANCE) else {
+        if !brings_up_the_window(&start) {
+            return ExitCode::SUCCESS;
+        }
         let shown = ffi::ask_to_show(ffi::SHOW, Duration::from_secs(3));
         let (note, code) = later_start(&start, shown);
         if let Some(note) = note {
@@ -424,6 +433,16 @@ mod tests {
         let (note, code) = later_start(&Start::Nothing, false);
         assert!(note.unwrap().contains("did not answer"));
         assert_eq!(code, ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn only_the_start_with_windows_leaves_a_running_window_alone() {
+        assert!(!brings_up_the_window(&Start::Tray));
+        assert!(brings_up_the_window(&Start::Nothing));
+        assert!(brings_up_the_window(&Start::Demo));
+        assert!(brings_up_the_window(&Start::Profile(PathBuf::from(
+            "a.toml"
+        ))));
     }
 
     #[test]
