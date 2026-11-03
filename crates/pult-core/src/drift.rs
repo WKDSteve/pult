@@ -1,29 +1,26 @@
-//! Keeps the fill level of an input's ring buffer near a target.
+//! Plans each read from an input's ring and measures how far its level is off the target.
 //!
 //! Every device runs on its own clock: a virtual cable and a USB interface both claim
 //! 48 kHz but differ by a few samples per second. Left alone, the ring between them drains
-//! (dropouts) or fills up (growing delay). Until the adaptive resampler exists, this control
-//! drops or repeats single frames when the (optionally smoothed) level leaves a band around
-//! the target, which is inaudible at the rates real clocks drift, and resynchronises hard
-//! only when far off.
+//! (dropouts) or fills up (growing delay). The steady correction is the resampler's job
+//! ([`crate::rate`]); this control supplies its input, the (optionally smoothed) level error,
+//! and keeps the safety net: priming before playing, silence after an underrun, and a hard
+//! resync when the level is far too high.
 //!
 //! Right after the ring is primed the level settles where the two devices' start-up
-//! buffering puts it, often well above the target. Corrected frame by frame, that offset
-//! cost a thousand drops over the first twenty seconds; an optional settling phase measures
-//! it instead and skips it once.
+//! buffering puts it, often well above the target. An optional settling phase measures that
+//! offset and skips it once, instead of leaving the resampler to work it off slowly.
 
 /// What one output callback does with one input's ring, in frames.
 ///
-/// `read + repeat + silence` is always the frames the callback needs, and `skip + read`
-/// never exceeds the frames available.
+/// `read + silence` is always the frames the callback needs, and `skip + read` never
+/// exceeds the frames available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Plan {
     /// Frames to discard before reading.
     pub skip: usize,
     /// Frames to read.
     pub read: usize,
-    /// Copies of the last read frame to append.
-    pub repeat: usize,
     /// Frames of silence to append.
     pub silence: usize,
 }
@@ -39,10 +36,6 @@ pub enum Event {
     Underrun,
     /// The ring was far too full: skipped back to the target.
     Resync,
-    /// One frame dropped to lower the level.
-    Dropped,
-    /// One frame repeated to raise the level.
-    Repeated,
     /// The settling phase ended above the band: skipped `Plan::skip` frames back to the
     /// target once.
     Aligned,
@@ -58,7 +51,7 @@ pub struct DriftControl {
     level: f64,
     /// Weight of the newest level in the average; 1.0 is no smoothing.
     alpha: f64,
-    /// Frames played after priming before single-frame corrections start.
+    /// Frames played after priming before the level counts as steady.
     settle: usize,
     /// Frames played since priming, up to `settle`.
     played: usize,
@@ -68,8 +61,9 @@ pub struct DriftControl {
 }
 
 impl DriftControl {
-    /// A control that aims at `target` frames left after each read and corrects when the
-    /// level leaves `target ± band`; it reacts to every callback's level (no smoothing).
+    /// A control that aims at `target` frames left after each read; a start-up offset above
+    /// `target + band` is skipped once after settling. It follows every callback's level
+    /// (no smoothing).
     #[must_use]
     pub fn new(target: usize, band: usize) -> Self {
         Self {
@@ -85,10 +79,10 @@ impl DriftControl {
         }
     }
 
-    /// The same control judging single-frame corrections by a moving average of the level,
-    /// each callback weighing `alpha` (0 < alpha <= 1). Devices that deliver in large
-    /// blocks make the level a sawtooth; its average stays put while real drift moves it.
-    /// Underruns and resyncs still follow the actual level.
+    /// The same control measuring the level as a moving average, each callback weighing
+    /// `alpha` (0 < alpha <= 1). Devices that deliver in large blocks make the level a
+    /// sawtooth; its average stays put while real drift moves it. Underruns and resyncs
+    /// still follow the actual level.
     #[must_use]
     pub fn smoothed(mut self, alpha: f64) -> Self {
         self.alpha = alpha.clamp(f64::MIN_POSITIVE, 1.0);
@@ -96,9 +90,9 @@ impl DriftControl {
     }
 
     /// The same control with a settling phase of `frames` played frames after every priming:
-    /// no single-frame corrections, the mean level of its second half measured, and at its
-    /// end one skip back to the target if that mean lies above the band. A mean below the
-    /// band is left to the single-frame repeats, since filling it at once would be a gap.
+    /// no level error yet, the mean level of its second half measured, and at its end one
+    /// skip back to the target if that mean lies above the band. A mean below the band is
+    /// left to the resampler, since filling it at once would be a gap.
     #[must_use]
     pub fn settling(mut self, frames: usize) -> Self {
         self.settle = frames;
@@ -119,6 +113,13 @@ impl DriftControl {
         self.primed = false;
     }
 
+    /// The smoothed level minus the target, in frames, once the ring is primed and settled;
+    /// `None` while it primes or settles, when there is nothing to steer yet.
+    #[must_use]
+    pub fn steady_error(&self) -> Option<f64> {
+        (self.primed && self.played >= self.settle).then_some(self.level - self.target as f64)
+    }
+
     /// The plan for a callback that needs `needed` frames while `available` are buffered.
     pub fn plan(&mut self, available: usize, needed: usize) -> (Plan, Event) {
         if !self.primed {
@@ -127,7 +128,7 @@ impl DriftControl {
             }
             self.primed = true;
             // Start the average at the target: right after priming the level may sit on a
-            // peak of the sawtooth, and starting there would drop frames the ring needs.
+            // peak of the sawtooth, and starting there would steer against a mere peak.
             self.level = self.target as f64;
             self.played = 0;
             self.settle_sum = 0.0;
@@ -159,20 +160,7 @@ impl DriftControl {
             return self.settle_step(after, read);
         }
         self.level += self.alpha * (after as f64 - self.level);
-        let high = (self.target + self.band) as f64;
-        let low = self.target as f64 - self.band as f64;
-        if self.level > high && after > 0 {
-            (Plan { skip: 1, ..read }, Event::Dropped)
-        } else if self.level < low && needed > 0 {
-            let plan = Plan {
-                read: needed - 1,
-                repeat: 1,
-                ..Plan::default()
-            };
-            (plan, Event::Repeated)
-        } else {
-            (read, Event::None)
-        }
+        (read, Event::None)
     }
 
     /// One callback of the settling phase, `after` frames left after the plain `read`.
@@ -222,7 +210,7 @@ mod tests {
     use super::*;
 
     fn check_invariants(plan: Plan, available: usize, needed: usize) {
-        assert_eq!(plan.read + plan.repeat + plan.silence, needed, "{plan:?}");
+        assert_eq!(plan.read + plan.silence, needed, "{plan:?}");
         assert!(plan.skip + plan.read <= available, "{plan:?}");
     }
 
@@ -242,6 +230,7 @@ mod tests {
         assert_eq!(event, Event::Underrun);
         assert_eq!((plan.read, plan.silence), (4, 6));
         assert_eq!(control.plan(50, 10).1, Event::Priming);
+        assert_eq!(control.steady_error(), None);
     }
 
     #[test]
@@ -255,31 +244,15 @@ mod tests {
     }
 
     #[test]
-    fn inside_the_band_reads_plainly() {
+    fn reads_plainly_and_reports_the_level_error() {
         let mut control = DriftControl::new(100, 25);
-        control.plan(110, 10);
-        for available in [85, 110, 135] {
+        assert_eq!(control.steady_error(), None);
+        for (available, error) in [(110, 0.0), (85, -25.0), (160, 50.0)] {
             let (plan, event) = control.plan(available, 10);
             assert_eq!(event, Event::None, "available {available}");
             assert_eq!(plan.read, 10);
+            assert_eq!(control.steady_error(), Some(error));
         }
-    }
-
-    #[test]
-    fn above_the_band_drops_one_frame() {
-        let mut control = DriftControl::new(100, 25);
-        let (plan, event) = control.plan(136, 10);
-        assert_eq!(event, Event::Dropped);
-        assert_eq!((plan.skip, plan.read), (1, 10));
-    }
-
-    #[test]
-    fn below_the_band_repeats_one_frame() {
-        let mut control = DriftControl::new(100, 25);
-        control.plan(200, 10);
-        let (plan, event) = control.plan(84, 10);
-        assert_eq!(event, Event::Repeated);
-        assert_eq!((plan.read, plan.repeat), (9, 1));
     }
 
     #[test]
@@ -288,42 +261,42 @@ mod tests {
         let (plan, event) = control.plan(1000, 10);
         assert_eq!(event, Event::Resync);
         assert_eq!(1000 - plan.skip - plan.read, 100);
+        assert_eq!(control.steady_error(), Some(0.0));
     }
 
     #[test]
-    fn smoothing_ignores_a_sawtooth_but_follows_a_trend() {
+    fn smoothing_flattens_a_sawtooth_but_follows_a_trend() {
         // Blocks of 300 frames arrive while the output takes 100 per callback: the level
-        // after a read swings between 50 and 250 around the target of 150, far wider than
-        // the band.
+        // after a read swings between 50 and 250 around the target of 150.
         let mut control = DriftControl::new(150, 25).smoothed(1.0 / 64.0);
         let mut available = 350;
-        let mut fixes = 0;
+        let mut worst: f64 = 0.0;
         for i in 0..3000 {
             if i % 3 == 0 && i > 0 {
                 available += 300;
             }
             let (plan, event) = control.plan(available, 100);
             assert_ne!(event, Event::Underrun, "callback {i}");
-            fixes += usize::from(matches!(event, Event::Dropped | Event::Repeated));
             available -= plan.skip + plan.read;
+            if i > 500 {
+                worst = worst.max(control.steady_error().unwrap().abs());
+            }
         }
-        assert!(fixes < 10, "{fixes} corrections for pure jitter");
+        assert!(worst < 25.0, "the average swings by {worst} frames");
 
-        // One extra frame per callback is real drift: the control has to drop.
-        let mut drops = 0;
+        // A level that stays 60 frames higher shows up in the average.
         for i in 0..3000 {
-            available += if i % 3 == 0 { 301 } else { 1 };
-            let (plan, event) = control.plan(available, 100);
-            drops += usize::from(event == Event::Dropped);
+            available += if i % 3 == 0 { 300 } else { 0 } + usize::from(i == 0) * 60;
+            let (plan, _) = control.plan(available, 100);
             available -= plan.skip + plan.read;
         }
-        assert!(drops > 2500, "only {drops} drops against the drift");
+        let error = control.steady_error().unwrap();
+        assert!((error - 60.0).abs() < 25.0, "error {error}");
     }
 
     #[test]
     fn settling_skips_a_start_up_offset_once() {
-        // The level sits 150 frames above the target (below the hard limit) from the start:
-        // without settling the control would drop single frames for a long time.
+        // The level sits 150 frames above the target (below the hard limit) from the start.
         let mut control = DriftControl::new(100, 25)
             .smoothed(1.0 / 64.0)
             .settling(200);
@@ -342,14 +315,18 @@ mod tests {
     }
 
     #[test]
-    fn settling_within_the_band_changes_nothing_and_starts_again_after_an_underrun() {
+    fn settling_reports_no_error_until_it_ends() {
         let mut control = DriftControl::new(100, 25).settling(50);
-        for _ in 0..10 {
+        for _ in 0..4 {
             assert_eq!(control.plan(120, 10).1, Event::None);
+            assert_eq!(control.steady_error(), None);
         }
+        // The fifth callback ends the phase within the band: the mean becomes the level.
+        assert_eq!(control.plan(120, 10).1, Event::None);
+        assert_eq!(control.steady_error(), Some(10.0));
         assert_eq!(control.plan(3, 10).1, Event::Underrun);
         assert_eq!(control.plan(110, 10).1, Event::None);
-        // Settling again: far above the band, but no single-frame drops until it ends.
+        // Settling again: far above the band, but nothing is fixed until it ends.
         for _ in 0..3 {
             assert_eq!(control.plan(260, 10).1, Event::None);
         }

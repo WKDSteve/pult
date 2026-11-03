@@ -7,10 +7,16 @@
 
 #![forbid(unsafe_code)]
 
+// The tests check that the audio path allocates nothing (`assert_no_alloc`).
+#[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
 pub mod control;
 pub mod drift;
 pub mod level;
 pub mod mixer;
+pub mod rate;
 pub mod remix;
 pub mod select;
 pub mod tone;
@@ -21,6 +27,7 @@ pub use mixer::{
     BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,
     Mixer, MixerInput, connect, connect_with,
 };
+pub use rate::RateControl;
 pub use remix::remix_add;
 pub use select::{SelectError, select};
 pub use tone::Sine;

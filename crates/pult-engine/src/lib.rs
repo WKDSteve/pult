@@ -40,12 +40,12 @@ use process::PROCESS_CHANNELS;
 pub use process::program_names;
 use slot::{Feed, Health, OPEN_TIMEOUT, Slot, Source, fault_recorder};
 
-/// Weight of one callback in the drift control's level average: with 10 ms callbacks the
-/// average spans about 1.3 s, long enough to flatten the block jitter of virtual cables.
+/// Weight of one resampler chunk in the drift control's level average: with 10 ms callbacks
+/// the average spans about 1.3 s, long enough to flatten the block jitter of virtual cables.
 const DRIFT_SMOOTHING: f64 = 1.0 / 128.0;
 
 /// Seconds after each priming in which the drift control measures the start-up offset of
-/// an input and then skips it once, instead of dropping single frames for twenty seconds.
+/// an input and then skips it once, instead of leaving it to the resampler's slow steering.
 const SETTLE_SECONDS: usize = 2;
 
 /// Which side of a route a device is on, or that a program is captured.
@@ -802,6 +802,8 @@ fn find_input(
     controls.muted.store(input.muted, Ordering::Relaxed);
     let ring = InputConfig {
         channels: usize::from(channels),
+        input_rate: rings.sample_rate,
+        output_rate: rings.sample_rate,
         capacity: rings.capacity,
         target: rings.target,
         band: rings.band,

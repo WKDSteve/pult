@@ -24,10 +24,9 @@ pub struct InputSnapshot {
     pub underruns: u64,
     /// Frames lost at capture.
     pub lost: u64,
-    /// Single frames dropped against drift.
-    pub drops: u64,
-    /// Single frames repeated against drift.
-    pub repeats: u64,
+    /// The resampler's correction against clock drift, in ppm; with several buses the one
+    /// furthest from zero.
+    pub drift_ppm: f32,
     /// Hard resyncs.
     pub resyncs: u64,
     /// Frames skipped once after settling.
@@ -87,8 +86,7 @@ impl Snapshot {
                         peak: sum.peak.max(stats.peak.take()),
                         underruns: sum.underruns + stats.underruns.get(),
                         lost: sum.lost + stats.dropped_at_capture.get(),
-                        drops: sum.drops + stats.drops.get(),
-                        repeats: sum.repeats + stats.repeats.get(),
+                        drift_ppm: farther(sum.drift_ppm, stats.correction_ppm.load()),
                         resyncs: sum.resyncs + stats.resyncs.get(),
                         aligned: sum.aligned + stats.aligned.get(),
                         ..sum
@@ -130,6 +128,11 @@ impl Snapshot {
     }
 }
 
+/// Whichever of two corrections lies further from zero.
+fn farther(a: f32, b: f32) -> f32 {
+    if b.abs() > a.abs() { b } else { a }
+}
+
 /// `h:mm:ss`.
 pub fn clock(elapsed: Duration) -> String {
     let s = elapsed.as_secs();
@@ -157,21 +160,20 @@ fn level(present: bool, muted: bool, peak: f32) -> String {
     }
 }
 
-/// The live status line: run time; per input level, dropouts, frames lost at capture and
-/// the drift fixes (dropped / repeated frames, hard resyncs); then each bus by `bus_names`.
+/// The live status line: run time; per input level, dropouts, frames lost at capture, the
+/// resampler's drift correction in ppm and the hard resyncs; then each bus by `bus_names`.
 pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
     // Writing into a String cannot fail.
     let mut line = clock(snap.elapsed);
     for (i, input) in snap.inputs.iter().enumerate() {
         let _ = write!(
             line,
-            " [{}] {} out {} lost {} fix -{}/+{}/{}",
+            " [{}] {} out {} lost {} drift {:+.0} ppm resync {}",
             i + 1,
             level(input.present, input.muted, input.peak),
             input.underruns,
             input.lost,
-            input.drops,
-            input.repeats,
+            input.drift_ppm,
             input.resyncs
         );
     }
@@ -201,7 +203,13 @@ pub fn csv_header(inputs: usize, bus_names: &[String]) -> String {
     let mut line = "elapsed_s".to_owned();
     for i in 1..=inputs {
         for field in [
-            "peak_db", "dropouts", "lost", "drops", "repeats", "resyncs", "aligned", "present",
+            "peak_db",
+            "dropouts",
+            "lost",
+            "drift_ppm",
+            "resyncs",
+            "aligned",
+            "present",
             "outages",
         ] {
             let _ = write!(line, ",in{i}_{field}");
@@ -223,12 +231,11 @@ pub fn csv_row(snap: &Snapshot) -> String {
     for input in &snap.inputs {
         let _ = write!(
             line,
-            ",{},{},{},{},{},{},{},{},{}",
+            ",{},{},{},{:.1},{},{},{},{}",
             csv_db(input.peak),
             input.underruns,
             input.lost,
-            input.drops,
-            input.repeats,
+            input.drift_ppm,
             input.resyncs,
             input.aligned,
             u8::from(input.present),
@@ -287,12 +294,12 @@ impl Log {
 mod tests {
     use super::*;
 
-    fn snap(elapsed_ms: u64, peak: f32, drops: u64) -> Snapshot {
+    fn snap(elapsed_ms: u64, peak: f32, drift_ppm: f32) -> Snapshot {
         Snapshot {
             elapsed: Duration::from_millis(elapsed_ms),
             inputs: vec![InputSnapshot {
                 peak,
-                drops,
+                drift_ppm,
                 present: true,
                 ..InputSnapshot::default()
             }],
@@ -313,7 +320,7 @@ mod tests {
 
     #[test]
     fn status_line_starts_with_the_run_time_and_ends_with_the_buses() {
-        let mut two = snap(3_723_000, 0.5, 7);
+        let mut two = snap(3_723_000, 0.5, -7.4);
         two.buses.push(BusSnapshot {
             peak: 0.0,
             clipped: 4,
@@ -324,7 +331,9 @@ mod tests {
         let line = status_line(&two, &names(&["A1", "B1"]));
         assert!(line.starts_with("1:02:03 [1]   -6.0 dB"), "{line}");
         assert!(
-            line.contains("fix -7/+0/0 | A1   -6.0 dB clipped 0 | B1   -inf dB clipped 4"),
+            line.contains(
+                "drift -7 ppm resync 0 | A1   -6.0 dB clipped 0 | B1   -inf dB clipped 4"
+            ),
             "{line}"
         );
         assert!(line.ends_with(" | glitches 1"), "{line}");
@@ -332,7 +341,7 @@ mod tests {
 
     #[test]
     fn status_line_marks_missing_devices() {
-        let mut gone = snap(0, 0.5, 0);
+        let mut gone = snap(0, 0.5, 0.0);
         gone.inputs[0].present = false;
         gone.buses[0].muted = true;
         let line = status_line(&gone, &names(&["A1"]));
@@ -342,7 +351,7 @@ mod tests {
 
     #[test]
     fn csv_header_and_row_have_the_same_columns() {
-        let mut two = snap(10_000, 0.0, 3);
+        let mut two = snap(10_000, 0.0, 12.34);
         two.inputs.push(InputSnapshot::default());
         let header = csv_header(2, &names(&["A1"]));
         let row = csv_row(&two);
@@ -354,15 +363,15 @@ mod tests {
         ));
         assert_eq!(
             row,
-            "10.0,-inf,0,0,3,0,0,0,1,0,-inf,0,0,0,0,0,0,0,0,-inf,0,1,0,1"
+            "10.0,-inf,0,0,12.3,0,0,1,0,-inf,0,0,0.0,0,0,0,0,-inf,0,1,0,1"
         );
     }
 
     #[test]
     fn merge_keeps_the_interval_peak_and_the_latest_counters() {
-        let merged = snap(1_000, 0.8, 1).merge(&snap(2_000, 0.2, 5));
+        let merged = snap(1_000, 0.8, 1.0).merge(&snap(2_000, 0.2, 5.0));
         assert_eq!(merged.inputs[0].peak, 0.8);
-        assert_eq!(merged.inputs[0].drops, 5);
+        assert_eq!(merged.inputs[0].drift_ppm, 5.0);
         assert_eq!(merged.buses[0].peak, 0.8);
         assert_eq!(merged.elapsed, Duration::from_secs(2));
     }
@@ -372,12 +381,12 @@ mod tests {
         let path = std::env::temp_dir().join(format!("pult-log-test-{}.csv", std::process::id()));
         {
             let mut log = Log::create(&path, 1, &names(&["A1"])).expect("create log");
-            log.row(&snap(10_000, 0.5, 2)).expect("write row");
+            log.row(&snap(10_000, 0.5, 2.0)).expect("write row");
         }
         let text = std::fs::read_to_string(&path).expect("read log");
         std::fs::remove_file(&path).expect("remove log");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1], "10.0,-6.0,0,0,2,0,0,0,1,0,-6.0,0,1,0,1");
+        assert_eq!(lines[1], "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,1,0,1");
     }
 }

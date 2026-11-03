@@ -44,7 +44,7 @@ pult run --from "CABLE Output" --to Focusrite
 pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.). Enter auf leerer Zeile beendet:
 
 ```
-0:12:41 [1]  -18.3 dB out 0 lost 0 fix -0/+0/0 | A1  -18.3 dB clipped 0 | glitches 0
+0:12:41 [1]  -18.3 dB out 0 lost 0 drift +12 ppm resync 0 | A1  -18.3 dB clipped 0 | glitches 0
 ```
 
 | Feld | Bedeutung |
@@ -52,7 +52,8 @@ pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.).
 | `[1] -18.3 dB` | Spitzenpegel des Eingangs 1 nach Gain |
 | `out` | Aussetzer: der Puffer des Eingangs lief leer |
 | `lost` | an der Aufnahme verlorene Frames: der Puffer war voll, weil der Ausgang länger als eine Sekunde nichts abgenommen hat |
-| `fix -a/+b/c` | gegen Takt-Drift verworfene (`a`) und wiederholte (`b`) Einzel-Frames, harte Resyncs (`c`); der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
+| `drift` | Korrektur des Resamplers gegen die Takt-Drift zwischen Eingang und Bus, in ppm (Millionstel): `+12` heißt, der Eingang liefert 12 Frames pro Million mehr, als der Ausgang abnimmt. Echte Takte liegen meist innerhalb weniger zehn ppm; nach dem Start pendelt der Wert ein bis zwei Minuten lang ein. Bei mehreren Bussen steht der größte Wert da |
+| `resync` | harte Sprünge zurück auf die Ziel-Pufferung, wenn der Puffer weit überlief; sollte 0 bleiben. Der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
 | `A1 … dB` / `clipped` | je Bus: Spitzenpegel der Summe nach dem Bus-Gain, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit `--to` heißt der eine Bus `A1` |
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
 | `missing` | statt des Pegels: das Gerät ist gerade weg (siehe unten, Geräte ab- und anstecken) |
@@ -67,11 +68,12 @@ pult run --from "CABLE Output" --to Focusrite --log abend.csv
 
 Schreibt alle 10 Sekunden eine Zeile nach `abend.csv` (die Datei wird neu angelegt): Laufzeit, Spitzenpegel des
 Abschnitts in dB, dazu alle Zähler der Statuszeile als laufende Summen. Jede Zeile wird sofort gespeichert, auch wenn
-das Fenster einfach geschlossen wird. Am Verlauf sieht man, ob Korrekturen nur beim Start anfallen oder gleichmäßig
-weiterlaufen (echte Takt-Drift). Die Statuszeile beginnt mit der Laufzeit (`h:mm:ss`).
+das Fenster einfach geschlossen wird. Die Spalte `drift_ppm` zeigt die Korrektur des Resamplers zum Zeitpunkt der
+Zeile: Sie pendelt sich nach dem Start ein und bleibt dann ungefähr auf dem Unterschied der beiden Gerätetakte. Die
+Statuszeile beginnt mit der Laufzeit (`h:mm:ss`).
 
 Nach dem Start (und nach jedem Aussetzer) misst pult zwei Sekunden lang, wo sich der Puffer einpendelt, und
-überspringt einen Überschuss dann auf einmal, statt ihn über viele Sekunden Frame für Frame abzubauen. Die Spalte
+überspringt einen Überschuss dann auf einmal, statt ihn langsam über den Resampler abzubauen. Die Spalte
 `aligned` zählt diese übersprungenen Frames; typisch sind einige hundert (ein paar Millisekunden).
 
 Geht ein Eingang auf mehrere Busse, zählen Statuszeile und Protokoll seine Werte über alle Busse zusammen. Je Bus gibt
@@ -148,7 +150,8 @@ pult run --profile meinprofil.toml --log abend.csv
 
 - **Busse:** Jeder Bus ist ein eigener Ausgang mit eigenem Takt. Zwei Busse dürfen nicht dasselbe Gerät benutzen. Alle
   Geräte brauchen dieselbe Abtastrate; maßgeblich ist der erste Bus.
-- **Matrix:** Ein Eingang auf mehreren Bussen bekommt je Bus einen eigenen Puffer mit eigener Drift-Regelung. Gain,
+- **Matrix:** Ein Eingang auf mehreren Bussen bekommt je Bus einen eigenen Puffer mit eigenem Resampler, der dem Takt
+  dieses Busses folgt. Gain,
   Mute und Pan gelten für alle seine Busse gemeinsam; der Bus-Gain wirkt auf die Summe.
 - **Pan:** Bei Mono-Eingängen ein Panorama, bei Stereo-Eingängen eine Balance: in der Mitte beide Seiten voll, zur
   Seite hin wird die andere leiser. Wirkt nur auf Ausgänge mit mindestens zwei Kanälen.

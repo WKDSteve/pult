@@ -1,7 +1,8 @@
 //! Inputs, their rings and the mixer that sums them into one output.
 //!
 //! Each input device gets a [`Capture`] (its callback pushes into a ring) and a
-//! [`MixerInput`] (the output callback reads from that ring). A [`Mixer`] owns the inputs of
+//! [`MixerInput`] (the output callback reads from that ring through a resampler that
+//! converts the input's rate to the output's and follows the drift between their clocks). A [`Mixer`] owns the inputs of
 //! one bus and fills that bus's output buffer. An input that feeds several buses has one
 //! ring per bus, each with its own drift control (every output runs on its own clock), and
 //! shares one set of [`InputControls`] across them. Control and statistics go through an
@@ -15,10 +16,29 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rtrb::{Consumer, Producer, RingBuffer};
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{
+    Async, FixedAsync, Resampler, Resizable, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
+};
+// `Adjustable` brings `set_resample_ratio_relative` into scope.
+use rubato::Adjustable as _;
 
 use crate::drift::{DriftControl, Event};
 use crate::level::{AtomicF32, Counter, PeakMeter};
+use crate::rate::RateControl;
 use crate::remix::remix_add;
+
+/// Output frames one resampler call produces at most; longer callbacks take several.
+const MAX_CHUNK: usize = 1024;
+
+/// Seconds in which the rate control's proportional term would remove a level error; the
+/// integral time is four times that (critically damped, see [`crate::rate`]).
+const STEER_SECONDS: f64 = 10.0;
+
+/// The largest correction against clock drift: 0.5 %, far beyond any real clock (they differ
+/// by tens of ppm) and still far below an audible pitch change.
+const MAX_CORRECTION: f64 = 0.005;
 
 /// Gain, mute and pan of one input, set by the control thread.
 #[derive(Debug)]
@@ -52,10 +72,9 @@ pub struct InputStats {
     pub underruns: Counter,
     /// Hard skips back to the target level.
     pub resyncs: Counter,
-    /// Single frames dropped because the level ran above the band.
-    pub drops: Counter,
-    /// Single frames repeated because the level ran below the band.
-    pub repeats: Counter,
+    /// The resampler's latest correction against clock drift, in parts per million: how
+    /// many more input frames it takes per output frame than the nominal rates say.
+    pub correction_ppm: AtomicF32,
     /// Frames skipped once at the end of a settling phase.
     pub aligned: Counter,
 }
@@ -105,12 +124,16 @@ pub struct BusHandle {
     pub stats: Arc<BusStats>,
 }
 
-/// Layout and buffering of one input, in frames.
+/// Layout, rates and buffering of one input; frames count at the input's rate.
 #[derive(Debug, Clone, Copy)]
 pub struct InputConfig {
     /// Channels per frame of the input device.
     pub channels: usize,
-    /// Ring size; also the largest output callback the input can serve.
+    /// Sample rate of the input device, in Hz.
+    pub input_rate: u32,
+    /// Sample rate of the bus's output device, in Hz.
+    pub output_rate: u32,
+    /// Ring size.
     pub capacity: usize,
     /// Frames the control keeps buffered: the added latency.
     pub target: usize,
@@ -137,15 +160,22 @@ pub fn connect(config: InputConfig) -> (Capture, MixerInput, InputHandle) {
 ///
 /// # Panics
 ///
-/// When `channels` is zero.
+/// When `channels` or a rate is zero.
 #[must_use]
 pub fn connect_with(
     config: InputConfig,
     controls: Arc<InputControls>,
 ) -> (Capture, MixerInput, InputHandle) {
     assert!(config.channels > 0, "an input needs at least one channel");
+    assert!(
+        config.input_rate > 0 && config.output_rate > 0,
+        "an input needs sample rates"
+    );
     let samples = config.capacity * config.channels;
     let (producer, consumer) = RingBuffer::new(samples);
+    let resampler = resampler(config);
+    let scratch = vec![0.0; resampler.input_frames_max() * config.channels];
+    let chunk_out = vec![0.0; MAX_CHUNK * config.channels];
     let open = Arc::new(AtomicBool::new(true));
     let handle = InputHandle {
         controls,
@@ -164,11 +194,39 @@ pub fn connect_with(
         drift: DriftControl::new(config.target, config.band)
             .smoothed(config.smoothing)
             .settling(config.settle),
-        scratch: vec![0.0; samples],
+        rate: RateControl::new(STEER_SECONDS, 4.0 * STEER_SECONDS, MAX_CORRECTION),
+        resampler,
+        input_rate: f64::from(config.input_rate),
+        output_rate: f64::from(config.output_rate),
+        scratch,
+        resampled: chunk_out,
         controls: Arc::clone(&handle.controls),
         stats: Arc::clone(&handle.stats),
     };
     (capture, input, handle)
+}
+
+/// The resampler of one ring: band-limited (sinc) so that rates far apart convert cleanly,
+/// with a short filter and linear interpolation between its points to stay cheap with many
+/// rings, and room for [`MAX_CORRECTION`] around the nominal ratio.
+fn resampler(config: InputConfig) -> Async<f32> {
+    let parameters = SincInterpolationParameters {
+        sinc_len: 128,
+        f_cutoff: None,
+        oversampling_factor: 256,
+        interpolation: SincInterpolationType::Linear,
+        window: WindowFunction::BlackmanHarris2,
+    };
+    let ratio = f64::from(config.output_rate) / f64::from(config.input_rate);
+    Async::new_sinc(
+        ratio,
+        1.0 + 2.0 * MAX_CORRECTION,
+        &parameters,
+        MAX_CHUNK,
+        config.channels,
+        FixedAsync::Output,
+    )
+    .expect("valid resampler parameters: positive rates, chunk and channels")
 }
 
 /// The capture end of an input ring: its device callback pushes here.
@@ -213,34 +271,73 @@ pub struct MixerInput {
     channels: usize,
     open: Arc<AtomicBool>,
     drift: DriftControl,
+    rate: RateControl,
+    resampler: Async<f32>,
+    input_rate: f64,
+    output_rate: f64,
+    /// Frames read from the ring for one chunk, at the input rate.
     scratch: Vec<f32>,
+    /// One chunk resampled to the output rate.
+    resampled: Vec<f32>,
     controls: Arc<InputControls>,
     stats: Arc<InputStats>,
 }
 
 impl MixerInput {
-    /// Empties the ring and lets the drift control prime again.
+    /// Empties the ring and lets the drift control prime again, with a fresh resampler and
+    /// rate control: the device on the other side may run on another clock now.
     fn restart(&mut self) {
         let stale = self.consumer.slots();
         if let Ok(chunk) = self.consumer.read_chunk(stale) {
             chunk.commit_all();
         }
         self.drift.reset();
+        self.resampler.reset();
+        self.rate.reset();
+        self.stats.correction_ppm.store(0.0);
     }
 
-    /// Reads `frames` frames per the drift plan and adds them into `out`.
+    /// Resamples `frames` output frames from the ring, chunk by chunk, and adds them into
+    /// `out`.
     fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize) {
+        let gain = if self.controls.muted.load(Ordering::Relaxed) {
+            0.0
+        } else {
+            self.controls.gain.load()
+        };
+        let position = self.controls.pan.load();
         let ch = self.channels;
-        let frames = frames.min(self.scratch.len() / ch);
+        let mut done = 0;
+        while done < frames {
+            let n = (frames - done).min(MAX_CHUNK);
+            self.next_chunk(n);
+            let block = &self.resampled[..n * ch];
+            self.stats.peak.record_scaled(block, gain);
+            let rest = &mut out[done * out_channels..];
+            remix_add(block, ch, rest, out_channels, gain, position);
+            done += n;
+        }
+    }
+
+    /// Fills `resampled` with `frames` output frames (at most [`MAX_CHUNK`]): reads what the
+    /// resampler needs per the drift plan, resamples it and steers the ratio by the level.
+    fn next_chunk(&mut self, frames: usize) {
+        let ch = self.channels;
+        let end = frames * ch;
+        // Fails only for zero or more than MAX_CHUNK frames, which never reach here.
+        let _ = self.resampler.set_chunk_size(frames);
+        let needed = self.resampler.input_frames_next();
         let available = self.consumer.slots() / ch;
-        let (plan, event) = self.drift.plan(available, frames);
+        let (plan, event) = self.drift.plan(available, needed);
         match event {
             Event::Underrun => self.stats.underruns.add(1),
             Event::Resync => self.stats.resyncs.add(1),
-            Event::Dropped => self.stats.drops.add(1),
-            Event::Repeated => self.stats.repeats.add(1),
             Event::Aligned => self.stats.aligned.add(plan.skip as u64),
             Event::None | Event::Priming => {}
+        }
+        if event == Event::Priming {
+            self.resampled[..end].fill(0.0);
+            return;
         }
         if let Ok(chunk) = self.consumer.read_chunk(plan.skip * ch) {
             chunk.commit_all();
@@ -252,27 +349,37 @@ impl MixerInput {
             self.scratch[first.len()..read].copy_from_slice(second);
             chunk.commit_all();
         }
-        let mut filled = read;
-        for _ in 0..plan.repeat {
-            if filled >= ch {
-                self.scratch.copy_within(filled - ch..filled, filled);
-            } else {
-                self.scratch[filled..filled + ch].fill(0.0);
-            }
-            filled += ch;
-        }
-        let end = frames * ch;
-        self.scratch[filled..end].fill(0.0);
+        self.scratch[read..needed * ch].fill(0.0);
 
-        let gain = if self.controls.muted.load(Ordering::Relaxed) {
-            0.0
-        } else {
-            self.controls.gain.load()
+        let input = InterleavedSlice::new(&self.scratch[..needed * ch], ch, needed);
+        let output = InterleavedSlice::new_mut(&mut self.resampled[..end], ch, frames);
+        let processed = match (input, output) {
+            (Ok(input), Ok(mut output)) => self
+                .resampler
+                .process_into_buffer(&input, &mut output, None)
+                .is_ok(),
+            _ => false,
         };
-        let block = &self.scratch[..end];
-        self.stats.peak.record_scaled(block, gain);
-        let position = self.controls.pan.load();
-        remix_add(block, ch, out, out_channels, gain, position);
+        if !processed {
+            self.resampled[..end].fill(0.0);
+        }
+        if event == Event::Underrun {
+            // The silence after an underrun starts the next priming from a clean filter.
+            self.resampler.reset();
+            return;
+        }
+        if let Some(error) = self.drift.steady_error() {
+            let correction = self
+                .rate
+                .update(error / self.input_rate, frames as f64 / self.output_rate);
+            // Fails only outside the range the resampler was built for, which the rate
+            // control's limit keeps clear of.
+            let _ = self
+                .resampler
+                .set_resample_ratio_relative(1.0 / (1.0 + correction), true);
+            #[allow(clippy::cast_possible_truncation)]
+            self.stats.correction_ppm.store((correction * 1e6) as f32);
+        }
     }
 }
 
@@ -362,28 +469,67 @@ impl Mixer {
 mod tests {
     use super::*;
 
+    /// Output callbacks of 480 frames, as WASAPI asks at 48 kHz.
+    const PERIOD: usize = 480;
+
     fn config(channels: usize, target: usize) -> InputConfig {
         InputConfig {
             channels,
-            capacity: 64,
+            input_rate: 48_000,
+            output_rate: 48_000,
+            capacity: 16_384,
             target,
-            band: 2,
+            band: 64,
             smoothing: 1.0,
             settle: 0,
         }
     }
 
-    #[test]
-    fn plays_silence_until_primed_then_the_captured_frames() {
-        let (mut capture, input, _handle) = connect(config(2, 2));
-        let (mut mixer, _) = Mixer::new(vec![input], 2);
-        let mut out = [9.0; 4];
-        mixer.process(&mut out);
-        assert_eq!(out, [0.0; 4]);
+    /// Pushes `frames` frames of the constant `value` on every channel.
+    fn push_dc(capture: &mut Capture, frames: usize, value: f32) {
+        capture.push(&vec![value; frames * capture.channels()]);
+    }
 
-        capture.push(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
+    /// Runs `callbacks` output callbacks of `PERIOD` frames into `out_channels` channels,
+    /// feeding every capture one period of `value` before each; returns the last output.
+    fn run_dc(
+        mixer: &mut Mixer,
+        captures: &mut [&mut Capture],
+        out_channels: usize,
+        value: f32,
+        callbacks: usize,
+    ) -> Vec<f32> {
+        let mut out = vec![0.0; PERIOD * out_channels];
+        for _ in 0..callbacks {
+            for capture in captures.iter_mut() {
+                push_dc(capture, PERIOD, value);
+            }
+            mixer.process(&mut out);
+        }
+        out
+    }
+
+    fn all_near(out: &[f32], expected: &[f32]) -> bool {
+        out.chunks_exact(expected.len()).all(|frame| {
+            frame
+                .iter()
+                .zip(expected)
+                .all(|(o, e)| (o - e).abs() < 2e-3)
+        })
+    }
+
+    #[test]
+    fn plays_silence_until_primed_then_the_captured_signal() {
+        let (mut capture, input, _handle) = connect(config(2, 960));
+        let (mut mixer, _) = Mixer::new(vec![input], 2);
+        let mut out = vec![9.0; PERIOD * 2];
         mixer.process(&mut out);
-        assert_eq!(out, [0.1, 0.2, 0.3, 0.4]);
+        assert!(out.iter().all(|&o| o == 0.0));
+
+        // Primed after the target plus one call's worth; past the filter delay the
+        // constant comes through unchanged.
+        let out = run_dc(&mut mixer, &mut [&mut capture], 2, 0.25, 10);
+        assert!(all_near(&out, &[0.25, 0.25]), "{:?}", &out[..4]);
     }
 
     #[test]
@@ -392,19 +538,16 @@ mod tests {
         let (mut b, input_b, handle_b) = connect(config(2, 0));
         let (mut mixer, _) = Mixer::new(vec![input_a, input_b], 2);
         handle_a.controls.gain.store(0.5);
-        a.push(&[0.4, 0.4]);
-        b.push(&[0.1, 0.2, 0.1, 0.2]);
-        let mut out = [0.0; 4];
-        mixer.process(&mut out);
-        let expected = [0.3, 0.4, 0.3, 0.4];
-        assert!(out.iter().zip(expected).all(|(o, e)| (o - e).abs() < 1e-6));
-        assert!((handle_a.stats.peak.take() - 0.2).abs() < 1e-6);
+        run_dc(&mut mixer, &mut [&mut a, &mut b], 2, 0.2, 5);
+        // The peaks so far include the filter's ringing at the start; measure afresh.
+        handle_a.stats.peak.take();
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 2, 0.2, 1);
+        assert!(all_near(&out, &[0.3, 0.3]), "{:?}", &out[..2]);
+        assert!((handle_a.stats.peak.take() - 0.1).abs() < 2e-3);
 
         handle_b.controls.muted.store(true, Ordering::Relaxed);
-        a.push(&[0.4, 0.4]);
-        b.push(&[0.1, 0.2, 0.1, 0.2]);
-        mixer.process(&mut out);
-        assert!(out.iter().all(|o| (o - 0.2).abs() < 1e-6));
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 2, 0.2, 1);
+        assert!(all_near(&out, &[0.1, 0.1]), "{:?}", &out[..2]);
     }
 
     #[test]
@@ -416,17 +559,15 @@ mod tests {
         let (mut bus_b, bus_b_handle) = Mixer::new(vec![ring_b], 2);
         controls.pan.store(1.0);
         bus_b_handle.controls.gain.store(0.5);
-        for capture in [&mut to_a, &mut to_b] {
-            capture.push(&[0.8]);
-        }
-        let (mut out_a, mut out_b) = ([0.0; 2], [0.0; 2]);
-        bus_a.process(&mut out_a);
-        bus_b.process(&mut out_b);
-        assert_eq!(out_a, [0.0, 0.8]);
-        assert_eq!(out_b, [0.0, 0.4]);
+        let out_a = run_dc(&mut bus_a, &mut [&mut to_a], 2, 0.8, 5);
+        run_dc(&mut bus_b, &mut [&mut to_b], 2, 0.8, 5);
+        bus_b_handle.stats.peak.take();
+        let out_b = run_dc(&mut bus_b, &mut [&mut to_b], 2, 0.8, 1);
+        assert!(all_near(&out_a, &[0.0, 0.8]), "{:?}", &out_a[..2]);
+        assert!(all_near(&out_b, &[0.0, 0.4]), "{:?}", &out_b[..2]);
         assert!(Arc::ptr_eq(&handle_a.controls, &handle_b.controls));
         assert!(!Arc::ptr_eq(&handle_a.stats, &handle_b.stats));
-        assert_eq!(bus_b_handle.stats.peak.take(), 0.4);
+        assert!((bus_b_handle.stats.peak.take() - 0.4).abs() < 2e-3);
     }
 
     #[test]
@@ -434,78 +575,116 @@ mod tests {
         let (mut capture, input, handle) = connect(config(1, 0));
         let (mut mixer, bus) = Mixer::new(vec![input], 1);
         bus.controls.muted.store(true, Ordering::Relaxed);
-        capture.push(&[0.5, 0.5]);
-        let mut out = [9.0; 2];
-        mixer.process(&mut out);
-        assert_eq!(out, [0.0; 2]);
-        assert_eq!(handle.stats.peak.take(), 0.5);
+        let out = run_dc(&mut mixer, &mut [&mut capture], 1, 0.5, 3);
+        assert!(out.iter().all(|&o| o == 0.0));
+        assert!(handle.stats.peak.take() > 0.49);
         bus.controls.muted.store(false, Ordering::Relaxed);
+        let mut out = vec![0.0; PERIOD];
         mixer.process(&mut out);
         assert_eq!(handle.stats.underruns.get(), 1);
     }
 
     #[test]
     fn a_suspended_bus_discards_without_counting_and_resumes_fresh() {
-        let (mut capture, input, handle) = connect(config(1, 1));
+        let (mut capture, input, handle) = connect(config(1, 960));
         let (mut mixer, _) = Mixer::new(vec![input], 1);
-        capture.push(&[0.1, 0.2, 0.3]);
+        push_dc(&mut capture, 2000, 0.3);
         mixer.suspend();
-        capture.push(&[0.9; 100]);
+        push_dc(&mut capture, 20_000, 0.9);
         assert_eq!(handle.stats.dropped_at_capture.get(), 0);
 
         mixer.resume(2);
-        // The stale frames are gone: priming needs target + needed frames again.
-        let mut out = [9.0; 2];
+        // The stale frames are gone: priming needs the target plus a callback again.
+        let mut out = vec![9.0; PERIOD * 2];
         mixer.process(&mut out);
-        assert_eq!(out, [0.0; 2]);
-        capture.push(&[0.5, 0.6]);
-        mixer.process(&mut out);
-        assert_eq!(out, [0.5, 0.5]);
+        assert!(out.iter().all(|&o| o == 0.0));
+        let out = run_dc(&mut mixer, &mut [&mut capture], 2, 0.5, 10);
+        assert!(all_near(&out, &[0.5, 0.5]), "{:?}", &out[..2]);
         assert_eq!(capture.channels(), 1);
     }
 
     #[test]
-    fn counts_underruns_and_full_rings() {
-        let (mut capture, input, handle) = connect(InputConfig {
-            channels: 1,
+    fn counts_full_rings() {
+        let (mut capture, _, handle) = connect(InputConfig {
             capacity: 4,
-            target: 0,
-            band: 10,
-            smoothing: 1.0,
-            settle: 0,
+            ..config(1, 0)
         });
         capture.push(&[0.1; 6]);
         assert_eq!(handle.stats.dropped_at_capture.get(), 2);
-
-        let (mut mixer, _) = Mixer::new(vec![input], 1);
-        let mut out = [0.0; 3];
-        mixer.process(&mut out);
-        mixer.process(&mut out);
-        assert_eq!(handle.stats.underruns.get(), 1);
-        assert_eq!(out, [0.1, 0.0, 0.0]);
     }
 
     #[test]
-    fn repeats_the_last_frame_when_running_low() {
+    fn counts_an_underrun_once_and_primes_again() {
+        let (mut capture, input, handle) = connect(config(1, 0));
+        let (mut mixer, _) = Mixer::new(vec![input], 1);
+        push_dc(&mut capture, 3 * PERIOD, 0.5);
+        let mut out = vec![0.0; PERIOD];
+        for _ in 0..6 {
+            mixer.process(&mut out);
+        }
+        // One underrun, then the input waits (primes) instead of running dry again.
+        assert_eq!(handle.stats.underruns.get(), 1);
+        assert!(out.iter().all(|&o| o == 0.0));
+    }
+
+    #[test]
+    fn follows_a_fast_input_clock_without_dropouts() {
+        // The input clock runs 200 ppm fast: 480.096 frames arrive per output callback.
+        // The rate control has to learn that and keep the level on the target.
+        let target = 1920;
         let (mut capture, input, handle) = connect(InputConfig {
-            channels: 2,
-            capacity: 64,
-            target: 4,
-            band: 1,
-            smoothing: 1.0,
-            settle: 0,
+            smoothing: 1.0 / 128.0,
+            settle: 96_000,
+            ..config(2, target)
         });
         let (mut mixer, _) = Mixer::new(vec![input], 2);
-        // Six frames: the first callback primes and reads two, the second finds the level
-        // below the band and repeats one frame.
-        let frames: Vec<f32> = (1..=12).map(|i| i as f32 / 100.0).collect();
-        capture.push(&frames);
-        let mut out = [0.0; 4];
-        mixer.process(&mut out);
-        mixer.process(&mut out);
-        assert_eq!(out, [0.05, 0.06, 0.05, 0.06]);
-        assert_eq!(handle.stats.repeats.get(), 1);
-        assert_eq!(handle.stats.drops.get(), 0);
+        let mut out = vec![0.0; PERIOD * 2];
+        let mut owed = 0.0;
+        let mut frame = vec![0.1; (PERIOD + 1) * 2];
+        // Ten simulated minutes.
+        for _ in 0..60_000 {
+            owed += PERIOD as f64 * (1.0 + 200e-6);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let frames = owed as usize;
+            owed -= frames as f64;
+            frame.resize(frames * 2, 0.1);
+            capture.push(&frame);
+            mixer.process(&mut out);
+        }
+        assert_eq!(handle.stats.underruns.get(), 0);
+        assert_eq!(handle.stats.resyncs.get(), 0);
+        assert_eq!(handle.stats.dropped_at_capture.get(), 0);
+        let ppm = handle.stats.correction_ppm.load();
+        assert!((ppm - 200.0).abs() < 20.0, "correction {ppm} ppm");
+        assert!(all_near(&out, &[0.1, 0.1]), "{:?}", &out[..2]);
+    }
+
+    #[test]
+    fn serves_callbacks_longer_than_one_chunk() {
+        // The target has to cover a whole callback, as with any buffering.
+        let (mut capture, input, handle) = connect(config(1, 4000));
+        let (mut mixer, _) = Mixer::new(vec![input], 1);
+        let mut out = vec![0.0; 3000];
+        for _ in 0..4 {
+            push_dc(&mut capture, 3000, 0.4);
+            mixer.process(&mut out);
+        }
+        assert!(all_near(&out, &[0.4]), "{:?}", &out[..2]);
+        assert_eq!(handle.stats.underruns.get(), 0);
+    }
+
+    #[test]
+    fn mixes_without_allocating() {
+        let (mut capture, input, _) = connect(config(2, 480));
+        let (mut mixer, _) = Mixer::new(vec![input], 2);
+        let data = vec![0.2; PERIOD * 2];
+        let mut out = vec![0.0; PERIOD * 2];
+        assert_no_alloc::assert_no_alloc(|| {
+            for _ in 0..50 {
+                capture.push(&data);
+                mixer.process(&mut out);
+            }
+        });
     }
 
     #[test]
@@ -513,21 +692,22 @@ mod tests {
         let (mut capture, input, _) = connect(config(1, 0));
         let (mut mixer, bus) = Mixer::new(vec![input], 1);
         capture.push(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5]);
-        let mut out = [0.0; 4];
-        mixer.process(&mut out);
-        assert_eq!(out, [0.0, 1.0, -1.0, 0.5]);
-        assert_eq!(bus.stats.clipped.get(), 3);
+        let out = run_dc(&mut mixer, &mut [&mut capture], 1, 0.5, 3);
+        assert!(out.iter().all(|o| o.is_finite() && o.abs() <= 1.0));
+        assert!(bus.stats.clipped.get() > 0);
     }
 
     #[test]
     fn clips_the_mix_to_full_scale() {
         let (mut capture, input, _) = connect(config(1, 0));
         let (mut mixer, bus) = Mixer::new(vec![input], 1);
-        capture.push(&[1.5, -2.0]);
-        let mut out = [0.0; 2];
-        mixer.process(&mut out);
-        assert_eq!(out, [1.0, -1.0]);
-        assert_eq!(bus.stats.clipped.get(), 2);
+        let out = run_dc(&mut mixer, &mut [&mut capture], 1, 1.5, 3);
+        assert!(
+            out.iter().all(|&o| (o - 1.0).abs() < f32::EPSILON),
+            "{:?}",
+            &out[..2]
+        );
+        assert!(bus.stats.clipped.get() >= PERIOD as u64);
         assert_eq!(bus.stats.peak.take(), 1.0);
     }
 }
