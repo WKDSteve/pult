@@ -164,7 +164,7 @@ pult run --profile meinprofil.toml --log abend.csv
 - **Matrix:** Ein Eingang auf mehreren Bussen bekommt je Bus einen eigenen Puffer mit eigenem Resampler, der dem Takt
   dieses Busses folgt. pult legt beim Start für jedes Paar aus Eingang und Bus einen Puffer an; nicht geroutete
   bleiben zu und kosten keine Rechenzeit. So lässt sich die Matrix später in der Oberfläche während des Laufs
-  umschalten, ohne Neustart (über die Eingabezeile noch nicht). Gain,
+  umschalten, ohne Neustart (mit `route` und `unroute`, siehe 7.). Gain,
   Mute und Pan gelten für alle seine Busse gemeinsam; der Bus-Gain wirkt auf die Summe.
 - **Pan:** Bei Mono-Eingängen ein Panorama, bei Stereo-Eingängen eine Balance: in der Mitte beide Seiten voll, zur
   Seite hin wird die andere leiser. Wirkt nur auf Ausgänge mit mindestens zwei Kanälen.
@@ -223,6 +223,7 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `gain <Ziel> <dB>` | Gain eines Eingangs oder Busses setzen, -96 bis 24 dB |
 | `mute <Ziel>`, `unmute <Ziel>` | stumm schalten, wieder einschalten; die Statuszeile zeigt dann `muted` |
 | `pan <Eingang> <-1..1>` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
+| `route <Eingang> <Bus>`, `unroute <Eingang> <Bus>` | einen Eingang zusätzlich auf einen Bus legen, von ihm nehmen; der letzte Bus eines Eingangs bleibt (dafür `mute`) |
 | `show` | alle Eingänge und Busse mit Gain, Pan und Mute |
 | `save <Datei>` | den aktuellen Stand als Profil schreiben (eine vorhandene Datei wird ersetzt), später mit `--profile` laden |
 | `help` | die Befehle |

@@ -95,6 +95,7 @@ impl Running {
                     self.target_label(Target::Input(*index))
                 )])
             }
+            Command::Route(input, bus, on) => self.route(*input, *bus, *on),
             Command::Show => Ok(self.show()),
             Command::Save(path) => self.save_profile(Path::new(path)),
             Command::Help => Ok(HELP.lines().map(str::to_owned).collect()),

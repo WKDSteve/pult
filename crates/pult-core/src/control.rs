@@ -5,6 +5,7 @@
 //! gain <target> <dB>     gain of an input or bus, for example `gain A1 -6`
 //! mute <target>          unmute <target>
 //! pan <input> <-1..1>    pan (mono) or balance (stereo) of an input
+//! route <input> <bus>    send an input to a bus too; unroute <input> <bus> takes it off
 //! show                   current gains, mutes and pans
 //! save <file>            the current state as a profile
 //! help                   the commands
@@ -37,6 +38,8 @@ pub enum Command {
     Mute(Target, bool),
     /// Sets the pan of an input, -1 (left) to 1 (right).
     Pan(usize, f32),
+    /// Routes an input (first index) to a bus (second index), or takes it off.
+    Route(usize, usize, bool),
     /// Lists the current state.
     Show,
     /// Writes the current state as a profile to this path.
@@ -52,6 +55,7 @@ pub const HELP: &str = "\
 gain <target> <dB>   set the gain of an input or bus (gain A1 -6, gain 2 0)
 mute <target>        mute an input or bus; unmute <target> undoes it
 pan <input> <-1..1>  pan a mono input, balance a stereo one
+route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
 show                 list gains, mutes and pans
 save <file>          write the current state as a profile
 quit                 stop (an empty line too)
@@ -111,6 +115,11 @@ pub fn parse<S: AsRef<str>>(line: &str, inputs: &[S], buses: &[S]) -> Result<Com
                 Target::Bus(_) => error("pan works on inputs only"),
             }
         }
+        "route" | "unroute" => {
+            let on = keyword.eq_ignore_ascii_case("route");
+            let (input, bus) = route(rest, inputs, buses)?;
+            Ok(Command::Route(input, bus, on))
+        }
         other => error(format!("unknown command \"{other}\"; type help")),
     }
 }
@@ -134,6 +143,31 @@ fn split_value(rest: &[&str], usage: &str) -> Result<(String, f32), ParseError> 
     match value.parse::<f32>() {
         Ok(number) if number.is_finite() => Ok((name.join(" "), number)),
         _ => error(format!("\"{value}\" is not a number; usage: {usage}")),
+    }
+}
+
+/// The input words and the bus name after them; a bus name has no spaces.
+fn route<S: AsRef<str>>(
+    rest: &[&str],
+    inputs: &[S],
+    buses: &[S],
+) -> Result<(usize, usize), ParseError> {
+    let usage = "usage: route <input> <bus>";
+    let Some((&bus_name, input_words)) = rest.split_last() else {
+        return error(usage);
+    };
+    if input_words.is_empty() {
+        return error(usage);
+    }
+    let Some(bus) = buses
+        .iter()
+        .position(|bus| bus.as_ref().eq_ignore_ascii_case(bus_name))
+    else {
+        return error(format!("there is no bus \"{bus_name}\""));
+    };
+    match target(&input_words.join(" "), inputs, buses)? {
+        Target::Input(input) => Ok((input, bus)),
+        Target::Bus(_) => error("only an input can be routed to a bus"),
     }
 }
 
@@ -195,6 +229,9 @@ mod tests {
             Command::Mute(Target::Input(1), false)
         );
         assert_eq!(ok("pan spotify -0.5"), Command::Pan(2, -0.5));
+        assert_eq!(ok("route 2 B2"), Command::Route(1, 1, true));
+        assert_eq!(ok("ROUTE Analogue 1 a1"), Command::Route(1, 0, true));
+        assert_eq!(ok("unroute cable b2"), Command::Route(0, 1, false));
         assert_eq!(ok("show"), Command::Show);
         assert_eq!(
             ok("save  C:\\Profile\\mein  abend.toml "),
@@ -217,6 +254,11 @@ mod tests {
         assert!(bad("mute a").contains("several inputs"));
         assert!(bad("mute").contains("which input or bus"));
         assert!(bad("pan A1 0").contains("inputs only"));
+        assert!(bad("route").contains("usage: route"));
+        assert!(bad("route 1").contains("usage: route"));
+        assert!(bad("route 1 C3").contains("no bus \"C3\""));
+        assert!(bad("route A1 B2").contains("only an input"));
+        assert!(bad("unroute vlc A1").contains("no input or bus matches \"vlc\""));
         assert!(bad("show me").contains("too much"));
         assert!(bad("save").contains("file name"));
     }
