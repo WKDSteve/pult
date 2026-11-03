@@ -68,24 +68,42 @@ impl Health {
     }
 }
 
-/// Raises the calling callback thread to realtime priority (MMCSS "Pro Audio"), the first
-/// time `first` is set; a refusal is kept in `health`. Without it, a build that takes every
-/// core delays the callbacks until the rings run over.
-fn raise_once(first: &mut bool, health: &Health) {
-    if std::mem::take(first) && !realtime() {
-        health.slow.store(true, Ordering::Relaxed);
-    }
+/// The realtime priority of a callback thread (MMCSS "Pro Audio"): taken on the callback's
+/// first call, given back when the callback is dropped, which the audio system does on the
+/// same thread when the stream ends. Without it, a build that takes every core delays the
+/// callbacks until the rings run over.
+#[derive(Debug, Default)]
+struct Realtime {
+    tried: bool,
+    #[cfg(windows)]
+    joined: Option<crate::ffi::ProAudio>,
 }
 
-/// Puts the calling thread into the realtime class of the audio system; whether it worked.
-fn realtime() -> bool {
-    #[cfg(windows)]
-    {
-        crate::ffi::join_pro_audio()
+impl Realtime {
+    /// Raises the calling thread the first time; a refusal is kept in `health`.
+    fn raise(&mut self, health: &Health) {
+        if std::mem::replace(&mut self.tried, true) {
+            return;
+        }
+        #[cfg(windows)]
+        {
+            self.joined = crate::ffi::ProAudio::join();
+        }
+        if !self.raised() {
+            health.slow.store(true, Ordering::Relaxed);
+        }
     }
-    #[cfg(not(windows))]
-    {
-        false
+
+    /// Whether the thread runs at realtime priority.
+    fn raised(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.joined.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 }
 
@@ -314,11 +332,11 @@ impl Slot {
         let name = device.to_string();
         let built = if role == Role::Output {
             let beats = Arc::clone(health);
-            let mut first = true;
+            let mut realtime = Realtime::default();
             device.build_output_stream::<f32, _, _>(
                 config.config(),
                 move |data, _| {
-                    raise_once(&mut first, &beats);
+                    realtime.raise(&beats);
                     assert_no_alloc(|| {
                         beats.beats.add(1);
                         match returning.get_mut() {
@@ -405,9 +423,9 @@ fn input_callback(
     health: Arc<Health>,
     mut returning: Returning<Feed>,
 ) -> impl FnMut(&[f32]) + Send + 'static {
-    let mut first = true;
+    let mut realtime = Realtime::default();
     move |data| {
-        raise_once(&mut first, &health);
+        realtime.raise(&health);
         assert_no_alloc(|| {
             health.beats.add(1);
             if let Some(Feed::Input(captures)) = returning.get_mut() {
@@ -424,21 +442,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_callback_thread_gets_realtime_priority_once() {
-        let health = Arc::new(Health::default());
-        let on_thread = Arc::clone(&health);
-        let gave = std::thread::spawn(move || {
-            let mut first = true;
-            raise_once(&mut first, &on_thread);
-            let again = first;
-            raise_once(&mut first, &on_thread);
-            again
-        })
-        .join()
-        .expect("join the callback thread");
-        assert!(!gave, "the first call uses up the flag");
-        // Windows (the audio service runs MMCSS) grants "Pro Audio" to any thread.
-        assert_eq!(health.slow.load(Ordering::Relaxed), !cfg!(windows));
+    fn a_callback_thread_gets_realtime_priority_and_gives_it_back() {
+        // Windows (the audio service runs MMCSS) grants "Pro Audio" to any thread. Streams
+        // come and go with every unplugging, each on a new thread, so many in a row must all
+        // work.
+        for _ in 0..200 {
+            let health = Arc::new(Health::default());
+            let on_thread = Arc::clone(&health);
+            let raised = std::thread::spawn(move || {
+                let mut realtime = Realtime::default();
+                realtime.raise(&on_thread);
+                realtime.raise(&on_thread);
+                realtime.raised()
+            })
+            .join()
+            .expect("join the callback thread");
+            assert_eq!(raised, cfg!(windows));
+            assert_eq!(health.slow.load(Ordering::Relaxed), !cfg!(windows));
+        }
+        // On one thread too: given back, it can be taken again.
+        let mut first = Realtime::default();
+        first.raise(&Health::default());
+        drop(first);
+        let mut second = Realtime::default();
+        second.raise(&Health::default());
+        assert_eq!(second.raised(), cfg!(windows));
     }
 
     #[test]

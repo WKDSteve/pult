@@ -31,20 +31,40 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    AvSetMmThreadCharacteristicsW, CreateEventW, OpenProcess, PROCESS_SYNCHRONIZE,
-    WaitForMultipleObjects,
+    AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, OpenProcess,
+    PROCESS_SYNCHRONIZE, WaitForMultipleObjects,
 };
 use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{Interface, PCWSTR, Result, w};
 
-/// Puts the calling thread into the multimedia class "Pro Audio" (MMCSS), which runs it
-/// ahead of ordinary work such as a build on every core. Returns whether Windows agreed.
-/// The registration ends with the thread, so it is never undone by hand.
-pub(crate) fn join_pro_audio() -> bool {
-    let mut task_index = 0_u32;
-    // SAFETY: the task name is a static NUL-terminated wide string and `task_index` a valid
-    // place for the index Windows writes.
-    unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &raw mut task_index) }.is_ok()
+/// The calling thread's place in the multimedia class "Pro Audio" (MMCSS), which runs it
+/// ahead of ordinary work such as a build on every core. Dropping it leaves the class; drop
+/// it on the thread that joined.
+#[derive(Debug)]
+pub(crate) struct ProAudio(HANDLE);
+
+// SAFETY: the handle is a token of the thread that joined, not memory; it is created and
+// dropped on that thread and only moves along with the callback that owns it.
+unsafe impl Send for ProAudio {}
+
+impl ProAudio {
+    /// Joins the calling thread to the class; `None` when Windows refuses.
+    pub(crate) fn join() -> Option<Self> {
+        let mut task_index = 0_u32;
+        // SAFETY: the task name is a static NUL-terminated wide string and `task_index` a
+        // valid place for the index Windows writes.
+        unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &raw mut task_index) }
+            .ok()
+            .map(Self)
+    }
+}
+
+impl Drop for ProAudio {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from a successful AvSetMmThreadCharacteristicsW and is
+        // given back once.
+        let _ = unsafe { AvRevertMmThreadCharacteristics(self.0) };
+    }
 }
 
 /// One running process.
