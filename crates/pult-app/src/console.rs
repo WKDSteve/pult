@@ -262,7 +262,7 @@ fn status_bar(ui: &mut Ui, view: &MixerView, log: &Log) {
                     ui.label(RichText::new("DONE").size(9.5).color(p.ok));
                     p.text_dim
                 }
-                Source::Desk => p.text_dim,
+                Source::Desk(_) => p.text_dim,
             };
             ui.label(RichText::new(&entry.text).size(11.0).color(color));
         } else {
@@ -364,7 +364,7 @@ fn console(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pult_core::view::{Desk, EventView};
+    use pult_core::view::{Desk, EventKind, EventView};
 
     fn view_with(events: &[&str], clipped: u64) -> MixerView {
         let mut view = pult_core::view::FakeDesk::new().view();
@@ -372,7 +372,7 @@ mod tests {
             .iter()
             .map(|text| EventView {
                 elapsed: Duration::ZERO,
-                kind: pult_core::view::EventKind::Lost,
+                kind: EventKind::Lost,
                 text: (*text).to_owned(),
             })
             .collect();
@@ -396,10 +396,10 @@ mod tests {
         assert_eq!(
             lines,
             [
-                ("a", Source::Desk),
-                ("b", Source::Desk),
+                ("a", Source::Desk(EventKind::Lost)),
+                ("b", Source::Desk(EventKind::Lost)),
                 ("no", Source::Refused),
-                ("c", Source::Desk),
+                ("c", Source::Desk(EventKind::Lost)),
             ]
         );
     }

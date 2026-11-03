@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use crate::view::{Action, GAIN_RANGE_DB, MixerView};
+use crate::view::{Action, BusView, GAIN_RANGE_DB, InputView, MixerView};
 
 /// A parameter of an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -246,8 +246,8 @@ impl Binding {
     /// they are themselves. Empty when the view has no such input or bus.
     #[must_use]
     pub fn title(self, view: &MixerView) -> String {
-        let input = |index: usize| view.inputs.get(index).map_or("", |i| i.name.as_str());
-        let bus = |index: usize| view.buses.get(index).map_or("", |b| b.name.as_str());
+        let input = |index: usize| view.inputs.get(index).map_or("", InputView::shown_name);
+        let bus = |index: usize| view.buses.get(index).map_or("", BusView::shown_name);
         match self {
             Self::Input(index, InputParam::Mute) => format!("{} mute", input(index)),
             Self::Input(index, InputParam::Solo) => format!("{} solo", input(index)),
@@ -466,6 +466,21 @@ mod tests {
         assert_eq!(
             Binding::Route { input: 1, bus: 0 }.title(&view),
             format!("{input} to {bus}")
+        );
+    }
+
+    #[test]
+    fn titles_use_the_label() {
+        let mut view = view();
+        view.inputs[1].label = Some("Musik".to_owned());
+        view.buses[0].label = Some("Boxen".to_owned());
+        assert_eq!(
+            Binding::Input(1, InputParam::Mute).title(&view),
+            "Musik mute"
+        );
+        assert_eq!(
+            Binding::Route { input: 1, bus: 0 }.title(&view),
+            "Musik to Boxen"
         );
     }
 

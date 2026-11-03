@@ -126,11 +126,16 @@ fn strip_frame(ui: &Ui, rect: Rect, fill: Color32, zones: &Zones) {
     }
 }
 
-fn header(ui: &mut Ui, zone: Rect, name: &str, detail: &str, missing: bool) {
+/// The owner's `name` over its detail; hovering it tells the `full` name behind a label.
+fn header(ui: &mut Ui, zone: Rect, name: &str, full: &str, detail: &str, missing: bool) {
     let p = &Theme::current().palette;
     within(ui, zone, Layout::top_down(Align::Center), |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
-        ui.add(Label::new(RichText::new(name).size(12.5).color(p.text).strong()).truncate());
+        let shown =
+            ui.add(Label::new(RichText::new(name).size(12.5).color(p.text).strong()).truncate());
+        if name != full {
+            shown.on_hover_text(full);
+        }
         let (text, color) = if missing {
             ("missing", p.mute)
         } else {
@@ -304,7 +309,14 @@ impl<'v> Draw<'_, 'v> {
                     SourceKind::Program => "APP",
                 };
                 let detail = format!("{kind} · {}", format_rate(input.sample_rate));
-                header(ui, rect, &input.name, &detail, !input.present);
+                header(
+                    ui,
+                    rect,
+                    input.shown_name(),
+                    &input.name,
+                    &detail,
+                    !input.present,
+                );
             }
             Owner::Bus(index) => {
                 let Some(bus) = view.buses.get(index) else {
@@ -313,6 +325,7 @@ impl<'v> Draw<'_, 'v> {
                 header(
                     ui,
                     rect,
+                    bus.shown_name(),
                     &bus.name,
                     &format_rate(bus.sample_rate),
                     !bus.present,

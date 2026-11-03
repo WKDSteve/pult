@@ -20,6 +20,8 @@ struct App {
     state: ConsoleState,
     /// An input to show under another name: (index, name).
     rename: Option<(usize, String)>,
+    /// An input to show with a label: (index, label).
+    label: Option<(usize, String)>,
 }
 
 fn harness() -> Harness<'static, App> {
@@ -27,6 +29,7 @@ fn harness() -> Harness<'static, App> {
         desk: FakeDesk::new(),
         state: ConsoleState::default(),
         rename: None,
+        label: None,
     };
     HarnessBuilder::default()
         .with_size(vec2(1280.0, 760.0))
@@ -38,6 +41,9 @@ fn harness() -> Harness<'static, App> {
                 let mut view = app.desk.view();
                 if let Some((input, name)) = &app.rename {
                     view.inputs[*input].name.clone_from(name);
+                }
+                if let Some((input, label)) = &app.label {
+                    view.inputs[*input].label = Some(label.clone());
                 }
                 for action in console::show(ui, &view, &mut app.state, 0.0) {
                     app.state.act(&mut app.desk, view.elapsed, action);
@@ -158,6 +164,22 @@ fn inputs_of_the_same_name_keep_their_own_crosspoints() {
     // Input 2 (index 1) fed A1 and A2; the click takes it off A2 and leaves input 3 alone.
     assert_eq!(view.inputs[1].buses, [0]);
     assert_eq!(view.inputs[SPOTIFY].buses, [1]);
+}
+
+#[test]
+fn a_label_names_the_strip_and_the_matrix_row() {
+    let mut harness = harness();
+    harness.state_mut().label = Some((SPOTIFY, "Musik".to_owned()));
+    harness.run_steps(2);
+    harness.get_by_label("Musik").hover();
+    harness.get_by_label("Musik mute").click();
+    assert!(desk_view(&mut harness).inputs[SPOTIFY].muted);
+    assert!(harness.query_by_label("Spotify.exe mute").is_none());
+
+    harness.state_mut().state.tab = Tab::Matrix;
+    harness.run_steps(2);
+    harness.get_by_label("Musik to A1").click();
+    assert_eq!(desk_view(&mut harness).inputs[SPOTIFY].buses, [0, 1]);
 }
 
 #[test]

@@ -126,7 +126,7 @@ fn first_events() -> Vec<EventView> {
         },
         EventView {
             elapsed: Duration::from_secs(7980),
-            kind: pult_core::view::EventKind::Lost,
+            kind: pult_core::view::EventKind::Back,
             text: "A1 Scarlett 2i2 is back".to_owned(),
         },
     ]

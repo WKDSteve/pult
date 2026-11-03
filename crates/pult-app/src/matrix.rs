@@ -182,7 +182,7 @@ fn row_head(ui: &Ui, rect: Rect, row: usize, input: &InputView) {
     let name_color = if input.present { p.text } else { p.text_faint };
     let name = elided(
         painter,
-        &input.name,
+        input.shown_name(),
         Theme::label_font(12.5),
         name_color,
         NAME_WIDTH - 24.0,

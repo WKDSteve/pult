@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use eframe::egui::{Align2, Color32, CornerRadius, RichText, ScrollArea, Sense, Ui, pos2, vec2};
-use pult_core::view::EventView;
+use pult_core::view::{EventKind, EventView};
 
 use crate::theme::Theme;
 use crate::widgets::badge::{elided, show_elided, tag};
@@ -19,7 +19,7 @@ pub const CAPACITY: usize = 500;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     /// The desk: a device gone, back or refused.
-    Desk,
+    Desk(EventKind),
     /// The console: the desk refused an action (a gain out of range, an input left on no bus).
     Refused,
     /// The console: the desk confirmed an action worth noting (a profile saved).
@@ -35,7 +35,10 @@ impl Source {
     pub fn tag(self) -> (&'static str, Color32) {
         let p = &Theme::current().palette;
         match self {
-            Self::Desk => ("DEVICE", p.text_dim),
+            Self::Desk(EventKind::Lost) => ("GONE", p.mute),
+            Self::Desk(EventKind::Back) => ("BACK", p.ok),
+            Self::Desk(EventKind::Refused) => ("NOT YET", p.solo),
+            Self::Desk(EventKind::Slow) => ("SLOW", p.solo),
             Self::Refused => ("REFUSED", p.mute),
             Self::Done => ("DONE", p.ok),
             Self::Settings => ("SETTINGS", p.mute),
@@ -64,7 +67,7 @@ impl Log {
         self.entries.extend(events.iter().map(|event| Entry {
             elapsed: event.elapsed,
             text: event.text.clone(),
-            source: Source::Desk,
+            source: Source::Desk(event.kind),
         }));
         self.trim();
     }
@@ -218,13 +221,22 @@ mod tests {
         assert_eq!(
             lines,
             [
-                ("a", Source::Desk),
-                ("b", Source::Desk),
+                ("a", Source::Desk(EventKind::Lost)),
+                ("b", Source::Desk(EventKind::Lost)),
                 ("gain 30 dB is outside -60 to 24 dB", Source::Refused),
-                ("c", Source::Desk),
+                ("c", Source::Desk(EventKind::Lost)),
             ]
         );
         assert_eq!(log.last().map(|e| e.text.as_str()), Some("c"));
+    }
+
+    #[test]
+    fn a_device_event_is_tagged_by_its_kind() {
+        let tag = |kind| Source::Desk(kind).tag().0;
+        assert_eq!(tag(EventKind::Lost), "GONE");
+        assert_eq!(tag(EventKind::Back), "BACK");
+        assert_eq!(tag(EventKind::Refused), "NOT YET");
+        assert_eq!(tag(EventKind::Slow), "SLOW");
     }
 
     #[test]
