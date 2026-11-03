@@ -31,6 +31,10 @@ pub struct InputSnapshot {
     pub resyncs: u64,
     /// Frames skipped once after settling.
     pub aligned: u64,
+    /// Whether the device is playing.
+    pub present: bool,
+    /// Times the device was lost so far.
+    pub outages: u64,
 }
 
 /// One bus at one moment.
@@ -40,6 +44,10 @@ pub struct BusSnapshot {
     pub peak: f32,
     /// Clipped or invalid output samples so far.
     pub clipped: u64,
+    /// Whether the device is playing.
+    pub present: bool,
+    /// Times the device was lost so far.
+    pub outages: u64,
 }
 
 /// The whole route at one moment.
@@ -62,21 +70,24 @@ impl Snapshot {
             .inputs
             .iter()
             .map(|input| {
-                input
-                    .routes
-                    .iter()
-                    .fold(InputSnapshot::default(), |sum, route| {
-                        let stats = &route.stats;
-                        InputSnapshot {
-                            peak: sum.peak.max(stats.peak.take()),
-                            underruns: sum.underruns + stats.underruns.get(),
-                            lost: sum.lost + stats.dropped_at_capture.get(),
-                            drops: sum.drops + stats.drops.get(),
-                            repeats: sum.repeats + stats.repeats.get(),
-                            resyncs: sum.resyncs + stats.resyncs.get(),
-                            aligned: sum.aligned + stats.aligned.get(),
-                        }
-                    })
+                let start = InputSnapshot {
+                    present: input.present,
+                    outages: input.outages,
+                    ..InputSnapshot::default()
+                };
+                input.routes.iter().fold(start, |sum, route| {
+                    let stats = &route.stats;
+                    InputSnapshot {
+                        peak: sum.peak.max(stats.peak.take()),
+                        underruns: sum.underruns + stats.underruns.get(),
+                        lost: sum.lost + stats.dropped_at_capture.get(),
+                        drops: sum.drops + stats.drops.get(),
+                        repeats: sum.repeats + stats.repeats.get(),
+                        resyncs: sum.resyncs + stats.resyncs.get(),
+                        aligned: sum.aligned + stats.aligned.get(),
+                        ..sum
+                    }
+                })
             })
             .collect();
         let buses = running
@@ -85,6 +96,8 @@ impl Snapshot {
             .map(|bus| BusSnapshot {
                 peak: bus.handle.stats.peak.take(),
                 clipped: bus.handle.stats.clipped.get(),
+                present: bus.present,
+                outages: bus.outages,
             })
             .collect();
         Self {
@@ -111,7 +124,7 @@ impl Snapshot {
 }
 
 /// `h:mm:ss`.
-fn clock(elapsed: Duration) -> String {
+pub fn clock(elapsed: Duration) -> String {
     let s = elapsed.as_secs();
     format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
 }
@@ -125,6 +138,15 @@ fn db(linear: f32) -> String {
     }
 }
 
+/// The level column of the status line: `-18.3 dB`, or `missing` while the device is gone.
+fn level(present: bool, peak: f32) -> String {
+    if present {
+        format!("{} dB", db(peak))
+    } else {
+        format!("{:>9}", "missing")
+    }
+}
+
 /// The live status line: run time; per input level, dropouts, frames lost at capture and
 /// the drift fixes (dropped / repeated frames, hard resyncs); then each bus by `bus_names`.
 pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
@@ -133,9 +155,9 @@ pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
     for (i, input) in snap.inputs.iter().enumerate() {
         let _ = write!(
             line,
-            " [{}] {} dB out {} lost {} fix -{}/+{}/{}",
+            " [{}] {} out {} lost {} fix -{}/+{}/{}",
             i + 1,
-            db(input.peak),
+            level(input.present, input.peak),
             input.underruns,
             input.lost,
             input.drops,
@@ -146,8 +168,8 @@ pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
     for (bus, name) in snap.buses.iter().zip(bus_names) {
         let _ = write!(
             line,
-            " | {name} {} dB clipped {}",
-            db(bus.peak),
+            " | {name} {} clipped {}",
+            level(bus.present, bus.peak),
             bus.clipped
         );
     }
@@ -169,13 +191,17 @@ pub fn csv_header(inputs: usize, bus_names: &[String]) -> String {
     let mut line = "elapsed_s".to_owned();
     for i in 1..=inputs {
         for field in [
-            "peak_db", "dropouts", "lost", "drops", "repeats", "resyncs", "aligned",
+            "peak_db", "dropouts", "lost", "drops", "repeats", "resyncs", "aligned", "present",
+            "outages",
         ] {
             let _ = write!(line, ",in{i}_{field}");
         }
     }
     for name in bus_names {
-        let _ = write!(line, ",{name}_peak_db,{name}_clipped");
+        let _ = write!(
+            line,
+            ",{name}_peak_db,{name}_clipped,{name}_present,{name}_outages"
+        );
     }
     line.push_str(",glitches");
     line
@@ -187,18 +213,27 @@ pub fn csv_row(snap: &Snapshot) -> String {
     for input in &snap.inputs {
         let _ = write!(
             line,
-            ",{},{},{},{},{},{},{}",
+            ",{},{},{},{},{},{},{},{},{}",
             csv_db(input.peak),
             input.underruns,
             input.lost,
             input.drops,
             input.repeats,
             input.resyncs,
-            input.aligned
+            input.aligned,
+            u8::from(input.present),
+            input.outages
         );
     }
     for bus in &snap.buses {
-        let _ = write!(line, ",{},{}", csv_db(bus.peak), bus.clipped);
+        let _ = write!(
+            line,
+            ",{},{},{},{}",
+            csv_db(bus.peak),
+            bus.clipped,
+            u8::from(bus.present),
+            bus.outages
+        );
     }
     let _ = write!(line, ",{}", snap.glitches);
     line
@@ -248,9 +283,15 @@ mod tests {
             inputs: vec![InputSnapshot {
                 peak,
                 drops,
+                present: true,
                 ..InputSnapshot::default()
             }],
-            buses: vec![BusSnapshot { peak, clipped: 0 }],
+            buses: vec![BusSnapshot {
+                peak,
+                clipped: 0,
+                present: true,
+                outages: 0,
+            }],
             glitches: 1,
         }
     }
@@ -265,6 +306,8 @@ mod tests {
         two.buses.push(BusSnapshot {
             peak: 0.0,
             clipped: 4,
+            present: true,
+            outages: 0,
         });
         let line = status_line(&two, &names(&["A1", "B1"]));
         assert!(line.starts_with("1:02:03 [1]   -6.0 dB"), "{line}");
@@ -276,6 +319,16 @@ mod tests {
     }
 
     #[test]
+    fn status_line_marks_missing_devices() {
+        let mut gone = snap(0, 0.5, 0);
+        gone.inputs[0].present = false;
+        gone.buses[0].present = false;
+        let line = status_line(&gone, &names(&["A1"]));
+        assert!(line.starts_with("0:00:00 [1]   missing out 0"), "{line}");
+        assert!(line.contains(" | A1   missing clipped 0 |"), "{line}");
+    }
+
+    #[test]
     fn csv_header_and_row_have_the_same_columns() {
         let mut two = snap(10_000, 0.0, 3);
         two.inputs.push(InputSnapshot::default());
@@ -283,8 +336,14 @@ mod tests {
         let row = csv_row(&two);
         assert_eq!(header.split(',').count(), row.split(',').count());
         assert!(header.starts_with("elapsed_s,in1_peak_db,in1_dropouts"));
-        assert!(header.ends_with(",in2_aligned,A1_peak_db,A1_clipped,glitches"));
-        assert_eq!(row, "10.0,-inf,0,0,3,0,0,0,-inf,0,0,0,0,0,0,-inf,0,1");
+        assert!(header.ends_with(
+            ",in2_aligned,in2_present,in2_outages,A1_peak_db,A1_clipped,A1_present,A1_outages,\
+             glitches"
+        ));
+        assert_eq!(
+            row,
+            "10.0,-inf,0,0,3,0,0,0,1,0,-inf,0,0,0,0,0,0,0,0,-inf,0,1,0,1"
+        );
     }
 
     #[test]
@@ -307,6 +366,6 @@ mod tests {
         std::fs::remove_file(&path).expect("remove log");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1], "10.0,-6.0,0,0,2,0,0,0,-6.0,0,1");
+        assert_eq!(lines[1], "10.0,-6.0,0,0,2,0,0,0,1,0,-6.0,0,1,0,1");
     }
 }

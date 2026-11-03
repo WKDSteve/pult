@@ -88,12 +88,14 @@ fn start_run(spec: &RunSpec) -> Result<(), String> {
         ),
         None => None,
     };
-    let running = pult_engine::start(&route).map_err(|e| e.to_string())?;
-    run(&running, log, bus_names)
+    let mut running = pult_engine::start(&route).map_err(|e| e.to_string())?;
+    run(&mut running, log, bus_names);
+    Ok(())
 }
 
-/// Shows levels until Enter is pressed or a device fails.
-fn run(running: &Running, log: Option<Log>, bus_names: Vec<String>) -> Result<(), String> {
+/// Shows levels until Enter is pressed. A device that disappears is reported and taken
+/// back when it returns; the run goes on.
+fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
     println!(
         "Routing at {} Hz; press Enter to stop.",
         running.sample_rate
@@ -110,9 +112,9 @@ fn run(running: &Running, log: Option<Log>, bus_names: Vec<String>) -> Result<()
         println!("  [{}] {} -> {}", i + 1, input.name, buses.join(", "));
     }
     let mut recorder = Recorder::new(log, bus_names);
-    let result = wait_for_enter(|| running.fault(), Some(&mut || recorder.tick(running)));
+    // Nothing ends a run but Enter: lost devices are the supervisor's business.
+    let _ = wait_for_enter(|| None, Some(&mut || recorder.tick(running)));
     recorder.finish(running);
-    result
 }
 
 /// Takes the snapshots of a run and writes every [`LOG_INTERVAL`] a log row with the
@@ -136,9 +138,16 @@ impl Recorder {
         }
     }
 
-    /// Takes a snapshot, logs when an interval is full, and returns the status line.
-    fn tick(&mut self, running: &Running) -> String {
-        let snap = Snapshot::take(running, self.start.elapsed());
+    /// Checks the devices, takes a snapshot, logs when an interval is full, and returns
+    /// what changed (one line each) and the status line.
+    fn tick(&mut self, running: &mut Running) -> Tick {
+        let elapsed = self.start.elapsed();
+        let notes = running
+            .supervise()
+            .iter()
+            .map(|change| format!("{} {change}", monitor::clock(elapsed)))
+            .collect();
+        let snap = Snapshot::take(running, elapsed);
         let merged = self
             .interval
             .as_ref()
@@ -152,7 +161,10 @@ impl Recorder {
         } else {
             self.interval = Some(merged);
         }
-        monitor::status_line(&snap, &self.bus_names)
+        Tick {
+            notes,
+            line: monitor::status_line(&snap, &self.bus_names),
+        }
     }
 
     /// Writes the rest of the last interval.
@@ -176,6 +188,12 @@ impl Recorder {
     }
 }
 
+/// What one refresh shows: lines that stay (devices lost or back) and the live status line.
+struct Tick {
+    notes: Vec<String>,
+    line: String,
+}
+
 /// Keeps the tone playing until Enter is pressed or the device fails.
 fn tone(playing: &Tone, spec: &ToneSpec) -> Result<(), String> {
     println!(
@@ -186,11 +204,11 @@ fn tone(playing: &Tone, spec: &ToneSpec) -> Result<(), String> {
 }
 
 /// Blocks until a line arrives on stdin or `fault` reports an error. `status` runs every
-/// interval; its line is shown live when stdout is a terminal, and the last one is printed
-/// at the end.
+/// interval; its notes are printed as lines of their own, its status line is shown live
+/// when stdout is a terminal, and the last one is printed at the end.
 fn wait_for_enter(
     fault: impl Fn() -> Option<String>,
-    mut status: Option<&mut dyn FnMut() -> String>,
+    mut status: Option<&mut dyn FnMut() -> Tick>,
 ) -> Result<(), String> {
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -211,11 +229,20 @@ fn wait_for_enter(
             return Err(format!("stopped, {fault}"));
         }
         if let Some(status) = status.as_mut() {
-            last = status();
+            let tick = status();
+            last = tick.line;
+            // A line wider than the terminal wraps, and `\r` then returns only to the start
+            // of its last row: every refresh would stack up. Fit it to the width instead.
+            let width = terminal_size::terminal_size().map_or(80, |(w, _)| usize::from(w.0));
+            for note in &tick.notes {
+                if live {
+                    // Padded to cover the status line it replaces; a long note may wrap.
+                    println!("\r{note:<columns$}", columns = width.saturating_sub(1));
+                } else {
+                    println!("{note}");
+                }
+            }
             if live {
-                // A line wider than the terminal wraps, and `\r` then returns only to the start
-                // of its last row: every refresh would stack up. Fit it to the width instead.
-                let width = terminal_size::terminal_size().map_or(80, |(w, _)| usize::from(w.0));
                 print!("\r{}", fit(&last, width));
                 let _ = io::stdout().flush();
             }

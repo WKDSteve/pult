@@ -6,6 +6,10 @@
 //! ring per bus, each with its own drift control (every output runs on its own clock), and
 //! shares one set of [`InputControls`] across them. Control and statistics go through an
 //! [`InputHandle`] and a [`BusHandle`] the control thread keeps.
+//!
+//! While a bus's output device is gone, [`Mixer::suspend`] closes its rings: the captures
+//! discard into them instead of counting a full ring as lost frames. [`Mixer::resume`]
+//! empties and reopens them for the device's return.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -142,6 +146,7 @@ pub fn connect_with(
     assert!(config.channels > 0, "an input needs at least one channel");
     let samples = config.capacity * config.channels;
     let (producer, consumer) = RingBuffer::new(samples);
+    let open = Arc::new(AtomicBool::new(true));
     let handle = InputHandle {
         controls,
         stats: Arc::new(InputStats::default()),
@@ -149,11 +154,13 @@ pub fn connect_with(
     let capture = Capture {
         producer,
         channels: config.channels,
+        open: Arc::clone(&open),
         stats: Arc::clone(&handle.stats),
     };
     let input = MixerInput {
         consumer,
         channels: config.channels,
+        open,
         drift: DriftControl::new(config.target, config.band)
             .smoothed(config.smoothing)
             .settling(config.settle),
@@ -169,12 +176,24 @@ pub fn connect_with(
 pub struct Capture {
     producer: Producer<f32>,
     channels: usize,
+    /// Closed while the ring's bus has no device; then `push` discards.
+    open: Arc<AtomicBool>,
     stats: Arc<InputStats>,
 }
 
 impl Capture {
-    /// Stores the whole frames of `data` that fit; the rest is counted as dropped.
+    /// Channels per frame this ring was made for.
+    #[must_use]
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Stores the whole frames of `data` that fit; the rest is counted as dropped. A closed
+    /// ring discards everything without counting.
     pub fn push(&mut self, data: &[f32]) {
+        if !self.open.load(Ordering::Acquire) {
+            return;
+        }
         let frames = data.len() / self.channels;
         let stored = frames.min(self.producer.slots() / self.channels);
         if stored < frames {
@@ -192,6 +211,7 @@ impl Capture {
 pub struct MixerInput {
     consumer: Consumer<f32>,
     channels: usize,
+    open: Arc<AtomicBool>,
     drift: DriftControl,
     scratch: Vec<f32>,
     controls: Arc<InputControls>,
@@ -199,6 +219,15 @@ pub struct MixerInput {
 }
 
 impl MixerInput {
+    /// Empties the ring and lets the drift control prime again.
+    fn restart(&mut self) {
+        let stale = self.consumer.slots();
+        if let Ok(chunk) = self.consumer.read_chunk(stale) {
+            chunk.commit_all();
+        }
+        self.drift.reset();
+    }
+
     /// Reads `frames` frames per the drift plan and adds them into `out`.
     fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize) {
         let ch = self.channels;
@@ -272,6 +301,24 @@ impl Mixer {
             stats: Arc::clone(&handle.stats),
         };
         (mixer, handle)
+    }
+
+    /// Closes the rings of all inputs: their captures discard until [`Self::resume`]. For
+    /// a bus whose output device is gone and whose mixer therefore no longer drains them.
+    pub fn suspend(&mut self) {
+        for input in &self.inputs {
+            input.open.store(false, Ordering::Release);
+        }
+    }
+
+    /// Empties the rings, lets every input prime again and reopens them, for an output with
+    /// `out_channels` channels (a device may come back with another layout).
+    pub fn resume(&mut self, out_channels: usize) {
+        self.out_channels = out_channels;
+        for input in &mut self.inputs {
+            input.restart();
+            input.open.store(true, Ordering::Release);
+        }
     }
 
     /// Overwrites `out` (interleaved) with the mix of all inputs times the bus gain, clipped
@@ -395,6 +442,26 @@ mod tests {
         bus.controls.muted.store(false, Ordering::Relaxed);
         mixer.process(&mut out);
         assert_eq!(handle.stats.underruns.get(), 1);
+    }
+
+    #[test]
+    fn a_suspended_bus_discards_without_counting_and_resumes_fresh() {
+        let (mut capture, input, handle) = connect(config(1, 1));
+        let (mut mixer, _) = Mixer::new(vec![input], 1);
+        capture.push(&[0.1, 0.2, 0.3]);
+        mixer.suspend();
+        capture.push(&[0.9; 100]);
+        assert_eq!(handle.stats.dropped_at_capture.get(), 0);
+
+        mixer.resume(2);
+        // The stale frames are gone: priming needs target + needed frames again.
+        let mut out = [9.0; 2];
+        mixer.process(&mut out);
+        assert_eq!(out, [0.0; 2]);
+        capture.push(&[0.5, 0.6]);
+        mixer.process(&mut out);
+        assert_eq!(out, [0.5, 0.5]);
+        assert_eq!(capture.channels(), 1);
     }
 
     #[test]

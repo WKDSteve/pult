@@ -113,6 +113,12 @@ impl DriftControl {
         2 * self.target + 4 * self.band
     }
 
+    /// Starts over as if new: the next plans prime and settle again. For a ring that was
+    /// emptied while its output was gone.
+    pub fn reset(&mut self) {
+        self.primed = false;
+    }
+
     /// The plan for a callback that needs `needed` frames while `available` are buffered.
     pub fn plan(&mut self, available: usize, needed: usize) -> (Plan, Event) {
         if !self.primed {
@@ -236,6 +242,16 @@ mod tests {
         assert_eq!(event, Event::Underrun);
         assert_eq!((plan.read, plan.silence), (4, 6));
         assert_eq!(control.plan(50, 10).1, Event::Priming);
+    }
+
+    #[test]
+    fn reset_primes_and_settles_again() {
+        let mut control = DriftControl::new(100, 25).settling(40);
+        control.plan(110, 10);
+        control.reset();
+        assert_eq!(control.plan(50, 10).1, Event::Priming);
+        // Settling again: far above the band, but within the hard limit, nothing is fixed.
+        assert_eq!(control.plan(200, 10).1, Event::None);
     }
 
     #[test]

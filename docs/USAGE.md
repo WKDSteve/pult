@@ -55,6 +55,7 @@ pult zeigt eine Statuszeile und hört bei Enter auf:
 | `fix -a/+b/c` | gegen Takt-Drift verworfene (`a`) und wiederholte (`b`) Einzel-Frames, harte Resyncs (`c`); der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
 | `A1 … dB` / `clipped` | je Bus: Spitzenpegel der Summe nach dem Bus-Gain, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit `--to` heißt der eine Bus `A1` |
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
+| `missing` | statt des Pegels: das Gerät ist gerade weg (siehe unten, Geräte ab- und anstecken) |
 
 Die Lautstärke regelt weiter der Windows-Lautstärkeregler (er steuert `CABLE Input`) und der Verstärker. Solange pult nicht läuft, bleibt es still, weil alle Programme ins Kabel spielen. Zurück geht es, indem man das Standardgerät wieder auf das Scarlett stellt.
 
@@ -74,7 +75,26 @@ Nach dem Start (und nach jedem Aussetzer) misst pult zwei Sekunden lang, wo sich
 `aligned` zählt diese übersprungenen Frames; typisch sind einige hundert (ein paar Millisekunden).
 
 Geht ein Eingang auf mehrere Busse, zählen Statuszeile und Protokoll seine Werte über alle Busse zusammen. Je Bus gibt
-es die Spalten `<Bus>_peak_db` und `<Bus>_clipped`.
+es die Spalten `<Bus>_peak_db` und `<Bus>_clipped`. Für jedes Gerät stehen außerdem `present` (1 spielt, 0 ist weg) und
+`outages` (wie oft es bisher weg war) im Protokoll.
+
+### Geräte ab- und anstecken
+
+Verschwindet ein Gerät während des Laufs (USB gezogen, in Windows deaktiviert, Treiber neu gestartet), läuft pult weiter:
+
+```
+0:41:07 A1 Lautsprecher (2- Focusrite USB Audio) is gone (…); the rest plays on, it is taken back when it returns
+0:41:31 A1 Lautsprecher (3- Focusrite USB Audio) is back
+```
+
+- Die übrigen Eingänge und Busse spielen ohne Unterbrechung weiter. Fehlt ein Eingang, ist er auf seinen Bussen still;
+  fehlt ein Bus, hört man ihn nicht, seine Eingänge laufen auf den anderen Bussen weiter.
+- pult sucht das Gerät jede Sekunde unter dem Namen aus `--from`, `--to` oder dem Profil. Deshalb findet es das Gerät auch
+  dann wieder, wenn Windows die Nummer im Namen ändert (`2- Focusrite` wird zu `3- Focusrite`).
+- Kommt das Gerät mit einer anderen Abtastrate zurück, meldet pult das einmal und wartet, bis die Rate wieder stimmt. Ein
+  Eingang muss mit derselben Kanalzahl zurückkommen, sonst hilft nur ein Neustart von pult.
+- Auch ein Gerät, das ohne Fehlermeldung einfach keine Daten mehr liefert, gilt nach zwei Sekunden als weg.
+- Beim Start müssen alle Geräte da sein; fehlt eines, startet pult nicht.
 
 ### Mehr Eingänge mischen
 
@@ -147,7 +167,8 @@ pult run --profile meinprofil.toml --log abend.csv
 | `"…" matches several devices: …` | einen längeren, eindeutigen Teil des Namens nehmen |
 | `… runs at 44100 Hz but … at 48000 Hz` | Abtastraten angleichen (Schritt 1.2) |
 | `… uses the sample format …` | das Gerät meldet im Shared Mode kein 32-Bit-Float; anderes Gerät oder Treiber |
-| `stopped, …: …` | ein Gerät ist während des Laufs verschwunden (USB gezogen); neu starten |
+| `… is there but does not open yet: …` | ein verlorenes Gerät ist wieder da, passt aber nicht (Abtastrate, Format); pult versucht es weiter |
+| `… came back with … channels instead of …` | ein Eingang kam mit anderer Kanalzahl zurück; pult neu starten |
 | `buses … both play on …` | zwei Busse eines Profils nennen dasselbe Ausgangsgerät |
 | `… feeds bus "…", which is not defined` | im Profil fehlt ein `[[bus]]` mit diesem Namen, oder er ist anders geschrieben |
 | `unknown field …` | Tippfehler im Profil; die Meldung nennt Zeile und erlaubte Schlüssel |

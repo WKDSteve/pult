@@ -7,24 +7,28 @@
 //! device callbacks only move samples through the rings and mixers of `pult-core`;
 //! `assert_no_alloc` guards them, so a debug build with the checking allocator aborts on
 //! any allocation inside a callback.
+//!
+//! A device that disappears while a route runs (unplugged, disabled) does not end the
+//! route: [`Running::supervise`] takes its stream out, the others play on, and the device
+//! is opened again on the same rings once it is back (see `slot`).
 
 pub mod profile;
+mod slot;
 
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::Instant;
 
 use assert_no_alloc::assert_no_alloc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, ErrorKind, SampleFormat, SupportedStreamConfig};
+use cpal::{Device, SampleFormat, SupportedStreamConfig};
 use pult_core::{
-    BusHandle, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer, MixerInput,
-    SelectError, Sine, connect_with, db_to_linear, select,
+    BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
+    MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
 };
 
-/// How long a backend may take to open a stream.
-const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+use slot::{Feed, Health, OPEN_TIMEOUT, Slot, fault_recorder};
 
 /// Weight of one callback in the drift control's level average: with 10 ms callbacks the
 /// average spans about 1.3 s, long enough to flatten the block jitter of virtual cables.
@@ -90,6 +94,20 @@ pub enum Error {
         /// Its rate in Hz.
         reference_rate: u32,
     },
+    /// An input device came back with another channel count than its rings were made for.
+    LayoutChanged {
+        /// The device.
+        device: String,
+        /// Its channels now.
+        channels: usize,
+        /// Its channels when the route started.
+        expected: usize,
+    },
+    /// A lost stream did not give its rings back, so the device cannot be opened again.
+    Stranded {
+        /// The device.
+        device: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -111,6 +129,19 @@ impl fmt::Display for Error {
                 f,
                 "{device} runs at {rate} Hz but {reference} at {reference_rate} Hz; set both to \
                  the same rate (Sound settings, device properties, Advanced, default format)"
+            ),
+            Self::LayoutChanged {
+                device,
+                channels,
+                expected,
+            } => write!(
+                f,
+                "{device} came back with {channels} channels instead of {expected}; restart \
+                 pult to use it"
+            ),
+            Self::Stranded { device } => write!(
+                f,
+                "{device}: its stream did not hand back its buffers; restart pult to use it"
             ),
         }
     }
@@ -311,12 +342,16 @@ pub struct RunningRoute {
 /// One input of a running route.
 #[derive(Debug)]
 pub struct RunningInput {
-    /// The device's full name.
+    /// The device's full name (as last opened).
     pub name: String,
     /// Gain, mute and pan, for all its routes.
     pub controls: Arc<InputControls>,
     /// One per bus it feeds, in the order of the spec.
     pub routes: Vec<RunningRoute>,
+    /// Whether the device is playing; false while it is gone.
+    pub present: bool,
+    /// Times the device was lost so far.
+    pub outages: u64,
 }
 
 /// One bus of a running route.
@@ -324,22 +359,67 @@ pub struct RunningInput {
 pub struct RunningBus {
     /// The bus's short name.
     pub name: String,
-    /// The output device's full name.
+    /// The output device's full name (as last opened).
     pub device: String,
     /// Gain, mute and statistics.
     pub handle: BusHandle,
+    /// Whether the device is playing; false while it is gone.
+    pub present: bool,
+    /// Times the device was lost so far.
+    pub outages: u64,
+}
+
+/// What [`Running::supervise`] did to a device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Change {
+    /// The device stopped; the route plays on without it and looks for it every second.
+    Lost {
+        /// The input (`[1] CABLE Output`) or bus (`A1 Focusrite`).
+        label: String,
+        /// The audio system's error, or that its callbacks stopped.
+        reason: String,
+    },
+    /// The device is there again but cannot be opened yet; reported once per reason.
+    Refused {
+        /// The input or bus.
+        label: String,
+        /// Why not.
+        reason: String,
+    },
+    /// The device plays again.
+    Back {
+        /// The input or bus, with the device's name now.
+        label: String,
+    },
+}
+
+impl fmt::Display for Change {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lost { label, reason } => write!(
+                f,
+                "{label} is gone ({reason}); the rest plays on, it is taken back when it returns"
+            ),
+            Self::Refused { label, reason } => {
+                write!(f, "{label} is there but does not open yet: {reason}")
+            }
+            Self::Back { label } => write!(f, "{label} is back"),
+        }
+    }
 }
 
 /// A started route; dropping it stops all streams.
 pub struct Running {
-    _streams: Vec<cpal::Stream>,
+    host: cpal::Host,
+    /// The inputs' slots, then the buses'.
+    slots: Vec<Slot>,
     /// The inputs, in the order of the spec.
     pub inputs: Vec<RunningInput>,
     /// The buses, in the order of the spec.
     pub buses: Vec<RunningBus>,
     /// The route's sample rate in Hz.
     pub sample_rate: u32,
-    faults: Arc<Faults>,
+    xruns: Arc<Counter>,
 }
 
 impl fmt::Debug for Running {
@@ -353,16 +433,97 @@ impl fmt::Debug for Running {
 }
 
 impl Running {
-    /// The first fatal stream error so far (a device unplugged, the format changed), if any.
-    #[must_use]
-    pub fn fault(&self) -> Option<String> {
-        self.faults.first()
-    }
-
     /// Glitches the devices reported (buffer under- or overruns inside the audio system).
     #[must_use]
     pub fn xruns(&self) -> u64 {
-        self.faults.xruns.get()
+        self.xruns.get()
+    }
+
+    /// Checks every device: a stream that failed or stopped calling back is taken out, and
+    /// a lost device is looked for again (each one at most every second). Returns what
+    /// changed; call it a few times a second from the control thread.
+    pub fn supervise(&mut self) -> Vec<Change> {
+        let now = Instant::now();
+        let mut changes = Vec::new();
+        for index in 0..self.slots.len() {
+            if let Some(reason) = self.slots[index].trouble(now) {
+                self.slots[index].close(now);
+                self.mark(index, false);
+                changes.push(Change::Lost {
+                    label: self.label(index),
+                    reason,
+                });
+            } else if self.slots[index].retry_due(now) {
+                match self.reopen(index, now) {
+                    Ok(()) => {
+                        self.mark(index, true);
+                        changes.push(Change::Back {
+                            label: self.label(index),
+                        });
+                    }
+                    // Not plugged in yet: nothing worth a line every second.
+                    Err(Error::Select {
+                        source: SelectError::NotFound { .. },
+                        ..
+                    }) => {}
+                    Err(err) => {
+                        let reason = err.to_string();
+                        if self.slots[index].refused.as_ref() != Some(&reason) {
+                            self.slots[index].refused = Some(reason.clone());
+                            changes.push(Change::Refused {
+                                label: self.label(index),
+                                reason,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        changes
+    }
+
+    /// Looks for the device of a closed slot and opens it, if it fits the route.
+    fn reopen(&mut self, index: usize, now: Instant) -> Result<(), Error> {
+        let slot = &self.slots[index];
+        let (device, name, config) = find_device(&self.host, slot.role, &slot.wanted)?;
+        if config.sample_rate() != self.sample_rate {
+            return Err(Error::RateMismatch {
+                device: name,
+                rate: config.sample_rate(),
+                reference: "the route".into(),
+                reference_rate: self.sample_rate,
+            });
+        }
+        self.slots[index].open(&device, &config, &self.xruns, now)
+    }
+
+    /// Updates the input or bus behind a slot after it closed or opened.
+    fn mark(&mut self, index: usize, present: bool) {
+        let name = self.slots[index].name.clone();
+        let (state, outages) = match index.checked_sub(self.inputs.len()) {
+            None => {
+                let input = &mut self.inputs[index];
+                input.name = name;
+                (&mut input.present, &mut input.outages)
+            }
+            Some(bus) => {
+                let bus = &mut self.buses[bus];
+                bus.device = name;
+                (&mut bus.present, &mut bus.outages)
+            }
+        };
+        if *state && !present {
+            *outages += 1;
+        }
+        *state = present;
+    }
+
+    /// `[1] CABLE Output` or `A1 Focusrite`.
+    fn label(&self, index: usize) -> String {
+        match index.checked_sub(self.inputs.len()) {
+            None => format!("[{}] {}", index + 1, self.inputs[index].name),
+            Some(bus) => format!("{} {}", self.buses[bus].name, self.buses[bus].device),
+        }
     }
 }
 
@@ -382,61 +543,31 @@ fn require_f32(device: &str, config: &SupportedStreamConfig) -> Result<(), Error
     }
 }
 
-/// Stream errors of a route, written by the error callbacks (not the realtime ones).
-#[derive(Debug, Default)]
-struct Faults {
-    fatal: Mutex<Option<String>>,
-    xruns: Counter,
-}
-
-impl Faults {
-    fn first(&self) -> Option<String> {
-        self.fatal
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-/// The error callback of one device's stream. A glitch, a followed device change or a
-/// refused realtime priority keeps the stream running and is not fatal; anything else is.
-fn fault_recorder(faults: &Arc<Faults>, device: &str) -> impl FnMut(cpal::Error) + Send + 'static {
-    let faults = Arc::clone(faults);
-    let device = device.to_owned();
-    move |err| {
-        if err.kind() == ErrorKind::Xrun {
-            faults.xruns.add(1);
-        } else if is_fatal(err.kind()) {
-            let mut slot = faults.fatal.lock().unwrap_or_else(PoisonError::into_inner);
-            slot.get_or_insert_with(|| format!("{device}: {err}"));
-        }
-    }
-}
-
-/// Whether a stream error ends the route.
-fn is_fatal(kind: ErrorKind) -> bool {
-    !matches!(
-        kind,
-        ErrorKind::Xrun | ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied
-    )
-}
-
-/// The output device `wanted` names, its full name and its shared-mode format.
-fn find_output(
+/// The device of `role` that `wanted` names, its full name and its shared-mode format.
+fn find_device(
     host: &cpal::Host,
+    role: Role,
     wanted: &str,
 ) -> Result<(Device, String, SupportedStreamConfig), Error> {
-    let mut outputs: Vec<Device> = host
-        .output_devices()
-        .map_err(audio("listing output devices"))?
-        .collect();
-    let sink = outputs.swap_remove(pick(&outputs, wanted, Role::Output)?);
-    let name = sink.to_string();
-    let config = sink
-        .default_output_config()
-        .map_err(audio(format!("reading the format of {name}")))?;
+    let mut devices: Vec<Device> = match role {
+        Role::Input => host
+            .input_devices()
+            .map_err(audio("listing input devices"))?
+            .collect(),
+        Role::Output => host
+            .output_devices()
+            .map_err(audio("listing output devices"))?
+            .collect(),
+    };
+    let device = devices.swap_remove(pick(&devices, wanted, role)?);
+    let name = device.to_string();
+    let config = match role {
+        Role::Input => device.default_input_config(),
+        Role::Output => device.default_output_config(),
+    }
+    .map_err(audio(format!("reading the format of {name}")))?;
     require_f32(&name, &config)?;
-    Ok((sink, name, config))
+    Ok((device, name, config))
 }
 
 /// A playing test tone; dropping it stops the tone.
@@ -446,7 +577,7 @@ pub struct Tone {
     pub sink: String,
     /// The tone's sample rate in Hz.
     pub sample_rate: u32,
-    faults: Arc<Faults>,
+    health: Arc<Health>,
 }
 
 impl fmt::Debug for Tone {
@@ -462,7 +593,9 @@ impl Tone {
     /// The first fatal stream error so far, if any.
     #[must_use]
     pub fn fault(&self) -> Option<String> {
-        self.faults.first()
+        self.health
+            .fatal()
+            .map(|err| format!("{}: {err}", self.sink))
     }
 }
 
@@ -474,8 +607,8 @@ impl Tone {
 /// stream cannot be opened or started.
 pub fn play_tone(sink: &str, frequency: f32, gain_db: f32) -> Result<Tone, Error> {
     let host = cpal::default_host();
-    let faults = Arc::new(Faults::default());
-    let (device, name, config) = find_output(&host, sink)?;
+    let health = Arc::new(Health::default());
+    let (device, name, config) = find_device(&host, Role::Output, sink)?;
     let sample_rate = config.sample_rate();
     let channels = usize::from(config.channels());
     let mut oscillator = Sine::new(frequency, sample_rate, db_to_linear(gain_db));
@@ -483,7 +616,7 @@ pub fn play_tone(sink: &str, frequency: f32, gain_db: f32) -> Result<Tone, Error
         .build_output_stream::<f32, _, _>(
             config.config(),
             move |data, _| assert_no_alloc(|| oscillator.fill(data, channels)),
-            fault_recorder(&faults, &name),
+            fault_recorder(&health, &Arc::new(Counter::default())),
             Some(OPEN_TIMEOUT),
         )
         .map_err(audio(format!("opening {name}")))?;
@@ -492,7 +625,7 @@ pub fn play_tone(sink: &str, frequency: f32, gain_db: f32) -> Result<Tone, Error
         _stream: stream,
         sink: name,
         sample_rate,
-        faults,
+        health,
     })
 }
 
@@ -505,8 +638,8 @@ fn buffering(sample_rate: u32, latency_ms: u32) -> (usize, usize, usize) {
     (target, band, capacity)
 }
 
-/// An opened output device of a bus, before its mixer exists.
-struct OpenBus {
+/// The output device of a bus, found before its mixer exists.
+struct FoundBus {
     device: Device,
     name: String,
     config: SupportedStreamConfig,
@@ -514,17 +647,17 @@ struct OpenBus {
 
 /// Finds the output device of every bus: each device at most once, all at the rate of the
 /// first.
-fn open_buses(host: &cpal::Host, spec: &RouteSpec) -> Result<Vec<OpenBus>, Error> {
-    let mut open_buses: Vec<OpenBus> = Vec::with_capacity(spec.buses.len());
+fn find_buses(host: &cpal::Host, spec: &RouteSpec) -> Result<Vec<FoundBus>, Error> {
+    let mut found: Vec<FoundBus> = Vec::with_capacity(spec.buses.len());
     for bus in &spec.buses {
-        let (device, name, config) = find_output(host, &bus.device)?;
-        if let Some(other) = open_buses.iter().position(|b| b.name == name) {
+        let (device, name, config) = find_device(host, Role::Output, &bus.device)?;
+        if let Some(other) = found.iter().position(|b| b.name == name) {
             return Err(Error::InvalidRoute(format!(
                 "buses {} and {} both play on {name}",
                 spec.buses[other].name, bus.name
             )));
         }
-        if let Some(first) = open_buses.first()
+        if let Some(first) = found.first()
             && config.sample_rate() != first.config.sample_rate()
         {
             return Err(Error::RateMismatch {
@@ -534,18 +667,18 @@ fn open_buses(host: &cpal::Host, spec: &RouteSpec) -> Result<Vec<OpenBus>, Error
                 reference_rate: first.config.sample_rate(),
             });
         }
-        open_buses.push(OpenBus {
+        found.push(FoundBus {
             device,
             name,
             config,
         });
     }
-    Ok(open_buses)
+    Ok(found)
 }
 
 /// Where an input's rings go and how they buffer.
 struct Rings<'a> {
-    /// The mixer inputs of every bus, filled as inputs open.
+    /// The mixer inputs of every bus, filled as inputs are made.
     bus_inputs: &'a mut [Vec<MixerInput>],
     target: usize,
     band: usize,
@@ -555,20 +688,21 @@ struct Rings<'a> {
     reference: &'a str,
 }
 
-/// Opens the stream of one input: one ring per bus it feeds, all filled by one capture
-/// callback.
-fn open_input(
-    devices: &[Device],
+/// An input whose device is found and whose rings exist, before its stream opens.
+struct FoundInput {
+    device: Device,
+    config: SupportedStreamConfig,
+    captures: Vec<Capture>,
+    running: RunningInput,
+}
+
+/// Finds the device of one input and makes its rings: one per bus it feeds.
+fn find_input(
+    host: &cpal::Host,
     input: &InputSpec,
     rings: &mut Rings<'_>,
-    faults: &Arc<Faults>,
-) -> Result<(cpal::Stream, RunningInput), Error> {
-    let device = &devices[pick(devices, &input.device, Role::Input)?];
-    let name = device.to_string();
-    let config = device
-        .default_input_config()
-        .map_err(audio(format!("reading the format of {name}")))?;
-    require_f32(&name, &config)?;
+) -> Result<FoundInput, Error> {
+    let (device, name, config) = find_device(host, Role::Input, &input.device)?;
     if config.sample_rate() != rings.sample_rate {
         return Err(Error::RateMismatch {
             device: name,
@@ -600,26 +734,18 @@ fn open_input(
             stats: handle.stats,
         });
     }
-    let stream = device
-        .build_input_stream::<f32, _, _>(
-            config.config(),
-            move |data, _| {
-                assert_no_alloc(|| {
-                    for capture in &mut captures {
-                        capture.push(data);
-                    }
-                });
-            },
-            fault_recorder(faults, &name),
-            Some(OPEN_TIMEOUT),
-        )
-        .map_err(audio(format!("opening {name}")))?;
-    let running = RunningInput {
-        name,
-        controls,
-        routes,
-    };
-    Ok((stream, running))
+    Ok(FoundInput {
+        device,
+        config,
+        captures,
+        running: RunningInput {
+            name,
+            controls,
+            routes,
+            present: false,
+            outages: 0,
+        },
+    })
 }
 
 /// Opens every device of `spec` and starts mixing.
@@ -631,18 +757,12 @@ fn open_input(
 pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     spec.validate()?;
     let host = cpal::default_host();
-    let faults = Arc::new(Faults::default());
+    let now = Instant::now();
 
-    let open_buses = open_buses(&host, spec)?;
-    let sample_rate = open_buses[0].config.sample_rate();
+    let found_buses = find_buses(&host, spec)?;
+    let sample_rate = found_buses[0].config.sample_rate();
     let (target, band, capacity) = buffering(sample_rate, spec.latency_ms);
 
-    let devices: Vec<Device> = host
-        .input_devices()
-        .map_err(audio("listing input devices"))?
-        .collect();
-    let mut streams = Vec::with_capacity(spec.inputs.len() + spec.buses.len());
-    let mut stream_names = Vec::with_capacity(streams.capacity());
     let mut bus_inputs: Vec<Vec<MixerInput>> = spec.buses.iter().map(|_| Vec::new()).collect();
     let mut rings = Rings {
         bus_inputs: &mut bus_inputs,
@@ -650,50 +770,52 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         band,
         capacity,
         sample_rate,
-        reference: &open_buses[0].name,
+        reference: &found_buses[0].name,
     };
-    let mut inputs = Vec::with_capacity(spec.inputs.len());
+    let mut found_inputs = Vec::with_capacity(spec.inputs.len());
     for input in &spec.inputs {
-        let (stream, running) = open_input(&devices, input, &mut rings, &faults)?;
-        streams.push(stream);
-        stream_names.push(running.name.clone());
-        inputs.push(running);
+        found_inputs.push(find_input(&host, input, &mut rings)?);
     }
 
+    let mut slots = Vec::with_capacity(spec.inputs.len() + spec.buses.len());
+    let mut opening = Vec::with_capacity(slots.capacity());
+    let mut inputs = Vec::with_capacity(spec.inputs.len());
+    for (input, found) in spec.inputs.iter().zip(found_inputs) {
+        let feed = Feed::Input(found.captures);
+        slots.push(Slot::new(Role::Input, &input.device, feed, now));
+        opening.push((found.device, found.config));
+        inputs.push(found.running);
+    }
     let mut buses = Vec::with_capacity(spec.buses.len());
-    for ((bus, open), mixer_inputs) in spec.buses.iter().zip(open_buses).zip(bus_inputs) {
-        let (mut mixer, handle) = Mixer::new(mixer_inputs, usize::from(open.config.channels()));
+    for ((bus, found), mixer_inputs) in spec.buses.iter().zip(found_buses).zip(bus_inputs) {
+        let (mixer, handle) = Mixer::new(mixer_inputs, usize::from(found.config.channels()));
         handle.controls.gain.store(db_to_linear(bus.gain_db));
         handle.controls.muted.store(bus.muted, Ordering::Relaxed);
-        let stream = open
-            .device
-            .build_output_stream::<f32, _, _>(
-                open.config.config(),
-                move |data, _| assert_no_alloc(|| mixer.process(data)),
-                fault_recorder(&faults, &open.name),
-                Some(OPEN_TIMEOUT),
-            )
-            .map_err(audio(format!("opening {}", open.name)))?;
-        streams.push(stream);
-        stream_names.push(open.name.clone());
+        slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
+        opening.push((found.device, found.config));
         buses.push(RunningBus {
             name: bus.name.clone(),
-            device: open.name,
+            device: found.name,
             handle,
+            present: false,
+            outages: 0,
         });
     }
-    // Inputs first, so the outputs find their rings filling.
-    for (stream, name) in streams.iter().zip(&stream_names) {
-        stream.play().map_err(audio(format!("starting {name}")))?;
-    }
 
-    Ok(Running {
-        _streams: streams,
+    let mut running = Running {
+        host,
+        slots,
         inputs,
         buses,
         sample_rate,
-        faults,
-    })
+        xruns: Arc::new(Counter::default()),
+    };
+    // Inputs first, so the outputs find their rings filling.
+    for (index, (device, config)) in opening.iter().enumerate() {
+        running.slots[index].open(device, config, &running.xruns, now)?;
+        running.mark(index, true);
+    }
+    Ok(running)
 }
 
 #[cfg(test)]
@@ -709,21 +831,26 @@ mod tests {
     }
 
     #[test]
-    fn only_lost_devices_and_real_failures_are_fatal() {
-        for kind in [
-            ErrorKind::Xrun,
-            ErrorKind::DeviceChanged,
-            ErrorKind::RealtimeDenied,
-        ] {
-            assert!(!is_fatal(kind), "{kind:?}");
-        }
-        for kind in [
-            ErrorKind::DeviceNotAvailable,
-            ErrorKind::StreamInvalidated,
-            ErrorKind::BackendError,
-        ] {
-            assert!(is_fatal(kind), "{kind:?}");
-        }
+    fn changes_read_as_sentences() {
+        let lost = Change::Lost {
+            label: "A1 Focusrite".into(),
+            reason: "device not available".into(),
+        };
+        assert_eq!(
+            lost.to_string(),
+            "A1 Focusrite is gone (device not available); the rest plays on, it is taken back \
+             when it returns"
+        );
+        let back = Change::Back {
+            label: "[1] CABLE Output".into(),
+        };
+        assert_eq!(back.to_string(), "[1] CABLE Output is back");
+        let layout = Error::LayoutChanged {
+            device: "Mic".into(),
+            channels: 1,
+            expected: 2,
+        };
+        assert!(layout.to_string().contains("1 channels instead of 2"));
     }
 
     #[test]
