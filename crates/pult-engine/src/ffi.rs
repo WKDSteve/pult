@@ -44,9 +44,6 @@ use windows::core::{HSTRING, Interface, PCWSTR, Result, w};
 #[derive(Debug)]
 pub(crate) struct SessionMark(HANDLE);
 
-// SAFETY: the handle is a kernel object of this process, usable and closable from any thread.
-unsafe impl Send for SessionMark {}
-
 impl SessionMark {
     /// Holds the mark `name`, and tells whether someone held it already. `None` when Windows
     /// refuses the mark.
