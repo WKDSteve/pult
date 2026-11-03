@@ -327,7 +327,7 @@ pub fn input_strip(
     } else {
         None
     };
-    readout(ui, zones.readout, gain, note);
+    readout(ui, zones.readout, shown_gain(gain), note);
 
     if !input.present {
         ui.painter().rect_filled(
@@ -416,7 +416,7 @@ pub fn bus_strip(
         });
     }
     let note = clip_note(meter_state).map(|text| (text, p.meter_high));
-    readout(ui, zones.readout, gain, note);
+    readout(ui, zones.readout, shown_gain(gain), note);
     actions
 }
 
@@ -431,6 +431,16 @@ pub fn clip_note(meter: &MeterState) -> Option<String> {
 #[must_use]
 pub fn action_gain(db: f32) -> f32 {
     db.clamp(GAIN_RANGE_DB.0, GAIN_RANGE_DB.1)
+}
+
+/// The gain a readout shows: the desk's lowest gain, where an off fader lands, is off.
+#[must_use]
+pub fn shown_gain(db: f32) -> f32 {
+    if db <= GAIN_RANGE_DB.0 {
+        f32::NEG_INFINITY
+    } else {
+        db
+    }
 }
 
 /// A sample rate as a strip prints it: `48k`, `44.1k`.
@@ -462,6 +472,13 @@ mod tests {
         assert_eq!(clip_note(&meter).as_deref(), Some("CLIP"));
         meter.reset_clip();
         assert_eq!(clip_note(&meter), None);
+    }
+
+    #[test]
+    fn the_lowest_gain_reads_as_off() {
+        assert_eq!(shown_gain(GAIN_RANGE_DB.0), f32::NEG_INFINITY);
+        assert_eq!(shown_gain(f32::NEG_INFINITY), f32::NEG_INFINITY);
+        assert_eq!(shown_gain(-70.0), -70.0);
     }
 
     #[test]

@@ -110,7 +110,14 @@ fn grid(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
         for (column, bus) in view.buses.iter().enumerate() {
             let label = format!("{} to {}", input.name, bus.name);
             let on = input.buses.contains(&column);
-            let response = crosspoint(ui, cell(row, column), on, input.present, &label);
+            let response = crosspoint(
+                ui,
+                cell(row, column),
+                (row, column),
+                on,
+                input.present,
+                &label,
+            );
             if response.clicked() {
                 actions.push(Action::Route {
                     input: row,
@@ -208,9 +215,17 @@ fn row_head(ui: &Ui, rect: Rect, input: &InputView) {
     crate::widgets::meter::level_bar(painter, bar, input.peak_db);
 }
 
-fn crosspoint(ui: &mut Ui, rect: Rect, on: bool, present: bool, label: &str) -> Response {
+/// One crosspoint; its id comes from its place, not its label: two inputs may share a name.
+fn crosspoint(
+    ui: &mut Ui,
+    rect: Rect,
+    place: (usize, usize),
+    on: bool,
+    present: bool,
+    label: &str,
+) -> Response {
     let p = &Theme::current().palette;
-    let id = ui.scope_id().with(("crosspoint", label));
+    let id = ui.scope_id().with(("crosspoint", place));
     let response = ui.interact(rect, id, Sense::click());
     response.widget_info(|| WidgetInfo::selected(eframe::egui::Role::CheckBox, true, on, label));
     let painter = ui.painter();

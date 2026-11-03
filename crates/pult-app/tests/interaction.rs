@@ -16,12 +16,15 @@ const SPOTIFY: usize = 2;
 struct App {
     desk: FakeDesk,
     state: ConsoleState,
+    /// An input to show under another name: (index, name).
+    rename: Option<(usize, String)>,
 }
 
 fn harness() -> Harness<'static, App> {
     let app = App {
         desk: FakeDesk::new(),
         state: ConsoleState::default(),
+        rename: None,
     };
     HarnessBuilder::default()
         .with_size(vec2(1280.0, 760.0))
@@ -30,7 +33,10 @@ fn harness() -> Harness<'static, App> {
         .build_ui_state(
             |ui, app: &mut App| {
                 Theme::current().apply(ui.ctx());
-                let view = app.desk.view();
+                let mut view = app.desk.view();
+                if let Some((input, name)) = &app.rename {
+                    view.inputs[*input].name.clone_from(name);
+                }
                 for action in console::show(ui, &view, &mut app.state, 0.0) {
                     if let Err(reason) = app.desk.act(action) {
                         app.state.refused(view.elapsed, &reason);
@@ -135,4 +141,21 @@ fn the_matrix_routes_too() {
     harness.get_by_label("Spotify.exe to A1").click();
     let view = desk_view(&mut harness);
     assert_eq!(view.inputs[SPOTIFY].buses, [0, 1]);
+}
+
+#[test]
+fn inputs_of_the_same_name_keep_their_own_crosspoints() {
+    // Two instances of one program carry the same name; each crosspoint must still switch
+    // its own input.
+    let mut harness = harness();
+    harness.state_mut().rename = Some((1, "Spotify.exe".to_owned()));
+    harness.state_mut().state.tab = Tab::Matrix;
+    harness.run_steps(2);
+    let nodes: Vec<_> = harness.get_all_by_label("Spotify.exe to A2").collect();
+    assert_eq!(nodes.len(), 2);
+    nodes[0].click();
+    let view = desk_view(&mut harness);
+    // Input 2 (index 1) fed A1 and A2; the click takes it off A2 and leaves input 3 alone.
+    assert_eq!(view.inputs[1].buses, [0]);
+    assert_eq!(view.inputs[SPOTIFY].buses, [1]);
 }

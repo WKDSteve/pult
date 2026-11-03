@@ -90,10 +90,11 @@ pub fn meter_pos(dbfs: f32) -> f32 {
     to_pos(&METER, dbfs)
 }
 
-/// A gain as the strip prints it: `-6.0`, `+3.5`, `0.0`, `-inf`.
+/// A gain as the strip prints it: `-6.0`, `+3.5`, `0.0`, `-70.0`, and `-inf` for off. A gain
+/// below the fader's floor still prints as a number: it still sounds.
 #[must_use]
 pub fn format_db(db: f32) -> String {
-    if db == f32::NEG_INFINITY || db <= FADER_FLOOR_DB {
+    if db == f32::NEG_INFINITY {
         "-inf".to_owned()
     } else if db.abs() < 0.05 {
         "0.0".to_owned()
@@ -166,7 +167,8 @@ mod tests {
         assert_eq!(format_db(0.01), "0.0");
         assert_eq!(format_db(-0.04), "0.0");
         assert_eq!(format_db(f32::NEG_INFINITY), "-inf");
-        assert_eq!(format_db(-60.0), "-inf");
+        assert_eq!(format_db(-60.0), "-60.0");
+        assert_eq!(format_db(-70.0), "-70.0");
         assert_eq!(format_mark(12.0), "+12");
         assert_eq!(format_mark(0.0), "0");
         assert_eq!(format_mark(-60.0), "-60");
