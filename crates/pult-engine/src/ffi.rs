@@ -31,10 +31,21 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, OpenProcess, PROCESS_SYNCHRONIZE, WaitForMultipleObjects,
+    AvSetMmThreadCharacteristicsW, CreateEventW, OpenProcess, PROCESS_SYNCHRONIZE,
+    WaitForMultipleObjects,
 };
 use windows::Win32::System::Variant::VT_BLOB;
-use windows::core::{Interface, PCWSTR, Result};
+use windows::core::{Interface, PCWSTR, Result, w};
+
+/// Puts the calling thread into the multimedia class "Pro Audio" (MMCSS), which runs it
+/// ahead of ordinary work such as a build on every core. Returns whether Windows agreed.
+/// The registration ends with the thread, so it is never undone by hand.
+pub(crate) fn join_pro_audio() -> bool {
+    let mut task_index = 0_u32;
+    // SAFETY: the task name is a static NUL-terminated wide string and `task_index` a valid
+    // place for the index Windows writes.
+    unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &raw mut task_index) }.is_ok()
+}
 
 /// One running process.
 #[derive(Debug, Clone, PartialEq, Eq)]

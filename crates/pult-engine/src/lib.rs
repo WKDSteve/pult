@@ -457,6 +457,12 @@ pub enum Change {
         /// The input or bus, with the device's name now.
         label: String,
     },
+    /// Windows refused the device's callback thread realtime priority; it plays, but heavy
+    /// load (a build on every core) can make it drop out.
+    Slow {
+        /// The input or bus.
+        label: String,
+    },
 }
 
 impl fmt::Display for Change {
@@ -470,6 +476,11 @@ impl fmt::Display for Change {
                 write!(f, "{label} is there but does not open yet: {reason}")
             }
             Self::Back { label } => write!(f, "{label} is back"),
+            Self::Slow { label } => write!(
+                f,
+                "{label} plays without realtime priority (Windows refused MMCSS \"Pro Audio\"); \
+                 under heavy load it may drop out"
+            ),
         }
     }
 }
@@ -511,6 +522,11 @@ impl Running {
         let now = Instant::now();
         let mut changes = Vec::new();
         for index in 0..self.slots.len() {
+            if self.slots[index].newly_slow() {
+                changes.push(Change::Slow {
+                    label: self.label(index),
+                });
+            }
             if let Some(reason) = self.slots[index].trouble(now) {
                 self.slots[index].close(now);
                 self.mark(index, false);
@@ -1017,6 +1033,14 @@ mod tests {
             label: "[1] CABLE Output".into(),
         };
         assert_eq!(back.to_string(), "[1] CABLE Output is back");
+        let slow = Change::Slow {
+            label: "A1 Focusrite".into(),
+        };
+        assert!(
+            slow.to_string()
+                .starts_with("A1 Focusrite plays without realtime priority"),
+            "{slow}"
+        );
         let layout = Error::LayoutChanged {
             device: "Mic".into(),
             channels: 1,

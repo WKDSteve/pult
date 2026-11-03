@@ -7,6 +7,7 @@
 //! the callback. A stream counts as lost when its error callback reports a fatal error or
 //! when its callbacks stop for [`STALL_AFTER`] (a device that vanished without a word).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -47,6 +48,8 @@ pub(crate) struct Health {
     fatal: Mutex<Option<String>>,
     /// Data callbacks so far.
     beats: Counter,
+    /// Whether Windows refused the callback thread realtime priority.
+    slow: AtomicBool,
 }
 
 impl Health {
@@ -62,6 +65,27 @@ impl Health {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+}
+
+/// Raises the calling callback thread to realtime priority (MMCSS "Pro Audio"), the first
+/// time `first` is set; a refusal is kept in `health`. Without it, a build that takes every
+/// core delays the callbacks until the rings run over.
+fn raise_once(first: &mut bool, health: &Health) {
+    if std::mem::take(first) && !realtime() {
+        health.slow.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Puts the calling thread into the realtime class of the audio system; whether it worked.
+fn realtime() -> bool {
+    #[cfg(windows)]
+    {
+        crate::ffi::join_pro_audio()
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }
 
@@ -181,6 +205,8 @@ pub(crate) struct Slot {
     next_try: Instant,
     /// The last reason a retry failed, reported once per reason.
     pub(crate) refused: Option<String>,
+    /// Whether the open stream's missing realtime priority was reported.
+    told_slow: bool,
 }
 
 impl Slot {
@@ -199,6 +225,7 @@ impl Slot {
             watch: Watch::new(now),
             next_try: now,
             refused: None,
+            told_slow: false,
         }
     }
 
@@ -265,6 +292,7 @@ impl Slot {
                 self.watch = Watch::new(Instant::now());
                 self.name = name;
                 self.refused = None;
+                self.told_slow = false;
                 Ok(())
             }
             Err(err) => {
@@ -286,9 +314,11 @@ impl Slot {
         let name = device.to_string();
         let built = if role == Role::Output {
             let beats = Arc::clone(health);
+            let mut first = true;
             device.build_output_stream::<f32, _, _>(
                 config.config(),
                 move |data, _| {
+                    raise_once(&mut first, &beats);
                     assert_no_alloc(|| {
                         beats.beats.add(1);
                         match returning.get_mut() {
@@ -328,6 +358,16 @@ impl Slot {
         None
     }
 
+    /// Whether the open stream runs without realtime priority and nobody was told yet;
+    /// true once per stream.
+    pub(crate) fn newly_slow(&mut self) -> bool {
+        if self.stream.is_none() || self.told_slow || !self.health.slow.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.told_slow = true;
+        true
+    }
+
     /// Drops the stream and takes the feed back; the first retry comes after
     /// [`RETRY_EVERY`].
     pub(crate) fn close(&mut self, now: Instant) {
@@ -365,7 +405,9 @@ fn input_callback(
     health: Arc<Health>,
     mut returning: Returning<Feed>,
 ) -> impl FnMut(&[f32]) + Send + 'static {
+    let mut first = true;
     move |data| {
+        raise_once(&mut first, &health);
         assert_no_alloc(|| {
             health.beats.add(1);
             if let Some(Feed::Input(captures)) = returning.get_mut() {
@@ -380,6 +422,24 @@ fn input_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_callback_thread_gets_realtime_priority_once() {
+        let health = Arc::new(Health::default());
+        let on_thread = Arc::clone(&health);
+        let gave = std::thread::spawn(move || {
+            let mut first = true;
+            raise_once(&mut first, &on_thread);
+            let again = first;
+            raise_once(&mut first, &on_thread);
+            again
+        })
+        .join()
+        .expect("join the callback thread");
+        assert!(!gave, "the first call uses up the flag");
+        // Windows (the audio service runs MMCSS) grants "Pro Audio" to any thread.
+        assert_eq!(health.slow.load(Ordering::Relaxed), !cfg!(windows));
+    }
 
     #[test]
     fn only_lost_devices_and_real_failures_are_fatal() {
