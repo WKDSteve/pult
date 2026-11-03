@@ -6,7 +6,8 @@
 
 use std::sync::mpsc::Sender;
 
-use eframe::egui::{Align, Button, Context, Id, Layout, Modal, RichText, Ui, vec2};
+use eframe::egui::{Align, Button, Context, IconData, Id, Layout, Modal, RichText, Ui, vec2};
+use eframe::icon_data::from_png_bytes;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -82,8 +83,9 @@ impl Tray {
             }
         }));
 
-        let (rgba, size) = icon_pixels();
-        let image = Icon::from_rgba(rgba, size, size).map_err(|e| e.to_string())?;
+        let pixels = decode(TRAY_PNG)?;
+        let image =
+            Icon::from_rgba(pixels.rgba, pixels.width, pixels.height).map_err(|e| e.to_string())?;
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
@@ -109,24 +111,22 @@ impl Tray {
     }
 }
 
-/// The icon: the lit square of the word mark on a dark tile, as RGBA rows.
-#[must_use]
-pub fn icon_pixels() -> (Vec<u8>, u32) {
-    const SIZE: u32 = 32;
-    let p = &Theme::current().palette;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            // A tile with its corners cut by one pixel, the square in its middle.
-            let edge = |v: u32| v == 0 || v == SIZE - 1;
-            let corner = edge(x) && edge(y);
-            let lit = (9..23).contains(&x) && (9..23).contains(&y);
-            let color = if lit { p.accent } else { p.surface };
-            let alpha = if corner { 0 } else { 255 };
-            rgba.extend_from_slice(&[color.r(), color.g(), color.b(), alpha]);
-        }
-    }
-    (rgba, SIZE)
+/// The icon in the notification area, from `assets/icons` of this repository (rule APP-11).
+const TRAY_PNG: &[u8] = include_bytes!("../../../assets/icons/pult/png/pult-32.png");
+/// The icon of the window and the taskbar, from the same place.
+const WINDOW_PNG: &[u8] = include_bytes!("../../../assets/icons/pult/png/pult-64.png");
+
+fn decode(png: &[u8]) -> Result<IconData, String> {
+    from_png_bytes(png).map_err(|e| e.to_string())
+}
+
+/// The icon of the window.
+///
+/// # Errors
+///
+/// When the file that is built in is no valid PNG.
+pub fn window_icon() -> Result<IconData, String> {
+    decode(WINDOW_PNG)
 }
 
 /// What closing the window does.
@@ -223,15 +223,19 @@ mod tests {
     }
 
     #[test]
-    fn the_icon_is_a_full_square_of_rgba() {
-        let (rgba, size) = icon_pixels();
-        assert_eq!(rgba.len(), (size * size * 4) as usize);
-        let accent = Theme::current().palette.accent;
-        let middle = ((size / 2 * size + size / 2) * 4) as usize;
-        assert_eq!(
-            &rgba[middle..middle + 4],
-            &[accent.r(), accent.g(), accent.b(), 255]
-        );
-        assert_eq!(rgba[3], 0, "the corners are cut");
+    fn the_icons_are_full_squares_of_rgba_in_their_size() {
+        for (png, size) in [(TRAY_PNG, 32), (WINDOW_PNG, 64)] {
+            let icon = decode(png).unwrap();
+            assert_eq!((icon.width, icon.height), (size, size));
+            assert_eq!(icon.rgba.len(), (size * size * 4) as usize);
+            assert_eq!(icon.rgba[3], 0, "the corners are round");
+            let middle = ((size / 2 * size + size / 2) * 4 + 3) as usize;
+            assert_eq!(icon.rgba[middle], 255, "the tile is opaque");
+        }
+    }
+
+    #[test]
+    fn a_broken_icon_is_an_error() {
+        assert!(decode(b"no png").is_err());
     }
 }

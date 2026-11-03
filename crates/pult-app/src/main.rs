@@ -389,14 +389,19 @@ fn main() -> ExitCode {
         return code;
     };
     let (settings, note) = Stored::load(settings::default_path());
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("pult")
+        // eframe shows the window after its first painted frame, and paints none while it
+        // is hidden: from the tray, nothing flashes up.
+        .with_visible(start != Start::Tray)
+        .with_inner_size([1280.0, 760.0])
+        .with_min_inner_size([640.0, 560.0]);
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("pult")
-            // eframe shows the window after its first painted frame, and paints none while it
-            // is hidden: from the tray, nothing flashes up.
-            .with_visible(start != Start::Tray)
-            .with_inner_size([1280.0, 760.0])
-            .with_min_inner_size([640.0, 560.0]),
+        // Without its icon the window still opens, with the default of the system.
+        viewport: match tray::window_icon() {
+            Ok(icon) => viewport.with_icon(icon),
+            Err(_) => viewport,
+        },
         ..Default::default()
     };
     let result = eframe::run_native(
