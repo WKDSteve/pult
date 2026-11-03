@@ -237,9 +237,9 @@ impl Desk for EngineDesk {
                 let path = path
                     .or_else(|| self.profile.clone())
                     .ok_or("no profile file yet; name one")?;
-                let lines = self
-                    .running
-                    .apply(&Command::Save(path.to_string_lossy().into_owned()))?;
+                // The path as it is, not through a command string: Windows paths need not
+                // be valid Unicode.
+                let lines = self.running.save_profile(&path)?;
                 self.profile = Some(path);
                 Ok(lines)
             }

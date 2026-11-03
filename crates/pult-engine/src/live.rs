@@ -96,8 +96,7 @@ impl Running {
                 )])
             }
             Command::Show => Ok(self.show()),
-            Command::Save(path) => save(Path::new(path), &self.spec)
-                .map(|()| vec![format!("saved the current state to {path}")]),
+            Command::Save(path) => self.save_profile(Path::new(path)),
             Command::Help => Ok(HELP.lines().map(str::to_owned).collect()),
             Command::Stop => Ok(Vec::new()),
         }
@@ -131,6 +130,16 @@ impl Running {
         }
         let state = if on { "->" } else { "off" };
         Ok(vec![format!("{label} {state} {bus_name}")])
+    }
+
+    /// Writes the current state as a profile to `path`.
+    ///
+    /// # Errors
+    ///
+    /// A message when the file cannot be written.
+    pub fn save_profile(&self, path: &Path) -> Result<Vec<String>, String> {
+        save(path, &self.spec)
+            .map(|()| vec![format!("saved the current state to {}", path.display())])
     }
 
     /// `[1] CABLE Output` or `A1`.
@@ -219,6 +228,22 @@ mod tests {
         assert_eq!(quoted("CABLE Output"), "\"CABLE Output\"");
         assert_eq!(quoted("a\"b\\c\td\u{1}"), "\"a\\\"b\\\\c\\td\\u0001\"");
         assert_eq!(quoted("Kopfhörer"), "\"Kopfhörer\"");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_writes_to_a_path_that_is_not_unicode() {
+        use std::os::windows::ffi::OsStringExt;
+        let dir = std::env::temp_dir().join(format!("pult-save-wide-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        // A lone surrogate: a valid Windows file name, but no valid Unicode.
+        let name = std::ffi::OsString::from_wide(&[0xD800, u16::from(b'a'), u16::from(b'.')]);
+        let path = dir.join(name);
+        assert!(path.to_str().is_none());
+        let spec = profile::parse(include_str!("../../../examples/pult.toml")).expect("example");
+        save(&path, &spec).expect("save");
+        assert!(path.exists());
+        std::fs::remove_dir_all(&dir).expect("clean up");
     }
 
     #[test]
