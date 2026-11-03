@@ -52,7 +52,7 @@ pult zeigt eine Statuszeile und hört bei Enter auf:
 | `[1] -18.3 dB` | Spitzenpegel des Eingangs 1 nach Gain |
 | `out` | Aussetzer: der Puffer des Eingangs lief leer |
 | `lost` | an der Aufnahme verlorene Frames: der Puffer war voll, weil der Ausgang länger als eine Sekunde nichts abgenommen hat |
-| `fix -a/+b/c` | gegen Takt-Drift verworfene (`a`) und wiederholte (`b`) Einzel-Frames, harte Resyncs (`c`) |
+| `fix -a/+b/c` | gegen Takt-Drift verworfene (`a`) und wiederholte (`b`) Einzel-Frames, harte Resyncs (`c`); der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
 | `mix` / `clipped` | Spitzenpegel der Summe, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt) |
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
 
@@ -68,6 +68,10 @@ Schreibt alle 10 Sekunden eine Zeile nach `abend.csv` (die Datei wird neu angele
 Abschnitts in dB, dazu alle Zähler der Statuszeile als laufende Summen. Jede Zeile wird sofort gespeichert, auch wenn
 das Fenster einfach geschlossen wird. Am Verlauf sieht man, ob Korrekturen nur beim Start anfallen oder gleichmäßig
 weiterlaufen (echte Takt-Drift). Die Statuszeile beginnt mit der Laufzeit (`h:mm:ss`).
+
+Nach dem Start (und nach jedem Aussetzer) misst pult zwei Sekunden lang, wo sich der Puffer einpendelt, und
+überspringt einen Überschuss dann auf einmal, statt ihn über viele Sekunden Frame für Frame abzubauen. Die Spalte
+`aligned` zählt diese übersprungenen Frames; typisch sind einige hundert (ein paar Millisekunden).
 
 ### Mehr Eingänge mischen
 

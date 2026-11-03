@@ -28,6 +28,8 @@ pub struct InputSnapshot {
     pub repeats: u64,
     /// Hard resyncs.
     pub resyncs: u64,
+    /// Frames skipped once after settling.
+    pub aligned: u64,
 }
 
 /// The whole route at one moment.
@@ -60,6 +62,7 @@ impl Snapshot {
                     drops: stats.drops.get(),
                     repeats: stats.repeats.get(),
                     resyncs: stats.resyncs.get(),
+                    aligned: stats.aligned.get(),
                 }
             })
             .collect();
@@ -141,7 +144,9 @@ fn csv_db(linear: f32) -> String {
 pub fn csv_header(inputs: usize) -> String {
     let mut line = "elapsed_s".to_owned();
     for i in 1..=inputs {
-        for field in ["peak_db", "dropouts", "lost", "drops", "repeats", "resyncs"] {
+        for field in [
+            "peak_db", "dropouts", "lost", "drops", "repeats", "resyncs", "aligned",
+        ] {
             let _ = write!(line, ",in{i}_{field}");
         }
     }
@@ -155,13 +160,14 @@ pub fn csv_row(snap: &Snapshot) -> String {
     for input in &snap.inputs {
         let _ = write!(
             line,
-            ",{},{},{},{},{},{}",
+            ",{},{},{},{},{},{},{}",
             csv_db(input.peak),
             input.underruns,
             input.lost,
             input.drops,
             input.repeats,
-            input.resyncs
+            input.resyncs,
+            input.aligned
         );
     }
     let _ = write!(
@@ -241,7 +247,7 @@ mod tests {
         let row = csv_row(&two);
         assert_eq!(header.split(',').count(), row.split(',').count());
         assert!(header.starts_with("elapsed_s,in1_peak_db,in1_dropouts"));
-        assert_eq!(row, "10.0,-inf,0,0,3,0,0,-inf,0,0,0,0,0,-inf,0,1");
+        assert_eq!(row, "10.0,-inf,0,0,3,0,0,0,-inf,0,0,0,0,0,0,-inf,0,1");
     }
 
     #[test]
@@ -264,6 +270,6 @@ mod tests {
         std::fs::remove_file(&path).expect("remove log");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1], "10.0,-6.0,0,0,2,0,0,-6.0,0,1");
+        assert_eq!(lines[1], "10.0,-6.0,0,0,2,0,0,0,-6.0,0,1");
     }
 }

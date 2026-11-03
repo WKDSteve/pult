@@ -24,6 +24,10 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 /// average spans about 1.3 s, long enough to flatten the block jitter of virtual cables.
 const DRIFT_SMOOTHING: f64 = 1.0 / 128.0;
 
+/// Seconds after each priming in which the drift control measures the start-up offset of
+/// an input and then skips it once, instead of dropping single frames for twenty seconds.
+const SETTLE_SECONDS: usize = 2;
+
 /// Which side of a route a device is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -434,6 +438,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
             target,
             band,
             smoothing: DRIFT_SMOOTHING,
+            settle: SETTLE_SECONDS * sample_rate as usize,
         });
         handle.controls.gain.store(db_to_linear(source.gain_db));
         let stream = device

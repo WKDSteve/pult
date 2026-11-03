@@ -47,6 +47,8 @@ pub struct InputStats {
     pub drops: Counter,
     /// Single frames repeated because the level ran below the band.
     pub repeats: Counter,
+    /// Frames skipped once at the end of a settling phase.
+    pub aligned: Counter,
 }
 
 /// Statistics of the mixed output.
@@ -80,6 +82,9 @@ pub struct InputConfig {
     pub band: usize,
     /// Weight of each callback in the level average of the drift control (1.0: none).
     pub smoothing: f64,
+    /// Frames after each priming in which the drift control measures the start-up offset
+    /// instead of correcting (0: none).
+    pub settle: usize,
 }
 
 /// Creates the ring of one input and both of its ends.
@@ -104,7 +109,9 @@ pub fn connect(config: InputConfig) -> (Capture, MixerInput, InputHandle) {
     let input = MixerInput {
         consumer,
         channels: config.channels,
-        drift: DriftControl::new(config.target, config.band).smoothed(config.smoothing),
+        drift: DriftControl::new(config.target, config.band)
+            .smoothed(config.smoothing)
+            .settling(config.settle),
         scratch: vec![0.0; samples],
         controls: Arc::clone(&handle.controls),
         stats: Arc::clone(&handle.stats),
@@ -158,6 +165,7 @@ impl MixerInput {
             Event::Resync => self.stats.resyncs.add(1),
             Event::Dropped => self.stats.drops.add(1),
             Event::Repeated => self.stats.repeats.add(1),
+            Event::Aligned => self.stats.aligned.add(plan.skip as u64),
             Event::None | Event::Priming => {}
         }
         if let Ok(chunk) = self.consumer.read_chunk(plan.skip * ch) {
@@ -253,6 +261,7 @@ mod tests {
             target,
             band: 2,
             smoothing: 1.0,
+            settle: 0,
         }
     }
 
@@ -298,6 +307,7 @@ mod tests {
             target: 0,
             band: 10,
             smoothing: 1.0,
+            settle: 0,
         });
         capture.push(&[0.1; 6]);
         assert_eq!(handle.stats.dropped_at_capture.get(), 2);
@@ -318,6 +328,7 @@ mod tests {
             target: 4,
             band: 1,
             smoothing: 1.0,
+            settle: 0,
         });
         let (mut mixer, _) = Mixer::new(vec![input], 2);
         // Six frames: the first callback primes and reads two, the second finds the level
