@@ -91,11 +91,13 @@ impl Binding {
     ///
     /// When the address is malformed or names an input, bus or parameter `view` does not have.
     pub fn parse(address: &str, view: &MixerView) -> Result<Self, AddressError> {
-        let parts: Vec<&str> = address.split('/').collect();
         let input = |number: &str| {
+            // Only the form `address` prints: digits, no sign, no leading zero.
+            let canonical = number.bytes().all(|b| b.is_ascii_digit()) && !number.starts_with('0');
             number
                 .parse::<usize>()
                 .ok()
+                .filter(|_| canonical)
                 .and_then(|n| n.checked_sub(1))
                 .filter(|&index| index < view.inputs.len())
                 .ok_or_else(|| AddressError::NoInput(number.to_owned()))
@@ -106,9 +108,17 @@ impl Binding {
                 .position(|bus| bus.name == name)
                 .ok_or_else(|| AddressError::NoBus(name.to_owned()))
         };
-        match parts.as_slice() {
-            ["input", number, param] => {
-                let param = match *param {
+        let malformed = || AddressError::Malformed(address.to_owned());
+        // A bus name may hold a slash: it is all between the input or kind and the parameter.
+        let (kind, rest) = address.split_once('/').ok_or_else(malformed)?;
+        let (first, last) = match kind {
+            "bus" => rest.rsplit_once('/'),
+            _ => rest.split_once('/'),
+        }
+        .ok_or_else(malformed)?;
+        match (kind, first, last) {
+            ("input", number, param) => {
+                let param = match param {
                     "gain" => InputParam::Gain,
                     "mute" => InputParam::Mute,
                     "solo" => InputParam::Solo,
@@ -118,8 +128,8 @@ impl Binding {
                 };
                 Ok(Self::Input(input(number)?, param))
             }
-            ["bus", name, param] => {
-                let param = match *param {
+            ("bus", name, param) => {
+                let param = match param {
                     "gain" => BusParam::Gain,
                     "mute" => BusParam::Mute,
                     "meter" => BusParam::Meter,
@@ -127,11 +137,11 @@ impl Binding {
                 };
                 Ok(Self::Bus(bus(name)?, param))
             }
-            ["matrix", number, name] => Ok(Self::Route {
+            ("matrix", number, name) => Ok(Self::Route {
                 input: input(number)?,
                 bus: bus(name)?,
             }),
-            _ => Err(AddressError::Malformed(address.to_owned())),
+            _ => Err(malformed()),
         }
     }
 
@@ -327,11 +337,30 @@ mod tests {
         assert_eq!(error("input/0/gain"), AddressError::NoInput("0".into()));
         assert_eq!(error("input/99/gain"), AddressError::NoInput("99".into()));
         assert_eq!(error("input/x/gain"), AddressError::NoInput("x".into()));
+        assert_eq!(error("input/+2/gain"), AddressError::NoInput("+2".into()));
+        assert_eq!(error("input/02/gain"), AddressError::NoInput("02".into()));
+        assert_eq!(
+            error("nothing/2/gain"),
+            AddressError::Malformed("nothing/2/gain".into())
+        );
         assert_eq!(error("bus/Z9/mute"), AddressError::NoBus("Z9".into()));
         assert_eq!(error("bus/A1/solo"), AddressError::NoParam("solo".into()));
         assert_eq!(error("matrix/2/Z9"), AddressError::NoBus("Z9".into()));
         assert_eq!(error("input/2"), AddressError::Malformed("input/2".into()));
         assert_eq!(error(""), AddressError::Malformed(String::new()));
+    }
+
+    #[test]
+    fn a_bus_name_may_hold_a_slash() {
+        let mut view = view();
+        view.buses[1].name = "PC/Mic".to_owned();
+        for (address, binding) in [
+            ("bus/PC/Mic/mute", Binding::Bus(1, BusParam::Mute)),
+            ("matrix/1/PC/Mic", Binding::Route { input: 0, bus: 1 }),
+        ] {
+            assert_eq!(Binding::parse(address, &view), Ok(binding), "{address}");
+            assert_eq!(binding.address(&view).as_deref(), Some(address));
+        }
     }
 
     #[test]
