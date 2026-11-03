@@ -359,7 +359,7 @@ pub fn bus_strip(
         fader_zone,
         &mut gain,
         &bus.name,
-        (meter_state, bus.peak_db, now),
+        (&mut *meter_state, bus.peak_db, now),
         true,
     ) {
         actions.push(Action::BusGain {
@@ -367,9 +367,16 @@ pub fn bus_strip(
             db: action_gain(gain),
         });
     }
-    let note = (bus.clipped > 0).then(|| ("CLIP".to_owned(), p.meter_high));
+    let note = clip_note(meter_state).map(|text| (text, p.meter_high));
     readout(ui, zones.readout, gain, note);
     actions
+}
+
+/// The note under a bus fader: `CLIP` while its clip lamp is lit. The lamp, not the desk's
+/// counter, which only grows, so a click on the meter clears both.
+#[must_use]
+pub fn clip_note(meter: &MeterState) -> Option<String> {
+    meter.clipped().then(|| "CLIP".to_owned())
 }
 
 /// The gain an action asks for: the fader's off (-inf) becomes the lowest gain the mixer takes.
@@ -397,6 +404,16 @@ mod tests {
         assert_eq!(action_gain(f32::NEG_INFINITY), GAIN_RANGE_DB.0);
         assert_eq!(action_gain(-6.5), -6.5);
         assert_eq!(action_gain(40.0), GAIN_RANGE_DB.1);
+    }
+
+    #[test]
+    fn clip_note_follows_the_lamp() {
+        let mut meter = MeterState::default();
+        assert_eq!(clip_note(&meter), None);
+        meter.mark_clipped();
+        assert_eq!(clip_note(&meter).as_deref(), Some("CLIP"));
+        meter.reset_clip();
+        assert_eq!(clip_note(&meter), None);
     }
 
     #[test]

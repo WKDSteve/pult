@@ -46,8 +46,9 @@ pub fn step(db: f32, steps: f32, size: f32) -> f32 {
     if to < FADER_FLOOR_DB {
         f32::NEG_INFINITY
     } else {
-        // Snap to the step grid so repeated steps land on round values.
-        ((to / size).round() * size).min(FADER_TOP_DB)
+        // Snap to the step grid so repeated steps land on round values. A gain above the scale
+        // (a profile may set up to +24 dB) is a ceiling of its own: stepping up never lowers it.
+        ((to / size).round() * size).min(FADER_TOP_DB.max(db))
     }
 }
 
@@ -235,5 +236,8 @@ mod tests {
         assert_eq!(step(f32::NEG_INFINITY, -1.0, STEP_DB), f32::NEG_INFINITY);
         assert_eq!(step(-3.0, 0.0, STEP_DB), -3.0);
         assert_eq!(step(0.0, -1.0, PAGE_DB), -3.0);
+        // Above the scale: up keeps the gain, down steps from it.
+        assert_eq!(step(18.0, 1.0, STEP_DB), 18.0);
+        assert_eq!(step(18.0, -1.0, STEP_DB), 17.5);
     }
 }
