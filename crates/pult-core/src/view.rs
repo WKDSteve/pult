@@ -190,8 +190,9 @@ pub trait Desk {
     fn act(&mut self, action: Action) -> Reply;
 }
 
-/// Lowest and highest gain in dB an action may set, as in profiles and commands.
-pub const GAIN_RANGE_DB: (f32, f32) = (-60.0, 24.0);
+/// Lowest and highest gain in dB an action may set; profiles and commands use the same
+/// range (`pult_engine::profile::GAIN_DB` is built from it).
+pub const GAIN_RANGE_DB: (f32, f32) = (-96.0, 24.0);
 
 /// A mixer in memory for building and testing interfaces: three inputs, two buses, meters
 /// that move with every view (one view counts as 1/30 s), an event now and then, and every
@@ -514,6 +515,23 @@ mod tests {
                 .is_ok()
         );
         assert!(mixer.act(Action::InputGain { input: 0, db: 40.0 }).is_err());
+        // The whole range of profiles and commands, down to -96 dB, is accepted.
+        assert!(
+            mixer
+                .act(Action::InputGain {
+                    input: 1,
+                    db: -90.0
+                })
+                .is_ok()
+        );
+        assert!(
+            mixer
+                .act(Action::InputGain {
+                    input: 1,
+                    db: -97.0
+                })
+                .is_err()
+        );
         assert!(mixer.act(Action::InputGain { input: 9, db: 0.0 }).is_err());
         assert!(mixer.act(Action::InputPan { input: 0, pan: 2.0 }).is_err());
         assert!(

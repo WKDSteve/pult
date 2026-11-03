@@ -40,8 +40,10 @@ pub const DEFAULT_LATENCY_MS: u32 = 40;
 /// The buffering a route may ask for, in milliseconds.
 pub const LATENCY_MS: RangeInclusive<u32> = 1..=2000;
 
-/// The gain an input or a bus may have, in dB.
-pub const GAIN_DB: RangeInclusive<f32> = -96.0..=24.0;
+/// The gain an input or a bus may have, in dB: the range of the view contract, so the
+/// interface and the engine accept the same values.
+pub const GAIN_DB: RangeInclusive<f32> =
+    pult_core::view::GAIN_RANGE_DB.0..=pult_core::view::GAIN_RANGE_DB.1;
 
 /// Longest bus name: it is a column of the status line.
 const MAX_BUS_NAME: usize = 8;
