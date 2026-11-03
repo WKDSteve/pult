@@ -101,7 +101,8 @@ impl DriftControl {
 
     /// The level beyond which the control skips back to the target at once. Block jitter
     /// can lift the level to nearly twice the target without any drift, so the limit lies
-    /// above that.
+    /// above that. A smaller surplus that lasts (the average beyond twice the band) is
+    /// skipped too, but judged by the average.
     #[must_use]
     pub fn hard_limit(&self) -> usize {
         2 * self.target + 4 * self.band
@@ -150,6 +151,11 @@ impl DriftControl {
         };
         if after > self.hard_limit() {
             self.level = self.target as f64;
+            // A stalled device that catches up delivers more than one block: settle again,
+            // so the rest of the burst is skipped once instead of steered off slowly.
+            self.played = 0;
+            self.settle_sum = 0.0;
+            self.settle_count = 0;
             let plan = Plan {
                 skip: after - self.target,
                 ..read
@@ -160,6 +166,19 @@ impl DriftControl {
             return self.settle_step(after, read);
         }
         self.level += self.alpha * (after as f64 - self.level);
+        // A surplus the average still shows beyond twice the band is no drift but a backlog
+        // (a busy machine held one side back). Steering it off would shift the pitch for
+        // seconds; skipping it is one short jump. Never below the target, by the actual level.
+        let limit = (self.target + 2 * self.band) as f64;
+        if self.level > limit {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let surplus = (self.level - self.target as f64).round() as usize;
+            let skip = surplus.min(after.saturating_sub(self.target));
+            if skip > 0 {
+                self.level = self.target as f64;
+                return (Plan { skip, ..read }, Event::Resync);
+            }
+        }
         (read, Event::None)
     }
 
@@ -265,6 +284,68 @@ mod tests {
     }
 
     #[test]
+    fn a_lasting_surplus_is_skipped_once_but_a_sawtooth_is_not() {
+        // Below the hard limit (300) but 80 frames above the target for good: twice the band
+        // is 50, so the average crosses it and one skip takes the surplus back.
+        let mut control = DriftControl::new(100, 25).smoothed(0.25);
+        let mut available = 110;
+        let mut events = Vec::new();
+        for i in 0..60 {
+            if i == 10 {
+                available += 80;
+            }
+            let (plan, event) = control.plan(available, 10);
+            if event != Event::None {
+                events.push((event, plan.skip));
+            }
+            available = available - plan.skip - plan.read + 10;
+        }
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].0, Event::Resync);
+        // The average lags, so the skip takes what it shows; the rest is within the band and
+        // left to the resampler.
+        assert!(available - 110 <= 25, "{available}");
+
+        // A sawtooth of ±75 around the target leaves the average alone.
+        let mut control = DriftControl::new(150, 25).smoothed(1.0 / 64.0);
+        let mut available = 350;
+        for i in 0..3000 {
+            if i % 3 == 0 && i > 0 {
+                available += 300;
+            }
+            let (plan, event) = control.plan(available, 100);
+            assert_eq!(event, Event::None, "callback {i}");
+            available -= plan.skip + plan.read;
+        }
+    }
+
+    #[test]
+    fn a_resync_settles_again_and_skips_the_rest_of_a_burst() {
+        let mut control = DriftControl::new(100, 25).settling(100);
+        let mut available = 110;
+        for _ in 0..20 {
+            let (plan, _) = control.plan(available, 10);
+            available = available - plan.skip - plan.read + 10;
+        }
+        assert_eq!(control.steady_error(), Some(0.0));
+        // A burst: far too much at once, and 200 frames more right after the resync.
+        let (plan, event) = control.plan(available + 500, 10);
+        assert_eq!(event, Event::Resync);
+        available = available + 500 - plan.skip - plan.read + 10 + 200;
+        assert_eq!(control.steady_error(), None, "settling again");
+        let mut skipped = 0;
+        for _ in 0..12 {
+            let (plan, event) = control.plan(available, 10);
+            if event == Event::Aligned {
+                skipped += plan.skip;
+            }
+            available = available - plan.skip - plan.read + 10;
+        }
+        assert_eq!(skipped, 200);
+        assert_eq!(control.steady_error(), Some(0.0));
+    }
+
+    #[test]
     fn smoothing_flattens_a_sawtooth_but_follows_a_trend() {
         // Blocks of 300 frames arrive while the output takes 100 per callback: the level
         // after a read swings between 50 and 250 around the target of 150.
@@ -284,14 +365,15 @@ mod tests {
         }
         assert!(worst < 25.0, "the average swings by {worst} frames");
 
-        // A level that stays 60 frames higher shows up in the average.
+        // A level that stays 40 frames higher (below the skip threshold) shows up in the
+        // average.
         for i in 0..3000 {
-            available += if i % 3 == 0 { 300 } else { 0 } + usize::from(i == 0) * 60;
+            available += if i % 3 == 0 { 300 } else { 0 } + usize::from(i == 0) * 40;
             let (plan, _) = control.plan(available, 100);
             available -= plan.skip + plan.read;
         }
         let error = control.steady_error().unwrap();
-        assert!((error - 60.0).abs() < 25.0, "error {error}");
+        assert!((error - 40.0).abs() < 25.0, "error {error}");
     }
 
     #[test]

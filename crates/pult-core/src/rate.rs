@@ -24,6 +24,8 @@ pub struct RateControl {
     limit: f64,
     /// Integral of the level error over time, in seconds squared.
     integral: f64,
+    /// The integral only grows while the error stays within this many seconds.
+    window: f64,
     /// The latest correction.
     correction: f64,
 }
@@ -38,8 +40,19 @@ impl RateControl {
             tau_i: tau_i.max(f64::MIN_POSITIVE),
             limit: limit.abs(),
             integral: 0.0,
+            window: f64::INFINITY,
             correction: 0.0,
         }
+    }
+
+    /// The same control whose integral grows only while the error lies within `±seconds`.
+    /// Real clock drift moves the level slowly and stays inside; a burst after a stalled
+    /// device (a late block, a busy machine) lies outside, and the proportional term alone
+    /// works it off without the integral learning a drift that is not there.
+    #[must_use]
+    pub fn integrating_within(mut self, seconds: f64) -> Self {
+        self.window = seconds.abs();
+        self
     }
 
     /// Forgets the learned clock difference, for an input whose device changed.
@@ -64,7 +77,9 @@ impl RateControl {
         // The integral alone may never ask for more than the limit, or it would wind up
         // while the correction is saturated and overshoot afterwards.
         let bound = self.limit * self.tau_p * self.tau_i;
-        self.integral = (self.integral + error * dt).clamp(-bound, bound);
+        if error.abs() <= self.window {
+            self.integral = (self.integral + error * dt).clamp(-bound, bound);
+        }
         self.correction =
             ((error + self.integral / self.tau_i) / self.tau_p).clamp(-self.limit, self.limit);
         self.correction
@@ -109,6 +124,25 @@ mod tests {
         assert!(lowest > -0.15 * 0.01, "dips to {lowest}");
         assert!(errors[6_000].abs() < 0.2 * 0.01, "{}", errors[6_000]);
         assert!(errors.last().unwrap().abs() < 0.01 * 0.01);
+    }
+
+    #[test]
+    fn a_burst_outside_the_window_leaves_the_integral_alone() {
+        // 30 ms too many (a stalled device catching up), no drift: with the window of
+        // 10 ms the integral only sees the last stretch, so the level barely dips below.
+        let mut plain = RateControl::new(10.0, 40.0, 0.005);
+        let mut windowed = RateControl::new(10.0, 40.0, 0.005).integrating_within(0.01);
+        let lowest = |errors: Vec<f64>| errors.into_iter().fold(f64::INFINITY, f64::min);
+        let plain_dip = lowest(simulate(&mut plain, 1440.0, 0.0, 30_000));
+        let windowed_dip = lowest(simulate(&mut windowed, 1440.0, 0.0, 30_000));
+        assert!(plain_dip < -0.003, "plain dips to {plain_dip}");
+        assert!(windowed_dip > -0.0015, "windowed dips to {windowed_dip}");
+
+        // Real drift stays inside the window and is still learned.
+        let mut control = RateControl::new(10.0, 40.0, 0.005).integrating_within(0.01);
+        let errors = simulate(&mut control, 0.0, 100e-6, 12_000);
+        assert!(errors.last().unwrap().abs() < 1e-4);
+        assert!((control.correction() - 100e-6).abs() < 2e-6);
     }
 
     #[test]

@@ -33,8 +33,10 @@ use crate::remix::remix_add;
 const MAX_CHUNK: usize = 1024;
 
 /// Seconds in which the rate control's proportional term would remove a level error; the
-/// integral time is four times that (critically damped, see [`crate::rate`]).
-const STEER_SECONDS: f64 = 10.0;
+/// integral time is four times that (critically damped, see [`crate::rate`]). Slow on
+/// purpose: an error up to the skip threshold (twice the band, 20 ms at 40 ms latency) asks
+/// for at most about 700 ppm, about one cent of pitch; real drift is tens of ppm.
+const STEER_SECONDS: f64 = 30.0;
 
 /// The largest correction against clock drift: 0.5 %, far beyond any real clock (they differ
 /// by tens of ppm) and still far below an audible pitch change.
@@ -194,7 +196,9 @@ pub fn connect_with(
         drift: DriftControl::new(config.target, config.band)
             .smoothed(config.smoothing)
             .settling(config.settle),
-        rate: RateControl::new(STEER_SECONDS, 4.0 * STEER_SECONDS, MAX_CORRECTION),
+        rate: RateControl::new(STEER_SECONDS, 4.0 * STEER_SECONDS, MAX_CORRECTION)
+            // Up to where the drift control skips a surplus; beyond it is a backlog.
+            .integrating_within(2.0 * config.band as f64 / f64::from(config.input_rate)),
         resampler,
         input_rate: f64::from(config.input_rate),
         output_rate: f64::from(config.output_rate),
@@ -635,6 +639,7 @@ mod tests {
         let (mut capture, input, handle) = connect(InputConfig {
             smoothing: 1.0 / 128.0,
             settle: 96_000,
+            band: target / 4,
             ..config(2, target)
         });
         let (mut mixer, _) = Mixer::new(vec![input], 2);
