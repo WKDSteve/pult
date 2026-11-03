@@ -2,7 +2,7 @@
 //! live status line, and the CSV rows of `--log`.
 
 use std::fmt::Write as _;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -307,14 +307,16 @@ pub struct Log {
 }
 
 impl Log {
-    /// Creates (or empties) the file at `path` and writes the header.
+    /// Creates (or empties) the file at `path` and writes the header. The file stays ours
+    /// for as long as the log lives: others can read it, but a second run on the same file
+    /// is refused and leaves the rows alone.
     ///
     /// # Errors
     ///
-    /// When the file cannot be created or written.
+    /// When another run or program has the file open, or it cannot be created or written.
     pub fn create(path: &Path, inputs: usize, bus_names: &[String]) -> io::Result<Self> {
         let mut log = Self {
-            out: BufWriter::new(File::create(path)?),
+            out: BufWriter::new(create_exclusive(path)?),
         };
         log.line(&csv_header(inputs, bus_names))?;
         Ok(log)
@@ -333,6 +335,48 @@ impl Log {
         writeln!(self.out, "{text}")?;
         self.out.flush()
     }
+}
+
+/// Windows refuses the open before it empties anything. A file lock would also keep readers
+/// out there, and the rows are worth reading during a long run.
+#[cfg(windows)]
+fn create_exclusive(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(path)
+        .map_err(|e| {
+            if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) {
+                in_use()
+            } else {
+                e
+            }
+        })
+}
+
+/// Elsewhere file locks do not keep readers out, so the file is emptied once it is locked.
+#[cfg(not(windows))]
+fn create_exclusive(path: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    file.try_lock().map_err(|e| match e {
+        std::fs::TryLockError::WouldBlock => in_use(),
+        std::fs::TryLockError::Error(e) => e,
+    })?;
+    file.set_len(0)?;
+    Ok(file)
+}
+
+fn in_use() -> io::Error {
+    io::Error::other("another run or program has it open")
 }
 
 #[cfg(test)]
@@ -452,5 +496,31 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1], "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,1,0,1,1,360.00");
+    }
+
+    #[test]
+    fn a_second_run_on_the_same_log_is_refused_and_leaves_it_alone() {
+        let path =
+            std::env::temp_dir().join(format!("pult-log-busy-test-{}.csv", std::process::id()));
+        let bus = names(&["A1"]);
+        let mut first = Log::create(&path, 1, &bus).expect("create log");
+        first.row(&snap(10_000, 0.5, 2.0)).expect("write row");
+
+        let refused = Log::create(&path, 1, &bus)
+            .err()
+            .expect("second run refused");
+        assert_eq!(refused.to_string(), "another run or program has it open");
+
+        // Nothing was emptied, the file can be read meanwhile and the first run goes on.
+        first.row(&snap(20_000, 0.5, 2.0)).expect("write row");
+        let text = std::fs::read_to_string(&path).expect("read log");
+        assert_eq!(text.lines().count(), 3);
+
+        // With the first run gone the file is free again, and starts over.
+        drop(first);
+        drop(Log::create(&path, 1, &bus).expect("create log again"));
+        let text = std::fs::read_to_string(&path).expect("read log");
+        std::fs::remove_file(&path).expect("remove log");
+        assert_eq!(text.lines().count(), 1);
     }
 }

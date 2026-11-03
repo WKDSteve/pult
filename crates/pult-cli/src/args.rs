@@ -35,7 +35,8 @@ example \"app:Spotify\" (see `pult programs`).
 GAIN_DB is a gain in dB, for example \"CABLE Output@-6\". --latency-ms is the buffering per
 input (default 40); raise it if you hear dropouts. --profile reads inputs, buses (several
 outputs) and which input feeds which bus from a TOML file (see examples/pult.toml).
---log writes a CSV row with the levels and counters every 10 s (the file is overwritten).
+--log writes a CSV row with the levels and counters every 10 s (the file is overwritten; a
+run on a file that another run has open is refused).
 `tone` plays a sine (default 440 Hz at -30 dB) to check a chain of devices and stops on
 Enter. `run` takes commands while it runs (type help: gain, mute, pan, show, save) and
 stops on an empty line, quit or Ctrl+C.

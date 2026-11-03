@@ -67,7 +67,8 @@ Die Lautstärke regelt weiter der Windows-Lautstärkeregler (er steuert `CABLE I
 pult run --from "CABLE Output" --to Focusrite --log abend.csv
 ```
 
-Schreibt alle 10 Sekunden eine Zeile nach `abend.csv` (die Datei wird neu angelegt): Laufzeit, Spitzenpegel des
+Schreibt alle 10 Sekunden eine Zeile nach `abend.csv` (die Datei wird neu angelegt; schreibt gerade ein anderer Lauf
+hinein, startet pult nicht und lässt sie unberührt, mitlesen geht weiter): Laufzeit, Spitzenpegel des
 Abschnitts in dB, dazu alle Zähler der Statuszeile als laufende Summen. Jede Zeile wird sofort gespeichert, auch wenn
 das Fenster einfach geschlossen wird. Die Spalte `drift_ppm` zeigt die Korrektur des Resamplers zum Zeitpunkt der
 Zeile: Sie pendelt sich nach dem Start ein und bleibt dann ungefähr auf dem Unterschied der beiden Gerätetakte. Die
