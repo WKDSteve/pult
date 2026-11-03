@@ -96,16 +96,15 @@ pub enum Error {
         /// Its format.
         format: String,
     },
-    /// A device runs at another sample rate than the first bus; there is no resampler yet.
-    RateMismatch {
+    /// A device came back at another sample rate than its buffers and resamplers were made
+    /// for.
+    RateChanged {
         /// The device.
         device: String,
-        /// Its rate in Hz.
+        /// Its rate now, in Hz.
         rate: u32,
-        /// The first bus's device, which sets the route's rate.
-        reference: String,
-        /// Its rate in Hz.
-        reference_rate: u32,
+        /// Its rate when the route started, in Hz.
+        expected: u32,
     },
     /// An input device came back with another channel count than its rings were made for.
     LayoutChanged {
@@ -156,15 +155,14 @@ impl fmt::Display for Error {
                 f,
                 "{device} uses the sample format {format}; only 32-bit float is supported yet"
             ),
-            Self::RateMismatch {
+            Self::RateChanged {
                 device,
                 rate,
-                reference,
-                reference_rate,
+                expected,
             } => write!(
                 f,
-                "{device} runs at {rate} Hz but {reference} at {reference_rate} Hz; set both to \
-                 the same rate (Sound settings, device properties, Advanced, default format)"
+                "{device} came back at {rate} Hz instead of {expected} Hz; set it back (Sound \
+                 settings, device properties, Advanced, default format) or restart pult to use it"
             ),
             Self::LayoutChanged {
                 device,
@@ -334,7 +332,7 @@ impl BusSpec {
 pub struct RouteSpec {
     /// The inputs.
     pub inputs: Vec<InputSpec>,
-    /// The buses; the first sets the route's sample rate.
+    /// The buses, each at its own device's sample rate.
     pub buses: Vec<BusSpec>,
     /// Buffering per input in milliseconds; more is safer against dropouts, less is faster.
     pub latency_ms: u32,
@@ -398,6 +396,9 @@ pub struct RunningInput {
     pub controls: Arc<InputControls>,
     /// One per bus it feeds, in the order of the spec.
     pub routes: Vec<RunningRoute>,
+    /// The rate its rings and resamplers were made for, in Hz: the device's, or for a
+    /// program the rate of the first bus it feeds.
+    pub sample_rate: u32,
     /// Whether the device is playing; false while it is gone.
     pub present: bool,
     /// Times the device was lost so far.
@@ -413,6 +414,8 @@ pub struct RunningBus {
     pub device: String,
     /// Gain, mute and statistics.
     pub handle: BusHandle,
+    /// The output device's rate, in Hz; the bus's inputs are resampled to it.
+    pub sample_rate: u32,
     /// Whether the device is playing; false while it is gone.
     pub present: bool,
     /// Times the device was lost so far.
@@ -467,8 +470,6 @@ pub struct Running {
     pub inputs: Vec<RunningInput>,
     /// The buses, in the order of the spec.
     pub buses: Vec<RunningBus>,
-    /// The route's sample rate in Hz.
-    pub sample_rate: u32,
     xruns: Arc<Counter>,
     /// The spec as it stands now: changed by `apply` along with the controls.
     spec: RouteSpec,
@@ -479,7 +480,6 @@ impl fmt::Debug for Running {
         f.debug_struct("Running")
             .field("inputs", &self.inputs)
             .field("buses", &self.buses)
-            .field("sample_rate", &self.sample_rate)
             .finish_non_exhaustive()
     }
 }
@@ -534,25 +534,29 @@ impl Running {
         changes
     }
 
-    /// Looks for the device of a closed slot and opens it, if it fits the route.
+    /// Looks for the device of a closed slot and opens it, if it still runs at the rate its
+    /// buffers were made for.
     fn reopen(&mut self, index: usize) -> Result<(), Error> {
         let slot = &self.slots[index];
+        let expected = match index.checked_sub(self.inputs.len()) {
+            None => self.inputs[index].sample_rate,
+            Some(bus) => self.buses[bus].sample_rate,
+        };
         if slot.role == Role::Process {
             let found = process::find(&slot.wanted)?;
             let source = Source::Process {
                 pid: found.pid,
                 name: &found.name,
-                sample_rate: self.sample_rate,
+                sample_rate: expected,
             };
             return self.slots[index].open(&source, &self.xruns);
         }
         let (device, name, config) = find_device(&self.host, slot.role, &slot.wanted)?;
-        if config.sample_rate() != self.sample_rate {
-            return Err(Error::RateMismatch {
+        if config.sample_rate() != expected {
+            return Err(Error::RateChanged {
                 device: name,
                 rate: config.sample_rate(),
-                reference: "the route".into(),
-                reference_rate: self.sample_rate,
+                expected,
             });
         }
         let source = Source::Device {
@@ -710,8 +714,7 @@ struct FoundBus {
     config: SupportedStreamConfig,
 }
 
-/// Finds the output device of every bus: each device at most once, all at the rate of the
-/// first.
+/// Finds the output device of every bus, each device at most once.
 fn find_buses(host: &cpal::Host, spec: &RouteSpec) -> Result<Vec<FoundBus>, Error> {
     let mut found: Vec<FoundBus> = Vec::with_capacity(spec.buses.len());
     for bus in &spec.buses {
@@ -721,16 +724,6 @@ fn find_buses(host: &cpal::Host, spec: &RouteSpec) -> Result<Vec<FoundBus>, Erro
                 "buses {} and {} both play on {name}",
                 spec.buses[other].name, bus.name
             )));
-        }
-        if let Some(first) = found.first()
-            && config.sample_rate() != first.config.sample_rate()
-        {
-            return Err(Error::RateMismatch {
-                device: name,
-                rate: config.sample_rate(),
-                reference: first.name.clone(),
-                reference_rate: first.config.sample_rate(),
-            });
         }
         found.push(FoundBus {
             device,
@@ -745,18 +738,20 @@ fn find_buses(host: &cpal::Host, spec: &RouteSpec) -> Result<Vec<FoundBus>, Erro
 struct Rings<'a> {
     /// The mixer inputs of every bus, filled as inputs are made.
     bus_inputs: &'a mut [Vec<MixerInput>],
-    target: usize,
-    band: usize,
-    capacity: usize,
-    sample_rate: u32,
-    /// The first bus's device, named when an input's rate differs.
-    reference: &'a str,
+    /// The sample rate of every bus's device, in Hz.
+    bus_rates: &'a [u32],
+    /// Buffering per ring in milliseconds.
+    latency_ms: u32,
 }
 
 /// What a slot opens at the start of a route.
 enum Opening {
     Device(Device, SupportedStreamConfig),
-    Process { pid: u32, name: String },
+    Process {
+        pid: u32,
+        name: String,
+        sample_rate: u32,
+    },
 }
 
 /// An input whose device or program is found and whose rings exist, before its stream
@@ -773,46 +768,47 @@ fn find_input(
     input: &InputSpec,
     rings: &mut Rings<'_>,
 ) -> Result<FoundInput, Error> {
-    let (opening, name, channels) = match input.kind {
+    let (opening, name, channels, sample_rate) = match input.kind {
         InputKind::Device => {
             let (device, name, config) = find_device(host, Role::Input, &input.device)?;
-            if config.sample_rate() != rings.sample_rate {
-                return Err(Error::RateMismatch {
-                    device: name,
-                    rate: config.sample_rate(),
-                    reference: rings.reference.to_owned(),
-                    reference_rate: rings.sample_rate,
-                });
-            }
-            let channels = config.channels();
-            (Opening::Device(device, config), name, channels)
+            let (channels, rate) = (config.channels(), config.sample_rate());
+            (Opening::Device(device, config), name, channels, rate)
         }
         InputKind::Process => {
             let found = process::find(&input.device)?;
+            // Windows converts a program's sound to any rate; the first bus's spares the
+            // resampler that bus's conversion.
+            let rate = rings.bus_rates[input.buses[0]];
             let opening = Opening::Process {
                 pid: found.pid,
                 name: found.name.clone(),
+                sample_rate: rate,
             };
-            (opening, found.name, PROCESS_CHANNELS)
+            (opening, found.name, PROCESS_CHANNELS, rate)
         }
     };
     let controls = Arc::new(InputControls::default());
     controls.gain.store(db_to_linear(input.gain_db));
     controls.pan.store(input.pan);
     controls.muted.store(input.muted, Ordering::Relaxed);
+    let (target, band, capacity) = buffering(sample_rate, rings.latency_ms);
     let ring = InputConfig {
         channels: usize::from(channels),
-        input_rate: rings.sample_rate,
-        output_rate: rings.sample_rate,
-        capacity: rings.capacity,
-        target: rings.target,
-        band: rings.band,
+        input_rate: sample_rate,
+        output_rate: sample_rate,
+        capacity,
+        target,
+        band,
         smoothing: DRIFT_SMOOTHING,
-        settle: SETTLE_SECONDS * rings.sample_rate as usize,
+        settle: SETTLE_SECONDS * sample_rate as usize,
     };
     let mut captures = Vec::with_capacity(input.buses.len());
     let mut routes = Vec::with_capacity(input.buses.len());
     for &bus in &input.buses {
+        let ring = InputConfig {
+            output_rate: rings.bus_rates[bus],
+            ..ring
+        };
         let (capture, mixer_input, handle) = connect_with(ring, Arc::clone(&controls));
         captures.push(capture);
         rings.bus_inputs[bus].push(mixer_input);
@@ -828,6 +824,7 @@ fn find_input(
             name,
             controls,
             routes,
+            sample_rate,
             present: false,
             outages: 0,
         },
@@ -846,17 +843,13 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     let now = Instant::now();
 
     let found_buses = find_buses(&host, spec)?;
-    let sample_rate = found_buses[0].config.sample_rate();
-    let (target, band, capacity) = buffering(sample_rate, spec.latency_ms);
+    let bus_rates: Vec<u32> = found_buses.iter().map(|b| b.config.sample_rate()).collect();
 
     let mut bus_inputs: Vec<Vec<MixerInput>> = spec.buses.iter().map(|_| Vec::new()).collect();
     let mut rings = Rings {
         bus_inputs: &mut bus_inputs,
-        target,
-        band,
-        capacity,
-        sample_rate,
-        reference: &found_buses[0].name,
+        bus_rates: &bus_rates,
+        latency_ms: spec.latency_ms,
     };
     let mut found_inputs = Vec::with_capacity(spec.inputs.len());
     for input in &spec.inputs {
@@ -879,6 +872,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     let mut buses = Vec::with_capacity(spec.buses.len());
     for ((bus, found), mixer_inputs) in spec.buses.iter().zip(found_buses).zip(bus_inputs) {
         let (mixer, handle) = Mixer::new(mixer_inputs, usize::from(found.config.channels()));
+        let sample_rate = found.config.sample_rate();
         handle.controls.gain.store(db_to_linear(bus.gain_db));
         handle.controls.muted.store(bus.muted, Ordering::Relaxed);
         slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
@@ -887,6 +881,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
             name: bus.name.clone(),
             device: found.name,
             handle,
+            sample_rate,
             present: false,
             outages: 0,
         });
@@ -897,7 +892,6 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         slots,
         inputs,
         buses,
-        sample_rate,
         xruns: Arc::new(Counter::default()),
         spec: spec.clone(),
     };
@@ -905,10 +899,14 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     for (index, opening) in opening.iter().enumerate() {
         let source = match opening {
             Opening::Device(device, config) => Source::Device { device, config },
-            Opening::Process { pid, name } => Source::Process {
-                pid: *pid,
+            Opening::Process {
+                pid,
                 name,
                 sample_rate,
+            } => Source::Process {
+                pid: *pid,
+                name,
+                sample_rate: *sample_rate,
             },
         };
         running.slots[index].open(&source, &running.xruns)?;
@@ -953,16 +951,14 @@ mod tests {
     }
 
     #[test]
-    fn rate_mismatch_names_both_devices_and_the_fix() {
-        let message = Error::RateMismatch {
-            device: "CABLE Output".into(),
+    fn rate_changed_names_both_rates_and_the_fix() {
+        let message = Error::RateChanged {
+            device: "Focusrite".into(),
             rate: 44_100,
-            reference: "Focusrite".into(),
-            reference_rate: 48_000,
+            expected: 48_000,
         }
         .to_string();
-        assert!(message.contains("CABLE Output runs at 44100 Hz"));
-        assert!(message.contains("Focusrite at 48000 Hz"));
+        assert!(message.contains("Focusrite came back at 44100 Hz instead of 48000 Hz"));
         assert!(message.contains("default format"));
     }
 

@@ -111,12 +111,9 @@ fn start_run(spec: &RunSpec) -> Result<(), String> {
 /// Shows levels and takes commands until an empty line, `quit` or Ctrl+C. A device that
 /// disappears is reported and taken back when it returns; the run goes on.
 fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
-    println!(
-        "Routing at {} Hz; type help for commands, Enter on an empty line stops.",
-        running.sample_rate
-    );
+    println!("Routing; type help for commands, Enter on an empty line stops.");
     for bus in &running.buses {
-        println!("  {} -> {}", bus.name, bus.device);
+        println!("  {} -> {} at {} Hz", bus.name, bus.device, bus.sample_rate);
     }
     for (i, input) in running.inputs.iter().enumerate() {
         let buses: Vec<&str> = input
@@ -124,7 +121,13 @@ fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
             .iter()
             .map(|r| running.buses[r.bus].name.as_str())
             .collect();
-        println!("  [{}] {} -> {}", i + 1, input.name, buses.join(", "));
+        println!(
+            "  [{}] {} at {} Hz -> {}",
+            i + 1,
+            input.name,
+            input.sample_rate,
+            buses.join(", ")
+        );
     }
     let mut recorder = Recorder::new(log, bus_names);
     let mut console = Console::open();

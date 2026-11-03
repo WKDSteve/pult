@@ -660,6 +660,53 @@ mod tests {
     }
 
     #[test]
+    fn converts_between_rates_and_keeps_the_pitch() {
+        for (input_rate, output_rate) in [(44_100, 48_000), (96_000, 48_000), (48_000, 44_100)] {
+            // 40 ms of buffering, as the engine sets it, and 10 ms callbacks on both sides.
+            let target = input_rate as usize / 25;
+            let (mut capture, input, handle) = connect(InputConfig {
+                input_rate,
+                output_rate,
+                smoothing: 1.0 / 128.0,
+                settle: 2 * input_rate as usize,
+                ..config(1, target)
+            });
+            let (mut mixer, _) = Mixer::new(vec![input], 1);
+            let mut out = vec![0.0; output_rate as usize / 100];
+            let block = input_rate as usize / 100;
+            let step = std::f32::consts::TAU * 1000.0 / input_rate as f32;
+            let mut phase = 0.0_f32;
+            let mut data = vec![0.0; block];
+            let mut crossings = 0;
+            // One simulated minute; the zero crossings of the last ten seconds give the pitch.
+            for callback in 0..6000 {
+                for sample in &mut data {
+                    *sample = 0.5 * phase.sin();
+                    phase = (phase + step) % std::f32::consts::TAU;
+                }
+                capture.push(&data);
+                mixer.process(&mut out);
+                if callback >= 5000 {
+                    crossings += out
+                        .windows(2)
+                        .filter(|pair| pair[0] < 0.0 && pair[1] >= 0.0)
+                        .count();
+                }
+            }
+            let rates = format!("{input_rate} -> {output_rate}");
+            assert_eq!(handle.stats.underruns.get(), 0, "{rates}");
+            assert_eq!(handle.stats.resyncs.get(), 0, "{rates}");
+            // 1 kHz for ten seconds, give or take the crossings at the callback edges.
+            assert!(
+                (9_000..=10_001).contains(&crossings),
+                "{rates}: {crossings}"
+            );
+            let ppm = handle.stats.correction_ppm.load();
+            assert!(ppm.abs() < 50.0, "{rates}: correction {ppm} ppm");
+        }
+    }
+
+    #[test]
     fn serves_callbacks_longer_than_one_chunk() {
         // The target has to cover a whole callback, as with any buffering.
         let (mut capture, input, handle) = connect(config(1, 4000));

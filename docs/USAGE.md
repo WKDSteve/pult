@@ -11,7 +11,7 @@ Programme ──► CABLE Input ══ VB-CABLE ══ CABLE Output ──► pu
 ## 1. Einmalig einrichten
 
 1. **VB-CABLE installieren**, falls noch nicht vorhanden: von der Seite des Herstellers VB-Audio. VB-CABLE ist Donationware und für private Nutzung frei; pult liefert es nicht mit. Den Installer selbst starten (Rechtsklick, als Administrator), danach neu starten.
-2. **Gleiche Abtastrate**: In *Systemsteuerung, Sound* bei `CABLE Output` (Aufnahme), `CABLE Input` (Wiedergabe) und dem Scarlett (Wiedergabe) unter *Eigenschaften, Erweitert* dasselbe Standardformat wählen, zum Beispiel 24 Bit, 48000 Hz. Weichen die Raten ab, sagt `pult run` das und nennt beide Geräte.
+2. **Abtastrate** (empfohlen, nicht nötig): In *Systemsteuerung, Sound* bei `CABLE Output` (Aufnahme), `CABLE Input` (Wiedergabe) und dem Scarlett (Wiedergabe) unter *Eigenschaften, Erweitert* dasselbe Standardformat wählen, zum Beispiel 24 Bit, 48000 Hz. Weichen die Raten ab, rechnet pult jeden Eingang auf die Rate seines Busses um; mit gleichen Raten bleibt nur der feine Ausgleich der Takt-Drift. `pult run` zeigt beim Start die Rate jedes Geräts.
 3. **Bauen**: `cargo build --release` im Repo. Das Programm liegt dann unter `target\release\pult.exe`.
 
 ## 2. Geräte ansehen
@@ -93,7 +93,8 @@ Verschwindet ein Gerät während des Laufs (USB gezogen, in Windows deaktiviert,
   fehlt ein Bus, hört man ihn nicht, seine Eingänge laufen auf den anderen Bussen weiter.
 - pult sucht das Gerät jede Sekunde unter dem Namen aus `--from`, `--to` oder dem Profil. Deshalb findet es das Gerät auch
   dann wieder, wenn Windows die Nummer im Namen ändert (`2- Focusrite` wird zu `3- Focusrite`).
-- Kommt das Gerät mit einer anderen Abtastrate zurück, meldet pult das einmal und wartet, bis die Rate wieder stimmt. Ein
+- Kommt das Gerät mit einer anderen Abtastrate zurück als beim Start, meldet pult das einmal und wartet, bis die Rate
+  wieder stimmt (oder pult neu startet). Ein
   Eingang muss mit derselben Kanalzahl zurückkommen, sonst hilft nur ein Neustart von pult.
 - Auch ein Gerät, das ohne Fehlermeldung einfach keine Daten mehr liefert, gilt nach zwei Sekunden als weg.
 - Beim Start müssen alle Geräte da sein; fehlt eines, startet pult nicht.
@@ -149,7 +150,7 @@ pult run --profile meinprofil.toml --log abend.csv
 ```
 
 - **Busse:** Jeder Bus ist ein eigener Ausgang mit eigenem Takt. Zwei Busse dürfen nicht dasselbe Gerät benutzen. Alle
-  Geräte brauchen dieselbe Abtastrate; maßgeblich ist der erste Bus.
+  Geräte dürfen verschiedene Abtastraten haben: Jeder Eingang wird auf die Rate des Busses umgerechnet, auf den er geht.
 - **Matrix:** Ein Eingang auf mehreren Bussen bekommt je Bus einen eigenen Puffer mit eigenem Resampler, der dem Takt
   dieses Busses folgt. Gain,
   Mute und Pan gelten für alle seine Busse gemeinsam; der Bus-Gain wirkt auf die Summe.
@@ -184,7 +185,8 @@ buses = ["A2"]
   Kleinschreibung zählen nicht.
 - Mitgenommen wird das Programm samt seiner Unterprozesse; bei einem Browser also alle Tabs. Laufen mehrere getrennte
   Programme gleichen Namens, nimmt pult das erste.
-- Windows liefert den Ton als Stereo in der Abtastrate des Routings; eine abweichende Rate ist hier kein Problem.
+- Windows liefert den Ton als Stereo in der Abtastrate des ersten Busses, auf den das Programm geht; welche Rate das
+  Programm selbst nutzt, spielt keine Rolle.
 - Spielt das Programm nichts, zeigt pult Stille (`-inf dB`), ohne Aussetzer.
 - Beendet sich das Programm, meldet pult das wie ein abgestecktes Gerät; startet es wieder, wird es aufgenommen.
 - **Doppelt hören vermeiden:** pult nimmt den Ton ab, das Programm spielt ihn aber weiter auf sein eigenes Ausgabegerät.
@@ -228,7 +230,7 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 |---|---|
 | `no device matches "…"` | Name falsch geschrieben oder Gerät nicht angesteckt: `pult devices` |
 | `"…" matches several devices: …` | einen längeren, eindeutigen Teil des Namens nehmen |
-| `… runs at 44100 Hz but … at 48000 Hz` | Abtastraten angleichen (Schritt 1.2) |
+| `… came back at 44100 Hz instead of 48000 Hz` | ein verlorenes Gerät kam mit anderer Rate zurück: Rate zurückstellen oder pult neu starten |
 | `… uses the sample format …` | das Gerät meldet im Shared Mode kein 32-Bit-Float; anderes Gerät oder Treiber |
 | `… is there but does not open yet: …` | ein verlorenes Gerät ist wieder da, passt aber nicht (Abtastrate, Format); pult versucht es weiter |
 | `… came back with … channels instead of …` | ein Eingang kam mit anderer Kanalzahl zurück; pult neu starten |

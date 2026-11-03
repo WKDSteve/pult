@@ -5,7 +5,7 @@
 # Buffering per input in milliseconds (1 to 2000). Raise it if you hear dropouts.
 latency_ms = 40
 
-# A bus is a mix played on one output device. All devices must run at the same rate.
+# A bus is a mix played on one output device; every input is resampled to its rate.
 [[bus]]
 name = "A1"
 device = "Focusrite"
