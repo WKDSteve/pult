@@ -10,7 +10,8 @@ repository.workspace = true
 publish.workspace = true
 
 # Owned by the interface strand (stage 3b): its dependencies (eframe, egui) go here, not into the
-# workspace's Cargo.toml. It sees the mixer only through pult_core::view.
+# workspace's Cargo.toml. The console sees the mixer only through pult_core::view; main.rs opens
+# the engine's desk behind it.
 
 [[bin]]
 name = "pult-app"
@@ -18,6 +19,10 @@ path = "src/main.rs"
 
 [dependencies]
 pult-core.workspace = true
+# The engine behind the window (EngineDesk); the window still sees it only as a pult_core Desk.
+pult-engine.workspace = true
+# Debug builds use its checking allocator, as the command line does.
+assert_no_alloc.workspace = true
 # The same UI stack as takt (egui over eframe, wgpu); glow, x11 and wayland stay out.
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
 

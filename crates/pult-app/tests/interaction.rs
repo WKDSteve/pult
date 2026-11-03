@@ -7,6 +7,7 @@ use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, HarnessBuilder};
 use pult_app::console::{self, ConsoleState, Tab};
 use pult_app::log::Source;
+use pult_app::start::{self, Choice};
 use pult_app::theme::Theme;
 use pult_core::view::{Desk, FakeDesk, MixerView};
 
@@ -158,4 +159,33 @@ fn inputs_of_the_same_name_keep_their_own_crosspoints() {
     // Input 2 (index 1) fed A1 and A2; the click takes it off A2 and leaves input 3 alone.
     assert_eq!(view.inputs[1].buses, [0]);
     assert_eq!(view.inputs[SPOTIFY].buses, [1]);
+}
+
+#[test]
+fn the_start_screen_offers_a_retry_and_the_demo() {
+    let mut harness = HarnessBuilder::default()
+        .with_size(vec2(1280.0, 760.0))
+        .build_ui_state(
+            |ui, picked: &mut Vec<Choice>| {
+                let path = std::path::Path::new("studio.toml");
+                if let Some(choice) = start::screen(ui, Some(path), Some("no device")) {
+                    picked.push(choice);
+                }
+            },
+            Vec::new(),
+        );
+    harness.run_steps(2);
+    harness.get_by_label("Try again").click();
+    harness.run_steps(2);
+    harness.get_by_label("Demo desk").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state(), &[Choice::Retry, Choice::Demo]);
+
+    // Without a profile there is nothing to try again.
+    let harness = HarnessBuilder::default()
+        .with_size(vec2(1280.0, 760.0))
+        .build_ui(|ui| {
+            start::screen(ui, None, None);
+        });
+    assert!(harness.query_by_label("Try again").is_none());
 }

@@ -8,5 +8,6 @@
 pub mod console;
 pub mod log;
 pub mod matrix;
+pub mod start;
 pub mod theme;
 pub mod widgets;

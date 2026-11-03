@@ -1,38 +1,142 @@
-//! `pult-app`: the console window. Until the engine side of `pult_core::view` exists, it
-//! shows the in-memory `FakeDesk`.
+//! `pult-app`: the console window over a running route (`pult-app studio.toml`) or the demo
+//! desk (`pult-app --demo`).
 
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use eframe::egui;
+use eframe::egui::{self, CentralPanel, Frame, ViewportCommand};
 use pult_app::console::{self, ConsoleState};
+use pult_app::start::{self, Choice, Start, USAGE};
 use pult_app::theme::Theme;
 use pult_core::view::{Desk, FakeDesk};
+use pult_engine::EngineDesk;
 
-/// The desk is asked for a view about 30 times a second, as the contract expects.
+// Debug builds abort on any allocation inside an audio callback, as the command line does
+// (see pult-engine).
+#[cfg(debug_assertions)]
+#[global_allocator]
+static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
+/// The desk is asked for a view about 30 times a second, as the contract expects; a view also
+/// lets the engine look for lost devices.
 const FRAME: Duration = Duration::from_millis(33);
 
 struct App {
-    desk: Box<dyn Desk>,
+    /// The profile from the command line, opened again on "Try again".
+    profile: Option<PathBuf>,
+    desk: Option<Box<dyn Desk>>,
+    /// Why the profile did not open; shown on the start screen.
+    problem: Option<String>,
     state: ConsoleState,
-    start: Instant,
+    clock: Instant,
+    title: String,
+}
+
+impl App {
+    fn new(start: Start) -> Self {
+        let mut app = Self {
+            profile: None,
+            desk: None,
+            problem: None,
+            state: ConsoleState::default(),
+            clock: Instant::now(),
+            title: String::new(),
+        };
+        match start {
+            Start::Profile(path) => {
+                app.profile = Some(path);
+                app.open_profile();
+            }
+            Start::Demo => app.use_desk(Box::new(FakeDesk::new())),
+            Start::Nothing | Start::Help | Start::Version => {}
+        }
+        app
+    }
+
+    fn open_profile(&mut self) {
+        let Some(path) = &self.profile else { return };
+        match EngineDesk::open(path) {
+            Ok(desk) => self.use_desk(Box::new(desk)),
+            Err(problem) => self.problem = Some(problem),
+        }
+    }
+
+    fn use_desk(&mut self, desk: Box<dyn Desk>) {
+        self.desk = Some(desk);
+        self.problem = None;
+        self.state = ConsoleState::default();
+    }
+
+    /// The window title: the profile's file name, or what is shown instead.
+    fn wanted_title(&self) -> String {
+        let name = match (&self.desk, &self.profile) {
+            (Some(_), Some(path)) => path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into(),
+            ),
+            (Some(_), _) => "demo".to_owned(),
+            (None, _) => return "pult".to_owned(),
+        };
+        format!("pult · {name}")
+    }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let now = self.start.elapsed().as_secs_f64();
-        let view = self.desk.view();
-        for action in console::show(ui, &view, &mut self.state, now) {
-            if let Err(reason) = self.desk.act(action) {
-                self.state.refused(view.elapsed, &reason);
-            }
+        let title = self.wanted_title();
+        if title != self.title {
+            ui.ctx()
+                .send_viewport_cmd(ViewportCommand::Title(title.clone()));
+            self.title = title;
         }
-        ui.ctx().request_repaint_after(FRAME);
+        if let Some(desk) = &mut self.desk {
+            let now = self.clock.elapsed().as_secs_f64();
+            let view = desk.view();
+            for action in console::show(ui, &view, &mut self.state, now) {
+                if let Err(reason) = desk.act(action) {
+                    self.state.refused(view.elapsed, &reason);
+                }
+            }
+            ui.ctx().request_repaint_after(FRAME);
+            return;
+        }
+        let base = Theme::current().palette.base;
+        let choice = CentralPanel::default()
+            .frame(Frame::new().fill(base))
+            .show(ui, |ui| {
+                start::screen(ui, self.profile.as_deref(), self.problem.as_deref())
+            })
+            .inner;
+        match choice {
+            Some(Choice::Retry) => self.open_profile(),
+            Some(Choice::Demo) => {
+                self.profile = None;
+                self.use_desk(Box::new(FakeDesk::new()));
+            }
+            None => {}
+        }
     }
 }
 
-fn main() -> eframe::Result {
+fn main() -> ExitCode {
+    let start = match start::parse(std::env::args().skip(1)) {
+        Ok(Start::Help) => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Ok(Start::Version) => {
+            println!("pult-app {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Ok(start) => start,
+        Err(err) => {
+            eprintln!("pult-app: {err}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("pult")
@@ -40,16 +144,19 @@ fn main() -> eframe::Result {
             .with_min_inner_size([640.0, 560.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "pult",
         options,
         Box::new(|cc| {
             Theme::current().apply(&cc.egui_ctx);
-            Ok(Box::new(App {
-                desk: Box::new(FakeDesk::new()),
-                state: ConsoleState::default(),
-                start: Instant::now(),
-            }))
+            Ok(Box::new(App::new(start)))
         }),
-    )
+    );
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("pult-app: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
