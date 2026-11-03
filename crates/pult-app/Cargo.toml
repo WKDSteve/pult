@@ -24,9 +24,13 @@ pult-engine.workspace = true
 # Debug builds use its checking allocator, as the command line does.
 assert_no_alloc.workspace = true
 # The same UI stack as takt (egui over eframe, wgpu); glow, x11 and wayland stay out.
-# AttachConsole (src/ffi.rs), so a release build without a console window can still answer
-# --help and say what is wrong with its command line in the terminal it was started from.
-windows = { workspace = true, features = ["Win32_System_Console"] }
+# src/ffi.rs: AttachConsole, so a release build without a console window can still answer
+# --help in the terminal it was started from; a named mutex and event, so a second start shows
+# the running window instead of starting a second route.
+windows = { workspace = true, features = [
+    "Win32_System_Console",
+    "Win32_UI_WindowsAndMessaging",
+] }
 # The icon in the notification area (stage 3 UI): the window hides there and the route keeps
 # playing. Without default features: those only pull in the Linux tray (libappindicator, GTK).
 tray-icon = { version = "0.26.1", default-features = false }

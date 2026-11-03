@@ -12,6 +12,7 @@ mod ffi;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, CentralPanel, Frame, ViewportCommand};
@@ -45,6 +46,8 @@ struct App {
     title: String,
     /// The icon in the notification area; `None` when the shell refused it, then closing quits.
     tray: Option<Tray>,
+    /// What the tray and later starts ask for.
+    commands: Receiver<Command>,
     window: Window,
     /// The user saw the hint on the first close; later closes hide at once.
     told: bool,
@@ -64,6 +67,8 @@ enum Window {
 
 impl App {
     fn new(start: Start, ctx: &egui::Context) -> Self {
+        let (send, commands) = mpsc::channel();
+        listen_for_later_starts(ctx, &send);
         let mut app = Self {
             profile: None,
             desk: None,
@@ -72,7 +77,8 @@ impl App {
             state: ConsoleState::default(),
             clock: Instant::now(),
             title: String::new(),
-            tray: Tray::new(ctx, "pult").ok(),
+            tray: Tray::new(ctx, "pult", &send).ok(),
+            commands,
             window: Window::Shown,
             told: false,
         };
@@ -126,7 +132,7 @@ impl App {
 
     /// Does what the tray asked for and what closing the window means.
     fn tray_and_close(&mut self, ctx: &egui::Context) {
-        while let Some(command) = self.tray.as_ref().and_then(Tray::command) {
+        while let Ok(command) = self.commands.try_recv() {
             match command {
                 Command::Show => {
                     self.window = Window::Shown;
@@ -235,6 +241,15 @@ impl eframe::App for App {
     }
 }
 
+/// Shows the window when another start of pult-app asks for it (see `main`).
+fn listen_for_later_starts(ctx: &egui::Context, commands: &Sender<Command>) {
+    let (send, ctx) = (commands.clone(), ctx.clone());
+    ffi::listen_for_show(ffi::SHOW, move || {
+        let _ = send.send(Command::Show);
+        ctx.request_repaint();
+    });
+}
+
 fn main() -> ExitCode {
     let start = start::parse(std::env::args().skip(1));
     if !matches!(start, Ok(Start::Profile(_) | Start::Demo | Start::Nothing)) {
@@ -254,6 +269,20 @@ fn main() -> ExitCode {
             eprintln!("pult-app: {err}\n\n{USAGE}");
             return ExitCode::from(2);
         }
+    };
+    // One instance per session: a second start shows the running window and ends, instead of
+    // a second route on the same devices.
+    let Some(_instance) = ffi::claim(ffi::INSTANCE) else {
+        let shown = ffi::ask_to_show(ffi::SHOW, Duration::from_secs(3));
+        if start != Start::Nothing || !shown {
+            ffi::attach_parent_console();
+            if shown {
+                eprintln!("pult-app: already running; showed its window and left this start out");
+            } else {
+                eprintln!("pult-app: already running, but its window did not answer");
+            }
+        }
+        return ExitCode::SUCCESS;
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

@@ -4,7 +4,7 @@
 //! the program. Closing the window only hides it while a desk is open, so nothing stops
 //! playing by accident; with nothing open, closing quits as before.
 
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Sender;
 
 use eframe::egui::{Align, Button, Context, Id, Layout, Modal, RichText, Ui, vec2};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
@@ -15,17 +15,16 @@ use crate::theme::Theme;
 const SHOW: &str = "show";
 const QUIT: &str = "quit";
 
-/// What the tray asks the window for.
+/// What the tray, or a second start, asks the window for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     Show,
     Quit,
 }
 
-/// The tray icon and what it was asked since the last frame.
+/// The tray icon.
 pub struct Tray {
     icon: TrayIcon,
-    commands: Receiver<Command>,
 }
 
 impl std::fmt::Debug for Tray {
@@ -35,21 +34,20 @@ impl std::fmt::Debug for Tray {
 }
 
 impl Tray {
-    /// Puts the icon into the notification area; its events repaint `ctx`, also while the
-    /// window is hidden. Call it once, on the thread of the window.
+    /// Puts the icon into the notification area; what it is asked goes to `commands` and
+    /// repaints `ctx`, also while the window is hidden. Call it once, on the thread of the
+    /// window.
     ///
     /// # Errors
     ///
     /// When the shell has no notification area or refuses the icon.
-    pub fn new(ctx: &Context, tooltip: &str) -> Result<Self, String> {
+    pub fn new(ctx: &Context, tooltip: &str, commands: &Sender<Command>) -> Result<Self, String> {
         let menu = Menu::new();
         let show = MenuItem::with_id(SHOW, "Show pult", true, None);
         let quit = MenuItem::with_id(QUIT, "Quit pult", true, None);
         menu.append(&show).map_err(|e| e.to_string())?;
         menu.append(&quit).map_err(|e| e.to_string())?;
-        let (send, commands) = mpsc::channel();
-
-        let (to_window, repaint) = (send.clone(), ctx.clone());
+        let (to_window, repaint) = (commands.clone(), ctx.clone());
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let command = match event.id.as_ref() {
                 SHOW => Command::Show,
@@ -59,7 +57,7 @@ impl Tray {
             let _ = to_window.send(command);
             repaint.request_repaint();
         }));
-        let repaint = ctx.clone();
+        let (send, repaint) = (commands.clone(), ctx.clone());
         TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -81,13 +79,7 @@ impl Tray {
             .with_icon(image)
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { icon, commands })
-    }
-
-    /// The next thing the tray asks for, if any.
-    #[must_use]
-    pub fn command(&self) -> Option<Command> {
-        self.commands.try_recv().ok()
+        Ok(Self { icon })
     }
 
     /// Sets the text shown over the icon (the window title).
