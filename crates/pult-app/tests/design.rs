@@ -10,10 +10,11 @@ use std::time::Duration;
 
 use eframe::egui::{Rect, pos2, vec2};
 use egui_kittest::Harness;
+use pult_app::binding::Values;
 use pult_app::console::{self, ConsoleState, Tab};
+use pult_app::layout::{self, Control, Meters};
 use pult_app::theme::Theme;
-use pult_app::widgets::meter::MeterState;
-use pult_app::widgets::strip::{bus_strip, input_strip};
+use pult_app::widgets::strip;
 use pult_core::view::{BusView, EventView, InputView, MeterPoint, MixerView, SourceKind};
 
 /// Frames to run before the shot, so peak lines have something to hold.
@@ -129,7 +130,7 @@ fn first_events() -> Vec<EventView> {
 
 #[test]
 fn channel_strip() {
-    let mut meters = vec![MeterState::default(); 3];
+    let mut meters = Meters::default();
     let mut frame = 0_u32;
     let mut harness = Harness::builder()
         .with_size(vec2(318.0, 640.0))
@@ -143,34 +144,25 @@ fn channel_strip() {
             let p = &Theme::current().palette;
             let full = ui.max_rect();
             ui.painter().rect_filled(full, 0.0, p.base);
-            let names: Vec<String> = view.buses.iter().map(|b| b.name.clone()).collect();
+            meters.fit(&view);
+            let mut values = Values::new(&view);
+            let mut show = |ui: &mut _, rect, element: layout::Element| {
+                let Control::Strip(strip) = element.control else {
+                    unreachable!("the layout builds strips");
+                };
+                strip::show(ui, rect, &strip, &mut values, &mut meters, now);
+            };
             let top = full.top() + 10.0;
             let height = full.height() - 20.0;
             for (slot, index) in [1_usize, 2].into_iter().enumerate() {
                 #[allow(clippy::cast_precision_loss)]
                 let x = full.left() + 10.0 + slot as f32 * (m.strip_width + m.strip_gap);
                 let rect = Rect::from_min_size(pos2(x, top), vec2(m.strip_width, height));
-                input_strip(
-                    ui,
-                    rect,
-                    index,
-                    &view.inputs[index],
-                    &names,
-                    &mut meters[slot],
-                    now,
-                );
+                show(ui, rect, layout::input_strip(index, &view));
             }
             let x = full.left() + 10.0 + 2.0 * (m.strip_width + m.strip_gap) + 6.0;
             let rect = Rect::from_min_size(pos2(x, top), vec2(m.bus_strip_width, height));
-            bus_strip(
-                ui,
-                rect,
-                0,
-                &view.buses[0],
-                view.buses.len(),
-                &mut meters[2],
-                now,
-            );
+            show(ui, rect, layout::bus_strip(0));
         });
     harness.run_steps(FRAMES);
     harness.snapshot("channel_strip");

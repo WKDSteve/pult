@@ -7,12 +7,13 @@ use eframe::egui::{
     Ui, pos2, vec2,
 };
 
+use crate::binding::Values;
+use crate::layout::{self, Control, Meters, Place};
 use crate::log::{self, Log, Source, format_elapsed};
 use crate::matrix;
 use crate::theme::Theme;
 use crate::widgets::badge::pill;
-use crate::widgets::meter::MeterState;
-use crate::widgets::strip::{Zones, bus_strip, input_strip};
+use crate::widgets::strip::{self, Zones};
 use crate::widgets::toggle::{Role, toggle};
 use pult_core::view::{Action, MeterPoint, MixerView};
 
@@ -29,8 +30,7 @@ pub enum Tab {
 #[derive(Clone, Debug, Default)]
 pub struct ConsoleState {
     pub tab: Tab,
-    input_meters: Vec<MeterState>,
-    bus_meters: Vec<MeterState>,
+    meters: Meters,
     /// Clipped samples per bus at the previous view, to light the lamp on new ones.
     bus_clipped: Vec<u64>,
     /// What the desk reported and refused, oldest first.
@@ -40,15 +40,12 @@ pub struct ConsoleState {
 impl ConsoleState {
     /// Takes what a view brings that the console must remember: events and new clips.
     fn take(&mut self, view: &MixerView) {
-        self.input_meters
-            .resize_with(view.inputs.len(), MeterState::default);
-        self.bus_meters
-            .resize_with(view.buses.len(), MeterState::default);
+        self.meters.fit(view);
         self.bus_clipped.resize(view.buses.len(), 0);
         for ((bus, meter), seen) in view
             .buses
             .iter()
-            .zip(&mut self.bus_meters)
+            .zip(self.meters.buses_mut())
             .zip(&mut self.bus_clipped)
         {
             if bus.clipped > *seen {
@@ -268,13 +265,24 @@ fn console(
 ) {
     let theme = Theme::current();
     let (p, m) = (&theme.palette, &theme.metrics);
-    let bus_names: Vec<String> = view.buses.iter().map(|b| b.name.clone()).collect();
+    let elements = layout::standard(view);
+    let strips = |place| {
+        elements
+            .iter()
+            .filter_map(move |element| match &element.control {
+                Control::Strip(strip) if element.place == place => Some(strip),
+                _ => None,
+            })
+    };
+    let mut values = Values::new(view);
     let height = ui
         .available_height()
-        .max(Zones::min_height(bus_names.len()));
+        .max(Zones::min_height(view.buses.len()));
     #[allow(clippy::cast_precision_loss)]
-    let section_width =
-        view.buses.len() as f32 * (m.bus_strip_width + m.strip_gap) + 2.0 * m.strip_gap + 1.0;
+    let section_width = strips(Place::BusSection).count() as f32
+        * (m.bus_strip_width + m.strip_gap)
+        + 2.0 * m.strip_gap
+        + 1.0;
 
     // Bus section on the right, set off by its own background.
     let full = ui.available_rect_before_wrap();
@@ -282,18 +290,17 @@ fn console(
     ui.painter()
         .rect_filled(section, CornerRadius::same(m.radius + 2), p.surface_alt);
     let mut x = section.left() + m.strip_gap;
-    for (j, bus) in view.buses.iter().enumerate() {
+    for bus_strip in strips(Place::BusSection) {
         let rect = Rect::from_min_size(
             pos2(x, section.top() + m.strip_gap),
             vec2(m.bus_strip_width, height - 2.0 * m.strip_gap),
         );
-        actions.extend(bus_strip(
+        actions.extend(strip::show(
             ui,
             rect,
-            j,
-            bus,
-            view.buses.len(),
-            &mut state.bus_meters[j],
+            bus_strip,
+            &mut values,
+            &mut state.meters,
             now,
         ));
         x += m.bus_strip_width + m.strip_gap;
@@ -308,18 +315,17 @@ fn console(
         ScrollArea::horizontal().auto_shrink(false).show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = m.strip_gap;
-                for (i, input) in view.inputs.iter().enumerate() {
+                for input_strip in strips(Place::InputRow) {
                     let (rect, _) = ui.allocate_exact_size(
                         vec2(m.strip_width, height - 2.0 * m.strip_gap),
                         Sense::hover(),
                     );
-                    actions.extend(input_strip(
+                    actions.extend(strip::show(
                         ui,
                         rect,
-                        i,
-                        input,
-                        &bus_names,
-                        &mut state.input_meters[i],
+                        input_strip,
+                        &mut values,
+                        &mut state.meters,
                         now,
                     ));
                 }
@@ -374,11 +380,11 @@ mod tests {
     fn a_new_bus_clip_lights_the_lamp_once() {
         let mut state = ConsoleState::default();
         state.take(&view_with(&[], 0));
-        assert!(!state.bus_meters[0].clipped());
+        assert!(!state.meters.buses_mut()[0].clipped());
         state.take(&view_with(&[], 5));
-        assert!(state.bus_meters[0].clipped());
-        state.bus_meters[0].reset_clip();
+        assert!(state.meters.buses_mut()[0].clipped());
+        state.meters.buses_mut()[0].reset_clip();
         state.take(&view_with(&[], 5));
-        assert!(!state.bus_meters[0].clipped());
+        assert!(!state.meters.buses_mut()[0].clipped());
     }
 }

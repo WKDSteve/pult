@@ -1,20 +1,23 @@
-//! Channel strips: an input strip and a bus (master) strip, built from the controls.
+//! Channel strips: draws a [`Strip`] of the layout, an input strip or a bus (master) strip.
 //!
 //! Every strip has the same zones from top to bottom, so faders and meters of all strips line
 //! up: name, pan (or device on a bus), bus assignment, mute/solo, fader with meter, readout.
+//! The elements of a strip say which control goes into which zone and what it is bound to.
 
 use eframe::egui::{
     Align, Align2, Color32, CornerRadius, Label, Layout, Rect, RichText, Stroke, StrokeKind, Ui,
-    UiBuilder, pos2, vec2,
+    UiBuilder, Vec2, pos2, vec2,
 };
 
 use super::fader::fader;
 use super::knob::{format_pan, knob};
 use super::meter::{MeterState, meter, meter_scale};
 use super::scale::format_db;
-use super::toggle::{Role, toggle};
+use super::toggle::toggle;
+use crate::binding::{Binding, Value, Values};
+use crate::layout::{Control, Element, Meters, Owner, Place, Strip, StripStyle, Zone};
 use crate::theme::Theme;
-use pult_core::view::{Action, BusView, GAIN_RANGE_DB, InputView, SourceKind};
+use pult_core::view::{Action, GAIN_RANGE_DB, MixerView, SourceKind};
 
 const HEADER_HEIGHT: f32 = 38.0;
 const PAN_HEIGHT: f32 = 58.0;
@@ -84,6 +87,20 @@ impl Zones {
             + MIN_FADER_HEIGHT
             + READOUT_HEIGHT
     }
+
+    /// The rect of `zone`.
+    #[must_use]
+    pub fn rect(&self, zone: Zone) -> Rect {
+        match zone {
+            Zone::Header => self.header,
+            Zone::Pan => self.pan,
+            Zone::Assign => self.assign,
+            Zone::MuteSolo => self.mute_solo,
+            Zone::Fader => self.fader,
+            Zone::Readout => self.readout,
+            Zone::Info => self.pan.union(self.assign),
+        }
+    }
 }
 
 /// Runs `add` in a child of `ui` confined to `rect`.
@@ -151,278 +168,289 @@ fn readout(ui: &Ui, zone: Rect, gain_db: f32, note: Option<(String, Color32)>) {
     }
 }
 
-/// The fader zone: fader on the left, meter on the right, optionally with meter numbers.
-/// The meter comes as its state, the level of this frame and the time.
-fn fader_and_meter(
-    ui: &mut Ui,
-    zone: Rect,
-    gain_db: &mut f32,
-    label: &str,
-    (meter_state, level, now): (&mut MeterState, Option<f32>, f64),
-    with_numbers: bool,
-) -> bool {
-    let m = &Theme::current().metrics;
-    let numbers = if with_numbers { 12.0 } else { 0.0 };
-    let meter_x = zone.right() - numbers - m.meter_width;
-    let fader_rect = Rect::from_x_y_ranges(zone.left()..=meter_x - 4.0, zone.y_range());
-    let meter_rect = Rect::from_x_y_ranges(meter_x..=meter_x + m.meter_width, zone.y_range());
-    let changed = within(ui, fader_rect, Layout::top_down(Align::Min), |ui| {
-        fader(ui, gain_db, fader_rect.size(), label).changed()
-    });
-    within(ui, meter_rect, Layout::top_down(Align::Min), |ui| {
-        meter(ui, meter_state, level, now, meter_rect.size());
-    });
-    if with_numbers {
-        let rect = Rect::from_x_y_ranges(meter_rect.right() + 3.0..=zone.right(), zone.y_range());
-        within(ui, rect, Layout::top_down(Align::Min), |ui| {
-            meter_scale(ui, rect.size());
-        });
+/// Whether the device or program behind `owner` is there; an owner the view lacks is not.
+fn present(view: &MixerView, owner: Owner) -> bool {
+    match owner {
+        Owner::Input(index) => view.inputs.get(index).is_some_and(|i| i.present),
+        Owner::Bus(index) => view.buses.get(index).is_some_and(|b| b.present),
     }
-    changed
 }
 
-/// The bus assignment buttons of input `index`, three to a row.
-fn assign_row(
-    ui: &mut Ui,
-    zone: Rect,
-    index: usize,
-    input: &InputView,
-    bus_names: &[String],
-    actions: &mut Vec<Action>,
-) {
-    within(
-        ui,
-        zone.shrink2(vec2(0.0, 3.0)),
-        Layout::left_to_right(Align::Min),
-        |ui| {
-            let gap = 3.0;
-            #[allow(clippy::cast_precision_loss)]
-            let per_row = ASSIGN_PER_ROW as f32;
-            let width = (zone.width() - gap * (per_row - 1.0)) / per_row;
-            ui.spacing_mut().item_spacing = vec2(gap, 4.0);
-            ui.horizontal_wrapped(|ui| {
-                for (bus, name) in bus_names.iter().enumerate() {
-                    let mut on = input.buses.contains(&bus);
-                    let size = vec2(width, ASSIGN_ROW_HEIGHT - 4.0);
-                    if toggle(
-                        ui,
-                        &mut on,
-                        name,
-                        &format!("{} to {name}", input.name),
-                        Role::Assign,
-                        size,
-                    )
-                    .changed()
-                    {
-                        actions.push(Action::Route {
-                            input: index,
-                            bus,
-                            on,
-                        });
-                    }
-                }
-            });
-        },
-    );
-}
-
-/// Draws the strip of input `index` into `rect`; returns what the user changed.
-pub fn input_strip(
+/// Draws `strip` into `rect` with the values of this frame; returns what the user changed.
+pub fn show(
     ui: &mut Ui,
     rect: Rect,
-    index: usize,
-    input: &InputView,
-    bus_names: &[String],
-    meter_state: &mut MeterState,
+    strip: &Strip,
+    values: &mut Values<'_>,
+    meters: &mut Meters,
     now: f64,
 ) -> Vec<Action> {
     let theme = Theme::current();
     let (p, m) = (&theme.palette, &theme.metrics);
-    let zones = Zones::new(rect, bus_names.len());
-    let mut actions = Vec::new();
-    strip_frame(ui, rect, p.surface, &zones);
-
-    let kind = match input.kind {
-        SourceKind::Device => "DEV",
-        SourceKind::Program => "APP",
+    let view = values.view();
+    let zones = Zones::new(rect, view.buses.len());
+    let fill = match strip.style {
+        StripStyle::Input => p.surface,
+        StripStyle::Bus => p.raised.gamma_multiply(theme.shades.bus_body),
     };
-    let detail = format!("{kind} · {}", format_rate(input.sample_rate));
-    header(ui, zones.header, &input.name, &detail, !input.present);
+    strip_frame(ui, rect, fill, &zones);
 
-    within(ui, zones.pan, Layout::top_down(Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.y = 2.0;
-        ui.add_space(4.0);
-        let mut pan = input.pan;
-        if knob(ui, &mut pan, m.knob_size, &input.name).changed() {
-            actions.push(Action::InputPan { input: index, pan });
+    let mut draw = Draw {
+        values,
+        meters,
+        now,
+        owner: strip.owner,
+        actions: Vec::new(),
+    };
+    // Neighbours in one zone share its layout, as the buttons of a row do.
+    for parts in strip.parts.chunk_by(|a, b| a.place == b.place) {
+        if let Place::Zone(zone) = parts[0].place {
+            draw.zone(ui, zones.rect(zone), zone, parts);
         }
-        ui.label(
-            RichText::new(format_pan(pan))
-                .font(Theme::value_font(9.5))
-                .color(p.text_dim),
-        );
-    });
-
-    assign_row(ui, zones.assign, index, input, bus_names, &mut actions);
-
-    within(
-        ui,
-        zones.mute_solo.shrink2(vec2(0.0, 4.0)),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let size = vec2((zones.mute_solo.width() - 4.0) / 2.0, m.button_height + 2.0);
-            let mut mute = input.muted;
-            if toggle(
-                ui,
-                &mut mute,
-                "M",
-                &format!("{} mute", input.name),
-                Role::Mute,
-                size,
-            )
-            .changed()
-            {
-                actions.push(Action::InputMute {
-                    input: index,
-                    muted: mute,
-                });
-            }
-            let mut solo = input.solo;
-            if toggle(
-                ui,
-                &mut solo,
-                "S",
-                &format!("{} solo", input.name),
-                Role::Solo,
-                size,
-            )
-            .changed()
-            {
-                actions.push(Action::InputSolo { input: index, solo });
-            }
-        },
-    );
-
-    let mut gain = input.gain_db;
-    let fader_zone = zones.fader.shrink2(vec2(0.0, 6.0));
-    if fader_and_meter(
-        ui,
-        fader_zone,
-        &mut gain,
-        &input.name,
-        (meter_state, input.peak_db, now),
-        false,
-    ) {
-        actions.push(Action::InputGain {
-            input: index,
-            db: action_gain(gain),
-        });
     }
 
-    let note = if input.dropouts > 0 {
-        Some((format!("{} drops", input.dropouts), p.solo))
-    } else if input.drift_ppm.abs() >= 1.0 {
-        Some((format!("{:+.0} ppm", input.drift_ppm), p.text_faint))
-    } else {
-        None
-    };
-    readout(ui, zones.readout, shown_gain(gain), note);
-
-    if !input.present {
+    if strip.style == StripStyle::Input && !present(view, strip.owner) {
         ui.painter().rect_filled(
             rect,
             CornerRadius::same(m.radius),
             p.base.gamma_multiply(theme.shades.veil),
         );
     }
-    actions
+    draw.actions
 }
 
-/// Draws the strip of bus `index` into `rect`; returns what the user changed.
-pub fn bus_strip(
-    ui: &mut Ui,
-    rect: Rect,
-    index: usize,
-    bus: &BusView,
-    buses: usize,
-    meter_state: &mut MeterState,
+/// What drawing the elements of one strip needs.
+struct Draw<'a, 'v> {
+    values: &'a mut Values<'v>,
+    meters: &'a mut Meters,
     now: f64,
-) -> Vec<Action> {
-    let theme = Theme::current();
-    let (p, m) = (&theme.palette, &theme.metrics);
-    let zones = Zones::new(rect, buses);
-    let mut actions = Vec::new();
-    strip_frame(
-        ui,
-        rect,
-        p.raised.gamma_multiply(theme.shades.bus_body),
-        &zones,
-    );
+    owner: Owner,
+    actions: Vec<Action>,
+}
 
-    header(
-        ui,
-        zones.header,
-        &bus.name,
-        &format_rate(bus.sample_rate),
-        !bus.present,
-    );
+impl<'v> Draw<'_, 'v> {
+    fn view(&self) -> &'v MixerView {
+        self.values.view()
+    }
 
-    // A bus has no pan and no assignment; its device takes that room.
-    let info = zones.pan.union(zones.assign);
-    within(
-        ui,
-        info.shrink2(vec2(0.0, 6.0)),
-        Layout::top_down(Align::Center),
-        |ui| {
+    fn write(&mut self, binding: Binding, value: Value) {
+        self.actions.extend(self.values.write(binding, value));
+    }
+
+    /// Draws `parts`, all in `zone` at `rect`.
+    fn zone(&mut self, ui: &mut Ui, rect: Rect, zone: Zone, parts: &[Element]) {
+        let m = &Theme::current().metrics;
+        match zone {
+            Zone::Header => self.header(ui, rect),
+            Zone::Pan => within(ui, rect, Layout::top_down(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.add_space(4.0);
+                for part in parts {
+                    self.pan(ui, part);
+                }
+            }),
+            Zone::Assign => within(
+                ui,
+                rect.shrink2(vec2(0.0, 3.0)),
+                Layout::left_to_right(Align::Min),
+                |ui| {
+                    let gap = 3.0;
+                    #[allow(clippy::cast_precision_loss)]
+                    let per_row = ASSIGN_PER_ROW as f32;
+                    let width = (rect.width() - gap * (per_row - 1.0)) / per_row;
+                    ui.spacing_mut().item_spacing = vec2(gap, 4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for part in parts {
+                            self.toggle(ui, part, vec2(width, ASSIGN_ROW_HEIGHT - 4.0));
+                        }
+                    });
+                },
+            ),
+            Zone::MuteSolo => within(
+                ui,
+                rect.shrink2(vec2(0.0, 4.0)),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    // The buttons of the row share its width.
+                    let gap = 4.0;
+                    ui.spacing_mut().item_spacing.x = gap;
+                    #[allow(clippy::cast_precision_loss)]
+                    let count = parts.len() as f32;
+                    let width = (rect.width() - gap * (count - 1.0)) / count;
+                    for part in parts {
+                        self.toggle(ui, part, vec2(width, m.button_height + 2.0));
+                    }
+                },
+            ),
+            Zone::Fader => self.fader_zone(ui, rect.shrink2(vec2(0.0, 6.0)), parts),
+            Zone::Readout => {
+                for part in parts {
+                    self.readout(ui, rect, part);
+                }
+            }
+            Zone::Info => self.device(ui, rect.shrink2(vec2(0.0, 6.0))),
+        }
+    }
+
+    fn header(&self, ui: &mut Ui, rect: Rect) {
+        let view = self.view();
+        match self.owner {
+            Owner::Input(index) => {
+                let Some(input) = view.inputs.get(index) else {
+                    return;
+                };
+                let kind = match input.kind {
+                    SourceKind::Device => "DEV",
+                    SourceKind::Program => "APP",
+                };
+                let detail = format!("{kind} · {}", format_rate(input.sample_rate));
+                header(ui, rect, &input.name, &detail, !input.present);
+            }
+            Owner::Bus(index) => {
+                let Some(bus) = view.buses.get(index) else {
+                    return;
+                };
+                header(
+                    ui,
+                    rect,
+                    &bus.name,
+                    &format_rate(bus.sample_rate),
+                    !bus.present,
+                );
+            }
+        }
+    }
+
+    /// A bus has no pan and no assignment; its device takes that room.
+    fn device(&self, ui: &mut Ui, rect: Rect) {
+        let p = &Theme::current().palette;
+        let Owner::Bus(index) = self.owner else {
+            return;
+        };
+        let Some(bus) = self.view().buses.get(index) else {
+            return;
+        };
+        within(ui, rect, Layout::top_down(Align::Center), |ui| {
             ui.label(RichText::new("OUTPUT").size(9.0).color(p.text_faint));
             ui.add(Label::new(RichText::new(&bus.device).size(11.0).color(p.text_dim)).wrap());
-        },
-    );
-
-    within(
-        ui,
-        zones.mute_solo.shrink2(vec2(0.0, 4.0)),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            let mut mute = bus.muted;
-            let size = vec2(zones.mute_solo.width(), m.button_height + 2.0);
-            if toggle(
-                ui,
-                &mut mute,
-                "MUTE",
-                &format!("{} mute", bus.name),
-                Role::Mute,
-                size,
-            )
-            .changed()
-            {
-                actions.push(Action::BusMute {
-                    bus: index,
-                    muted: mute,
-                });
-            }
-        },
-    );
-
-    let mut gain = bus.gain_db;
-    let fader_zone = zones.fader.shrink2(vec2(0.0, 6.0));
-    if fader_and_meter(
-        ui,
-        fader_zone,
-        &mut gain,
-        &bus.name,
-        (&mut *meter_state, bus.peak_db, now),
-        true,
-    ) {
-        actions.push(Action::BusGain {
-            bus: index,
-            db: action_gain(gain),
         });
     }
-    let note = clip_note(meter_state).map(|text| (text, p.meter_high));
-    readout(ui, zones.readout, shown_gain(gain), note);
-    actions
+
+    /// A pan knob, or the pan as text under it.
+    fn pan(&mut self, ui: &mut Ui, part: &Element) {
+        let theme = Theme::current();
+        let Some(binding) = part.bind else {
+            return;
+        };
+        let Some(Value::Pan(mut pan)) = self.values.read(binding) else {
+            return;
+        };
+        match part.control {
+            Control::Knob => {
+                let label = binding.title(self.view());
+                if knob(ui, &mut pan, theme.metrics.knob_size, &label).changed() {
+                    self.write(binding, Value::Pan(pan));
+                }
+            }
+            Control::PanText => {
+                ui.label(
+                    RichText::new(format_pan(pan))
+                        .font(Theme::value_font(9.5))
+                        .color(theme.palette.text_dim),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn toggle(&mut self, ui: &mut Ui, part: &Element, size: Vec2) {
+        let (Control::Toggle { text, role }, Some(binding)) = (&part.control, part.bind) else {
+            return;
+        };
+        let Some(Value::Switch(mut on)) = self.values.read(binding) else {
+            return;
+        };
+        let label = binding.title(self.view());
+        if toggle(ui, &mut on, text, &label, *role, size).changed() {
+            self.write(binding, Value::Switch(on));
+        }
+    }
+
+    /// The fader zone: fader on the left, meter on the right, and the meter numbers beside it
+    /// when the zone has them.
+    fn fader_zone(&mut self, ui: &mut Ui, zone: Rect, parts: &[Element]) {
+        let m = &Theme::current().metrics;
+        let with_numbers = parts.iter().any(|part| part.control == Control::MeterScale);
+        let numbers = if with_numbers { 12.0 } else { 0.0 };
+        let meter_x = zone.right() - numbers - m.meter_width;
+        let fader_rect = Rect::from_x_y_ranges(zone.left()..=meter_x - 4.0, zone.y_range());
+        let meter_rect = Rect::from_x_y_ranges(meter_x..=meter_x + m.meter_width, zone.y_range());
+        let scale_rect =
+            Rect::from_x_y_ranges(meter_rect.right() + 3.0..=zone.right(), zone.y_range());
+        for part in parts {
+            match (&part.control, part.bind) {
+                (Control::Fader, Some(binding)) => {
+                    let Some(Value::Gain(mut gain)) = self.values.read(binding) else {
+                        continue;
+                    };
+                    let label = binding.title(self.view());
+                    let changed = within(ui, fader_rect, Layout::top_down(Align::Min), |ui| {
+                        fader(ui, &mut gain, fader_rect.size(), &label).changed()
+                    });
+                    if changed {
+                        self.write(binding, Value::Gain(gain));
+                    }
+                }
+                (Control::Meter, Some(binding)) => {
+                    let Some(Value::Peak(level)) = self.values.read(binding) else {
+                        continue;
+                    };
+                    let now = self.now;
+                    let Some(state) = self.meters.get_mut(binding) else {
+                        continue;
+                    };
+                    within(ui, meter_rect, Layout::top_down(Align::Min), |ui| {
+                        meter(ui, state, level, now, meter_rect.size());
+                    });
+                }
+                (Control::MeterScale, _) => {
+                    within(ui, scale_rect, Layout::top_down(Align::Min), |ui| {
+                        meter_scale(ui, scale_rect.size());
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The gain as text, with a note on the owner under it: dropouts or drift of an input, the
+    /// clip lamp of a bus.
+    fn readout(&self, ui: &Ui, zone: Rect, part: &Element) {
+        let p = &Theme::current().palette;
+        let (Control::Readout, Some(binding)) = (&part.control, part.bind) else {
+            return;
+        };
+        let Some(Value::Gain(gain)) = self.values.read(binding) else {
+            return;
+        };
+        let note = match self.owner {
+            Owner::Input(index) => self.view().inputs.get(index).and_then(|input| {
+                if input.dropouts > 0 {
+                    Some((format!("{} drops", input.dropouts), p.solo))
+                } else if input.drift_ppm.abs() >= 1.0 {
+                    Some((format!("{:+.0} ppm", input.drift_ppm), p.text_faint))
+                } else {
+                    None
+                }
+            }),
+            Owner::Bus(index) => self
+                .meters
+                .bus(index)
+                .and_then(clip_note)
+                .map(|text| (text, p.meter_high)),
+        };
+        readout(ui, zone, shown_gain(gain), note);
+    }
 }
 
 /// The note under a bus fader: `CLIP` while its clip lamp is lit. The lamp, not the desk's
@@ -430,12 +458,6 @@ pub fn bus_strip(
 #[must_use]
 pub fn clip_note(meter: &MeterState) -> Option<String> {
     meter.clipped().then(|| "CLIP".to_owned())
-}
-
-/// The gain an action asks for: the fader's off (-inf) becomes the lowest gain the mixer takes.
-#[must_use]
-pub fn action_gain(db: f32) -> f32 {
-    db.clamp(GAIN_RANGE_DB.0, GAIN_RANGE_DB.1)
 }
 
 /// The gain a readout shows: the desk's lowest gain, where an off fader lands, is off.
@@ -461,13 +483,6 @@ pub fn format_rate(rate: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn off_is_sent_as_the_lowest_gain() {
-        assert_eq!(action_gain(f32::NEG_INFINITY), GAIN_RANGE_DB.0);
-        assert_eq!(action_gain(-6.5), -6.5);
-        assert_eq!(action_gain(40.0), GAIN_RANGE_DB.1);
-    }
 
     #[test]
     fn clip_note_follows_the_lamp() {
@@ -505,5 +520,6 @@ mod tests {
         let short = Zones::new(Rect::from_min_size(pos2(0.0, 0.0), vec2(88.0, 100.0)), 3);
         assert!(short.fader.height() >= MIN_FADER_HEIGHT);
         assert!(Zones::min_height(4) > Zones::min_height(3));
+        assert_eq!(zones.rect(Zone::Info), zones.pan.union(zones.assign));
     }
 }

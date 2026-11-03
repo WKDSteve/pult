@@ -6,6 +6,7 @@ use eframe::egui::{
 };
 use pult_core::view::{Action, InputView, MixerView, SourceKind};
 
+use crate::binding::{Binding, Value};
 use crate::theme::Theme;
 use crate::widgets::badge::{elided, show_elided};
 use crate::widgets::strip::format_rate;
@@ -107,9 +108,13 @@ fn grid(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
             ui.painter()
                 .line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], (1.0, p.line));
         }
-        for (column, bus) in view.buses.iter().enumerate() {
-            let label = format!("{} to {}", input.name, bus.name);
-            let on = input.buses.contains(&column);
+        for column in 0..view.buses.len() {
+            let route = Binding::Route {
+                input: row,
+                bus: column,
+            };
+            let label = route.title(view);
+            let on = route.read(view) == Some(Value::Switch(true));
             let response = crosspoint(
                 ui,
                 cell(row, column),
@@ -119,11 +124,7 @@ fn grid(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
                 &label,
             );
             if response.clicked() {
-                actions.push(Action::Route {
-                    input: row,
-                    bus: column,
-                    on: !on,
-                });
+                actions.extend(route.write(Value::Switch(!on)));
             }
         }
     }
