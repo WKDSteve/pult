@@ -160,7 +160,9 @@ pult run --profile meinprofil.toml --log abend.csv
 - **Busse:** Jeder Bus ist ein eigener Ausgang mit eigenem Takt. Zwei Busse dürfen nicht dasselbe Gerät benutzen. Alle
   Geräte dürfen verschiedene Abtastraten haben: Jeder Eingang wird auf die Rate des Busses umgerechnet, auf den er geht.
 - **Matrix:** Ein Eingang auf mehreren Bussen bekommt je Bus einen eigenen Puffer mit eigenem Resampler, der dem Takt
-  dieses Busses folgt. Gain,
+  dieses Busses folgt. pult legt beim Start für jedes Paar aus Eingang und Bus einen Puffer an; nicht geroutete
+  bleiben zu und kosten keine Rechenzeit. So lässt sich die Matrix später in der Oberfläche während des Laufs
+  umschalten, ohne Neustart (über die Eingabezeile noch nicht). Gain,
   Mute und Pan gelten für alle seine Busse gemeinsam; der Bus-Gain wirkt auf die Summe.
 - **Pan:** Bei Mono-Eingängen ein Panorama, bei Stereo-Eingängen eine Balance: in der Mitte beide Seiten voll, zur
   Seite hin wird die andere leiser. Wirkt nur auf Ausgänge mit mindestens zwei Kanälen.

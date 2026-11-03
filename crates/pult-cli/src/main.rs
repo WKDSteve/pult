@@ -119,6 +119,7 @@ fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
         let buses: Vec<&str> = input
             .routes
             .iter()
+            .filter(|r| r.is_routed())
             .map(|r| running.buses[r.bus].name.as_str())
             .collect();
         println!(

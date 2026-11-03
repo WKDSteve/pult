@@ -103,6 +103,36 @@ impl Running {
         }
     }
 
+    /// Routes input `input` to bus `bus` or takes it off (a matrix button); the mixer of the
+    /// bus follows in its next callback, a newly routed ring after priming.
+    ///
+    /// # Errors
+    ///
+    /// A message when an index is out of range or the input would feed no bus.
+    pub fn route(&mut self, input: usize, bus: usize, on: bool) -> Result<Vec<String>, String> {
+        let Some(running) = self.inputs.get(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        let Some(route) = running.routes.get(bus) else {
+            return Err(format!("there is no bus {}", bus + 1));
+        };
+        let label = self.target_label(Target::Input(input));
+        let bus_name = self.buses[bus].name.clone();
+        if !on && route.is_routed() && running.routes.iter().filter(|r| r.is_routed()).count() == 1
+        {
+            return Err(format!("{label} would feed no bus; mute it instead"));
+        }
+        route.routed.store(on, Ordering::Release);
+        let buses = &mut self.spec.inputs[input].buses;
+        buses.retain(|&b| b != bus);
+        if on {
+            buses.push(bus);
+            buses.sort_unstable();
+        }
+        let state = if on { "->" } else { "off" };
+        Ok(vec![format!("{label} {state} {bus_name}")])
+    }
+
     /// `[1] CABLE Output` or `A1`.
     fn target_label(&self, target: Target) -> String {
         match target {
@@ -118,6 +148,7 @@ impl Running {
             let buses: Vec<&str> = input
                 .routes
                 .iter()
+                .filter(|route| route.is_routed())
                 .map(|route| self.buses[route.bus].name.as_str())
                 .collect();
             let mut line = format!(

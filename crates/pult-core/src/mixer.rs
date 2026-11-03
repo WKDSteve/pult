@@ -11,6 +11,11 @@
 //! While a bus's output device is gone, [`Mixer::suspend`] closes its rings: the captures
 //! discard into them instead of counting a full ring as lost frames. [`Mixer::resume`]
 //! empties and reopens them for the device's return.
+//!
+//! The routing matrix can change while the route runs without building anything in a
+//! callback: a route has a ring for every input and bus, and [`InputHandle::routed`] switches
+//! one on or off. An unrouted ring is closed and skipped (no resampling); when it is routed
+//! again, the mixer empties it, primes it afresh and opens it, all inside its own callback.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -122,6 +127,9 @@ pub struct InputHandle {
     pub controls: Arc<InputControls>,
     /// Peaks and counters of this ring.
     pub stats: Arc<InputStats>,
+    /// Whether the input feeds this ring's bus: the matrix button. The mixer follows a
+    /// change in its next callback.
+    pub routed: Arc<AtomicBool>,
 }
 
 /// The control thread's side of one bus.
@@ -189,6 +197,7 @@ pub fn connect_with(
     let handle = InputHandle {
         controls,
         stats: Arc::new(InputStats::default()),
+        routed: Arc::new(AtomicBool::new(true)),
     };
     let capture = Capture {
         producer,
@@ -213,6 +222,8 @@ pub fn connect_with(
         resampled: chunk_out,
         controls: Arc::clone(&handle.controls),
         stats: Arc::clone(&handle.stats),
+        routed: Arc::clone(&handle.routed),
+        was_routed: true,
     };
     (capture, input, handle)
 }
@@ -292,9 +303,38 @@ pub struct MixerInput {
     resampled: Vec<f32>,
     controls: Arc<InputControls>,
     stats: Arc<InputStats>,
+    routed: Arc<AtomicBool>,
+    /// What `routed` was in the previous callback.
+    was_routed: bool,
 }
 
 impl MixerInput {
+    /// The same ring, not routed yet: closed, so its capture discards, until
+    /// [`InputHandle::routed`] is set.
+    #[must_use]
+    pub fn unrouted(mut self) -> Self {
+        self.routed.store(false, Ordering::Release);
+        self.was_routed = false;
+        self.open.store(false, Ordering::Release);
+        self
+    }
+
+    /// Follows the matrix button: closes the ring when it was switched off, empties, primes
+    /// and opens it when it was switched on. Returns whether the ring plays.
+    fn follow_routing(&mut self) -> bool {
+        let routed = self.routed.load(Ordering::Acquire);
+        if routed != self.was_routed {
+            self.was_routed = routed;
+            if routed {
+                self.restart();
+            } else {
+                self.stats.correction_ppm.store(0.0);
+            }
+            self.open.store(routed, Ordering::Release);
+        }
+        routed
+    }
+
     /// Empties the ring and lets the drift control prime again, with a fresh resampler and
     /// rate control: the device on the other side may run on another clock now.
     fn restart(&mut self) {
@@ -311,6 +351,9 @@ impl MixerInput {
     /// Resamples `frames` output frames from the ring, chunk by chunk, and adds them into
     /// `out`.
     fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize) {
+        if !self.follow_routing() {
+            return;
+        }
         let silent = self.controls.muted.load(Ordering::Relaxed)
             || self.controls.soloed_out.load(Ordering::Relaxed);
         let gain = if silent {
@@ -436,13 +479,15 @@ impl Mixer {
         }
     }
 
-    /// Empties the rings, lets every input prime again and reopens them, for an output with
-    /// `out_channels` channels (a device may come back with another layout).
+    /// Empties the rings, lets every input prime again and reopens the routed ones, for an
+    /// output with `out_channels` channels (a device may come back with another layout).
     pub fn resume(&mut self, out_channels: usize) {
         self.out_channels = out_channels;
         for input in &mut self.inputs {
             input.restart();
-            input.open.store(true, Ordering::Release);
+            let routed = input.routed.load(Ordering::Acquire);
+            input.was_routed = routed;
+            input.open.store(routed, Ordering::Release);
         }
     }
 
@@ -566,6 +611,44 @@ mod tests {
         handle_b.controls.muted.store(true, Ordering::Relaxed);
         let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 2, 0.2, 1);
         assert!(all_near(&out, &[0.1, 0.1]), "{:?}", &out[..2]);
+    }
+
+    #[test]
+    fn a_matrix_button_switches_a_ring_while_running() {
+        let (mut a, input_a, handle_a) = connect(config(1, 480));
+        let (mut b, input_b, _) = connect(config(1, 480));
+        let (mut mixer, _) = Mixer::new(vec![input_a, input_b.unrouted()], 1);
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 6);
+        assert!(all_near(&out, &[0.2]), "only a: {:?}", &out[..1]);
+
+        // Off: a adds nothing, its capture discards without counting lost frames.
+        handle_a.routed.store(false, Ordering::Release);
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 40);
+        assert!(out.iter().all(|&o| o == 0.0), "{:?}", &out[..1]);
+        assert_eq!(handle_a.stats.dropped_at_capture.get(), 0);
+        assert_eq!(handle_a.stats.underruns.get(), 0);
+
+        // On again: a primes afresh from an empty ring and plays.
+        handle_a.routed.store(true, Ordering::Release);
+        let mut out = vec![9.0; PERIOD];
+        mixer.process(&mut out);
+        assert!(out.iter().all(|&o| o == 0.0), "priming: {:?}", &out[..1]);
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 6);
+        assert!(all_near(&out, &[0.2]), "{:?}", &out[..1]);
+    }
+
+    #[test]
+    fn a_resumed_bus_keeps_unrouted_rings_closed() {
+        let (mut a, input_a, handle_a) = connect(config(1, 0));
+        let (mut mixer, _) = Mixer::new(vec![input_a.unrouted()], 1);
+        mixer.suspend();
+        mixer.resume(1);
+        a.push(&[0.5; 2000]);
+        assert_eq!(handle_a.stats.dropped_at_capture.get(), 0);
+        let mut out = vec![9.0; PERIOD];
+        mixer.process(&mut out);
+        assert!(out.iter().all(|&o| o == 0.0));
+        assert_eq!(handle_a.stats.underruns.get(), 0);
     }
 
     #[test]
@@ -794,6 +877,12 @@ mod tests {
             mixer.process(&mut long);
             mixer.suspend();
             mixer.resume(2);
+            capture.push(&flood);
+            mixer.process(&mut out);
+            // A matrix button off and on again.
+            handle.routed.store(false, Ordering::Release);
+            mixer.process(&mut out);
+            handle.routed.store(true, Ordering::Release);
             capture.push(&flood);
             mixer.process(&mut out);
         });

@@ -114,7 +114,7 @@ impl Desk for EngineDesk {
                 let mut peak: f32 = 0.0;
                 let mut drift: f32 = 0.0;
                 let mut dropouts = 0;
-                for route in &input.routes {
+                for route in input.routes.iter().filter(|route| route.is_routed()) {
                     peak = peak.max(route.stats.peak.take());
                     drift = farther(drift, route.stats.correction_ppm.load());
                     dropouts += route.stats.underruns.get() + route.stats.resyncs.get();
@@ -131,7 +131,12 @@ impl Desk for EngineDesk {
                     muted: spec.muted,
                     solo,
                     pan: spec.pan,
-                    buses: input.routes.iter().map(|route| route.bus).collect(),
+                    buses: input
+                        .routes
+                        .iter()
+                        .filter(|route| route.is_routed())
+                        .map(|route| route.bus)
+                        .collect(),
                     present: input.present,
                     peak_db: peak_db(peak),
                     drift_ppm: drift,
@@ -225,11 +230,7 @@ impl Desk for EngineDesk {
                 self.profile = Some(path);
                 Ok(lines)
             }
-            Action::Route { .. } => Err(
-                "changing the routing while running is not built yet; edit the profile \
-                     and restart"
-                    .to_owned(),
-            ),
+            Action::Route { input, bus, on } => self.running.route(input, bus, on),
         }
     }
 }

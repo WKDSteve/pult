@@ -26,7 +26,7 @@ mod slot;
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use assert_no_alloc::assert_no_alloc;
@@ -380,13 +380,24 @@ impl RouteSpec {
     }
 }
 
-/// One ring of a running input: its way onto one bus.
+/// One ring of a running input: its way onto one bus. Every input has one for every bus;
+/// only the routed ones play.
 #[derive(Debug)]
 pub struct RunningRoute {
     /// Index into [`Running::buses`].
     pub bus: usize,
     /// Peak and counters of this ring.
     pub stats: Arc<InputStats>,
+    /// Whether the input feeds this bus now (the matrix button).
+    pub routed: Arc<AtomicBool>,
+}
+
+impl RunningRoute {
+    /// Whether the input feeds this bus now.
+    #[must_use]
+    pub fn is_routed(&self) -> bool {
+        self.routed.load(Ordering::Acquire)
+    }
 }
 
 /// One input of a running route.
@@ -804,19 +815,28 @@ fn find_input(
         smoothing: DRIFT_SMOOTHING,
         settle: SETTLE_SECONDS * sample_rate as usize,
     };
-    let mut captures = Vec::with_capacity(input.buses.len());
-    let mut routes = Vec::with_capacity(input.buses.len());
-    for &bus in &input.buses {
+    // A ring for every bus, so the matrix can change while the route runs; the ones the
+    // spec does not route stay closed and cost no processing.
+    let bus_count = rings.bus_rates.len();
+    let mut captures = Vec::with_capacity(bus_count);
+    let mut routes = Vec::with_capacity(bus_count);
+    for bus in 0..bus_count {
         let ring = InputConfig {
             output_rate: rings.bus_rates[bus],
             ..ring
         };
         let (capture, mixer_input, handle) = connect_with(ring, Arc::clone(&controls));
+        let mixer_input = if input.buses.contains(&bus) {
+            mixer_input
+        } else {
+            mixer_input.unrouted()
+        };
         captures.push(capture);
         rings.bus_inputs[bus].push(mixer_input);
         routes.push(RunningRoute {
             bus,
             stats: handle.stats,
+            routed: handle.routed,
         });
     }
     Ok(FoundInput {
