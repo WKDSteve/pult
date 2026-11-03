@@ -1,11 +1,17 @@
-//! The audio devices of pult: lists them and runs one route, several inputs mixed into one
-//! output, on the system's default host (WASAPI shared mode on Windows).
+//! The audio devices of pult: lists them and runs a route, inputs mixed onto one or more
+//! buses (each an output device), on the system's default host (WASAPI shared mode on
+//! Windows).
 //!
-//! Every stream uses its device's own shared-mode format. The device callbacks only move
-//! samples through the rings and the mixer of `pult-core`; `assert_no_alloc` guards them, so
-//! a debug build with the checking allocator aborts on any allocation inside a callback.
+//! Every stream uses its device's own shared-mode format. An input routed to several buses
+//! pushes each capture into one ring per bus, since every output runs on its own clock. The
+//! device callbacks only move samples through the rings and mixers of `pult-core`;
+//! `assert_no_alloc` guards them, so a debug build with the checking allocator aborts on
+//! any allocation inside a callback.
+
+pub mod profile;
 
 use std::fmt;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -13,8 +19,8 @@ use assert_no_alloc::assert_no_alloc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, ErrorKind, SampleFormat, SupportedStreamConfig};
 use pult_core::{
-    Counter, DriftControl, InputConfig, InputHandle, MasterStats, Mixer, SelectError, Sine,
-    connect, db_to_linear, select,
+    BusHandle, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer, MixerInput,
+    SelectError, Sine, connect_with, db_to_linear, select,
 };
 
 /// How long a backend may take to open a stream.
@@ -63,8 +69,9 @@ pub enum Error {
         /// Why not.
         source: SelectError,
     },
-    /// A route needs at least one input.
-    NoSources,
+    /// The route itself is inconsistent (no input, no bus, a route to a missing bus, one
+    /// device on two buses).
+    InvalidRoute(String),
     /// The device's shared-mode format is not 32-bit float.
     UnsupportedFormat {
         /// The device.
@@ -72,16 +79,16 @@ pub enum Error {
         /// Its format.
         format: String,
     },
-    /// An input runs at another sample rate than the output; there is no resampler yet.
+    /// A device runs at another sample rate than the first bus; there is no resampler yet.
     RateMismatch {
-        /// The input device.
-        input: String,
+        /// The device.
+        device: String,
         /// Its rate in Hz.
-        input_rate: u32,
-        /// The output device.
-        output: String,
+        rate: u32,
+        /// The first bus's device, which sets the route's rate.
+        reference: String,
         /// Its rate in Hz.
-        output_rate: u32,
+        reference_rate: u32,
     },
 }
 
@@ -90,19 +97,19 @@ impl fmt::Display for Error {
         match self {
             Self::Audio { context, source } => write!(f, "{context}: {source}"),
             Self::Select { role, source } => write!(f, "{role} device: {source}"),
-            Self::NoSources => f.write_str("a route needs at least one input (--from)"),
+            Self::InvalidRoute(why) => f.write_str(why),
             Self::UnsupportedFormat { device, format } => write!(
                 f,
                 "{device} uses the sample format {format}; only 32-bit float is supported yet"
             ),
             Self::RateMismatch {
-                input,
-                input_rate,
-                output,
-                output_rate,
+                device,
+                rate,
+                reference,
+                reference_rate,
             } => write!(
                 f,
-                "{input} runs at {input_rate} Hz but {output} at {output_rate} Hz; set both to \
+                "{device} runs at {rate} Hz but {reference} at {reference_rate} Hz; set both to \
                  the same rate (Sound settings, device properties, Advanced, default format)"
             ),
         }
@@ -186,24 +193,119 @@ pub fn list_devices() -> Result<Devices, Error> {
     Ok(Devices { inputs, outputs })
 }
 
-/// One input of a route.
+/// One input (channel strip) of a route.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SourceSpec {
+pub struct InputSpec {
     /// Device name, or a unique part of it.
     pub device: String,
     /// Gain in dB.
     pub gain_db: f32,
+    /// -1 (left) to 1 (right).
+    pub pan: f32,
+    /// Starts muted.
+    pub muted: bool,
+    /// The buses it feeds, as indices into [`RouteSpec::buses`].
+    pub buses: Vec<usize>,
 }
 
-/// What to route: inputs mixed into one output.
+impl InputSpec {
+    /// An input at `gain_db`, centred, unmuted, feeding `buses`.
+    #[must_use]
+    pub fn new(device: impl Into<String>, gain_db: f32, buses: Vec<usize>) -> Self {
+        Self {
+            device: device.into(),
+            gain_db,
+            pan: 0.0,
+            muted: false,
+            buses,
+        }
+    }
+}
+
+/// One bus of a route: a mix played on one output device.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BusSpec {
+    /// Short name shown in the status line and the log (`A1`).
+    pub name: String,
+    /// Output device name, or a unique part of it.
+    pub device: String,
+    /// Gain of the mix in dB.
+    pub gain_db: f32,
+    /// Starts muted.
+    pub muted: bool,
+}
+
+impl BusSpec {
+    /// A bus at 0 dB, unmuted.
+    #[must_use]
+    pub fn new(name: impl Into<String>, device: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            device: device.into(),
+            gain_db: 0.0,
+            muted: false,
+        }
+    }
+}
+
+/// What to route: inputs, buses and which input feeds which bus.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteSpec {
     /// The inputs.
-    pub sources: Vec<SourceSpec>,
-    /// The output device name, or a unique part of it.
-    pub sink: String,
+    pub inputs: Vec<InputSpec>,
+    /// The buses; the first sets the route's sample rate.
+    pub buses: Vec<BusSpec>,
     /// Buffering per input in milliseconds; more is safer against dropouts, less is faster.
     pub latency_ms: u32,
+}
+
+impl RouteSpec {
+    /// Checks what does not need a device: at least one input and one bus, every input
+    /// routed to existing buses, each at most once.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidRoute`] naming the first problem.
+    pub fn validate(&self) -> Result<(), Error> {
+        let invalid = |why: String| Err(Error::InvalidRoute(why));
+        if self.inputs.is_empty() {
+            return invalid("a route needs at least one input".into());
+        }
+        if self.buses.is_empty() {
+            return invalid("a route needs at least one bus (output)".into());
+        }
+        for input in &self.inputs {
+            if input.buses.is_empty() {
+                return invalid(format!("input \"{}\" feeds no bus", input.device));
+            }
+            for (i, &bus) in input.buses.iter().enumerate() {
+                if bus >= self.buses.len() {
+                    return invalid(format!(
+                        "input \"{}\" feeds bus {}, but there are only {}",
+                        input.device,
+                        bus + 1,
+                        self.buses.len()
+                    ));
+                }
+                if input.buses[..i].contains(&bus) {
+                    return invalid(format!(
+                        "input \"{}\" feeds bus {} twice",
+                        input.device, self.buses[bus].name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One ring of a running input: its way onto one bus.
+#[derive(Debug)]
+pub struct RunningRoute {
+    /// Index into [`Running::buses`].
+    pub bus: usize,
+    /// Peak and counters of this ring.
+    pub stats: Arc<InputStats>,
 }
 
 /// One input of a running route.
@@ -211,8 +313,21 @@ pub struct RouteSpec {
 pub struct RunningInput {
     /// The device's full name.
     pub name: String,
+    /// Gain, mute and pan, for all its routes.
+    pub controls: Arc<InputControls>,
+    /// One per bus it feeds, in the order of the spec.
+    pub routes: Vec<RunningRoute>,
+}
+
+/// One bus of a running route.
+#[derive(Debug)]
+pub struct RunningBus {
+    /// The bus's short name.
+    pub name: String,
+    /// The output device's full name.
+    pub device: String,
     /// Gain, mute and statistics.
-    pub handle: InputHandle,
+    pub handle: BusHandle,
 }
 
 /// A started route; dropping it stops all streams.
@@ -220,10 +335,8 @@ pub struct Running {
     _streams: Vec<cpal::Stream>,
     /// The inputs, in the order of the spec.
     pub inputs: Vec<RunningInput>,
-    /// Statistics of the mix.
-    pub master: Arc<MasterStats>,
-    /// The output device's full name.
-    pub sink: String,
+    /// The buses, in the order of the spec.
+    pub buses: Vec<RunningBus>,
     /// The route's sample rate in Hz.
     pub sample_rate: u32,
     faults: Arc<Faults>,
@@ -233,7 +346,7 @@ impl fmt::Debug for Running {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Running")
             .field("inputs", &self.inputs)
-            .field("sink", &self.sink)
+            .field("buses", &self.buses)
             .field("sample_rate", &self.sample_rate)
             .finish_non_exhaustive()
     }
@@ -392,90 +505,192 @@ fn buffering(sample_rate: u32, latency_ms: u32) -> (usize, usize, usize) {
     (target, band, capacity)
 }
 
+/// An opened output device of a bus, before its mixer exists.
+struct OpenBus {
+    device: Device,
+    name: String,
+    config: SupportedStreamConfig,
+}
+
+/// Finds the output device of every bus: each device at most once, all at the rate of the
+/// first.
+fn open_buses(host: &cpal::Host, spec: &RouteSpec) -> Result<Vec<OpenBus>, Error> {
+    let mut open_buses: Vec<OpenBus> = Vec::with_capacity(spec.buses.len());
+    for bus in &spec.buses {
+        let (device, name, config) = find_output(host, &bus.device)?;
+        if let Some(other) = open_buses.iter().position(|b| b.name == name) {
+            return Err(Error::InvalidRoute(format!(
+                "buses {} and {} both play on {name}",
+                spec.buses[other].name, bus.name
+            )));
+        }
+        if let Some(first) = open_buses.first()
+            && config.sample_rate() != first.config.sample_rate()
+        {
+            return Err(Error::RateMismatch {
+                device: name,
+                rate: config.sample_rate(),
+                reference: first.name.clone(),
+                reference_rate: first.config.sample_rate(),
+            });
+        }
+        open_buses.push(OpenBus {
+            device,
+            name,
+            config,
+        });
+    }
+    Ok(open_buses)
+}
+
+/// Where an input's rings go and how they buffer.
+struct Rings<'a> {
+    /// The mixer inputs of every bus, filled as inputs open.
+    bus_inputs: &'a mut [Vec<MixerInput>],
+    target: usize,
+    band: usize,
+    capacity: usize,
+    sample_rate: u32,
+    /// The first bus's device, named when an input's rate differs.
+    reference: &'a str,
+}
+
+/// Opens the stream of one input: one ring per bus it feeds, all filled by one capture
+/// callback.
+fn open_input(
+    devices: &[Device],
+    input: &InputSpec,
+    rings: &mut Rings<'_>,
+    faults: &Arc<Faults>,
+) -> Result<(cpal::Stream, RunningInput), Error> {
+    let device = &devices[pick(devices, &input.device, Role::Input)?];
+    let name = device.to_string();
+    let config = device
+        .default_input_config()
+        .map_err(audio(format!("reading the format of {name}")))?;
+    require_f32(&name, &config)?;
+    if config.sample_rate() != rings.sample_rate {
+        return Err(Error::RateMismatch {
+            device: name,
+            rate: config.sample_rate(),
+            reference: rings.reference.to_owned(),
+            reference_rate: rings.sample_rate,
+        });
+    }
+    let controls = Arc::new(InputControls::default());
+    controls.gain.store(db_to_linear(input.gain_db));
+    controls.pan.store(input.pan);
+    controls.muted.store(input.muted, Ordering::Relaxed);
+    let ring = InputConfig {
+        channels: usize::from(config.channels()),
+        capacity: rings.capacity,
+        target: rings.target,
+        band: rings.band,
+        smoothing: DRIFT_SMOOTHING,
+        settle: SETTLE_SECONDS * rings.sample_rate as usize,
+    };
+    let mut captures = Vec::with_capacity(input.buses.len());
+    let mut routes = Vec::with_capacity(input.buses.len());
+    for &bus in &input.buses {
+        let (capture, mixer_input, handle) = connect_with(ring, Arc::clone(&controls));
+        captures.push(capture);
+        rings.bus_inputs[bus].push(mixer_input);
+        routes.push(RunningRoute {
+            bus,
+            stats: handle.stats,
+        });
+    }
+    let stream = device
+        .build_input_stream::<f32, _, _>(
+            config.config(),
+            move |data, _| {
+                assert_no_alloc(|| {
+                    for capture in &mut captures {
+                        capture.push(data);
+                    }
+                });
+            },
+            fault_recorder(faults, &name),
+            Some(OPEN_TIMEOUT),
+        )
+        .map_err(audio(format!("opening {name}")))?;
+    let running = RunningInput {
+        name,
+        controls,
+        routes,
+    };
+    Ok((stream, running))
+}
+
 /// Opens every device of `spec` and starts mixing.
 ///
 /// # Errors
 ///
-/// [`Error`] when a device is missing or ambiguous, has an unsupported format or rate, or a
-/// stream cannot be opened or started.
+/// [`Error`] when the route is invalid, a device is missing or ambiguous, has an
+/// unsupported format or rate, or a stream cannot be opened or started.
 pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
-    if spec.sources.is_empty() {
-        return Err(Error::NoSources);
-    }
+    spec.validate()?;
     let host = cpal::default_host();
     let faults = Arc::new(Faults::default());
 
-    let (sink, sink_name, sink_config) = find_output(&host, &spec.sink)?;
-    let sample_rate = sink_config.sample_rate();
-    let out_channels = usize::from(sink_config.channels());
+    let open_buses = open_buses(&host, spec)?;
+    let sample_rate = open_buses[0].config.sample_rate();
     let (target, band, capacity) = buffering(sample_rate, spec.latency_ms);
 
     let devices: Vec<Device> = host
         .input_devices()
         .map_err(audio("listing input devices"))?
         .collect();
-    let mut streams = Vec::with_capacity(spec.sources.len() + 1);
-    let mut mixer_inputs = Vec::with_capacity(spec.sources.len());
-    let mut inputs = Vec::with_capacity(spec.sources.len());
-    for source in &spec.sources {
-        let device = &devices[pick(&devices, &source.device, Role::Input)?];
-        let name = device.to_string();
-        let config = device
-            .default_input_config()
-            .map_err(audio(format!("reading the format of {name}")))?;
-        require_f32(&name, &config)?;
-        if config.sample_rate() != sample_rate {
-            return Err(Error::RateMismatch {
-                input: name,
-                input_rate: config.sample_rate(),
-                output: sink_name,
-                output_rate: sample_rate,
-            });
-        }
-        let (mut capture, mixer_input, handle) = connect(InputConfig {
-            channels: usize::from(config.channels()),
-            capacity,
-            target,
-            band,
-            smoothing: DRIFT_SMOOTHING,
-            settle: SETTLE_SECONDS * sample_rate as usize,
-        });
-        handle.controls.gain.store(db_to_linear(source.gain_db));
-        let stream = device
-            .build_input_stream::<f32, _, _>(
-                config.config(),
-                move |data, _| assert_no_alloc(|| capture.push(data)),
-                fault_recorder(&faults, &name),
-                Some(OPEN_TIMEOUT),
-            )
-            .map_err(audio(format!("opening {name}")))?;
+    let mut streams = Vec::with_capacity(spec.inputs.len() + spec.buses.len());
+    let mut stream_names = Vec::with_capacity(streams.capacity());
+    let mut bus_inputs: Vec<Vec<MixerInput>> = spec.buses.iter().map(|_| Vec::new()).collect();
+    let mut rings = Rings {
+        bus_inputs: &mut bus_inputs,
+        target,
+        band,
+        capacity,
+        sample_rate,
+        reference: &open_buses[0].name,
+    };
+    let mut inputs = Vec::with_capacity(spec.inputs.len());
+    for input in &spec.inputs {
+        let (stream, running) = open_input(&devices, input, &mut rings, &faults)?;
         streams.push(stream);
-        mixer_inputs.push(mixer_input);
-        inputs.push(RunningInput { name, handle });
+        stream_names.push(running.name.clone());
+        inputs.push(running);
     }
 
-    let (mut mixer, master) = Mixer::new(mixer_inputs, out_channels);
-    let output = sink
-        .build_output_stream::<f32, _, _>(
-            sink_config.config(),
-            move |data, _| assert_no_alloc(|| mixer.process(data)),
-            fault_recorder(&faults, &sink_name),
-            Some(OPEN_TIMEOUT),
-        )
-        .map_err(audio(format!("opening {sink_name}")))?;
-    streams.push(output);
-    for (stream, name) in streams
-        .iter()
-        .zip(inputs.iter().map(|i| &i.name).chain([&sink_name]))
-    {
+    let mut buses = Vec::with_capacity(spec.buses.len());
+    for ((bus, open), mixer_inputs) in spec.buses.iter().zip(open_buses).zip(bus_inputs) {
+        let (mut mixer, handle) = Mixer::new(mixer_inputs, usize::from(open.config.channels()));
+        handle.controls.gain.store(db_to_linear(bus.gain_db));
+        handle.controls.muted.store(bus.muted, Ordering::Relaxed);
+        let stream = open
+            .device
+            .build_output_stream::<f32, _, _>(
+                open.config.config(),
+                move |data, _| assert_no_alloc(|| mixer.process(data)),
+                fault_recorder(&faults, &open.name),
+                Some(OPEN_TIMEOUT),
+            )
+            .map_err(audio(format!("opening {}", open.name)))?;
+        streams.push(stream);
+        stream_names.push(open.name.clone());
+        buses.push(RunningBus {
+            name: bus.name.clone(),
+            device: open.name,
+            handle,
+        });
+    }
+    // Inputs first, so the outputs find their rings filling.
+    for (stream, name) in streams.iter().zip(&stream_names) {
         stream.play().map_err(audio(format!("starting {name}")))?;
     }
 
     Ok(Running {
         _streams: streams,
         inputs,
-        master,
-        sink: sink_name,
+        buses,
         sample_rate,
         faults,
     })
@@ -514,14 +729,51 @@ mod tests {
     #[test]
     fn rate_mismatch_names_both_devices_and_the_fix() {
         let message = Error::RateMismatch {
-            input: "CABLE Output".into(),
-            input_rate: 44_100,
-            output: "Focusrite".into(),
-            output_rate: 48_000,
+            device: "CABLE Output".into(),
+            rate: 44_100,
+            reference: "Focusrite".into(),
+            reference_rate: 48_000,
         }
         .to_string();
         assert!(message.contains("CABLE Output runs at 44100 Hz"));
         assert!(message.contains("Focusrite at 48000 Hz"));
         assert!(message.contains("default format"));
+    }
+
+    fn route(inputs: Vec<InputSpec>, buses: usize) -> RouteSpec {
+        RouteSpec {
+            inputs,
+            buses: (1..=buses)
+                .map(|i| BusSpec::new(format!("A{i}"), format!("out {i}")))
+                .collect(),
+            latency_ms: 40,
+        }
+    }
+
+    fn invalid(spec: &RouteSpec) -> String {
+        match spec.validate() {
+            Err(Error::InvalidRoute(why)) => why,
+            other => panic!("expected an invalid route, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_matrix_and_names_each_problem() {
+        let ok = route(
+            vec![
+                InputSpec::new("cable", 0.0, vec![0, 1]),
+                InputSpec::new("mic", -6.0, vec![1]),
+            ],
+            2,
+        );
+        assert!(ok.validate().is_ok());
+
+        assert!(invalid(&route(Vec::new(), 1)).contains("at least one input"));
+        assert!(invalid(&route(vec![InputSpec::new("a", 0.0, vec![0])], 0)).contains("bus"));
+        assert!(invalid(&route(vec![InputSpec::new("a", 0.0, vec![])], 1)).contains("no bus"));
+        assert!(invalid(&route(vec![InputSpec::new("a", 0.0, vec![2])], 2)).contains("only 2"));
+        assert!(
+            invalid(&route(vec![InputSpec::new("a", 0.0, vec![1, 1])], 2)).contains("A2 twice")
+        );
     }
 }

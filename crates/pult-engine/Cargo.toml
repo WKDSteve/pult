@@ -14,6 +14,8 @@ pult-core.workspace = true
 cpal.workspace = true
 rtrb.workspace = true
 assert_no_alloc.workspace = true
+serde.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,29 @@
+# pult profile: which inputs go to which buses. Start with
+#   pult run --profile examples\pult.toml
+# Device names may be a unique part of the name (see `pult devices`).
+
+# Buffering per input in milliseconds (1 to 2000). Raise it if you hear dropouts.
+latency_ms = 40
+
+# A bus is a mix played on one output device. All devices must run at the same rate.
+[[bus]]
+name = "A1"
+device = "Focusrite"
+
+# A second output, for example headphones on another device; remove it if you have none.
+# [[bus]]
+# name = "A2"
+# device = "Kopfhörer"
+# gain_db = -6
+
+# Everything Windows plays into the virtual cable.
+[[input]]
+device = "CABLE Output"
+buses = ["A1"]
+
+# The Scarlett's own inputs (microphone, guitar), quieter and muted to start with.
+[[input]]
+device = "Analogue 1 + 2"
+buses = ["A1"]
+gain_db = -6
+mute = true

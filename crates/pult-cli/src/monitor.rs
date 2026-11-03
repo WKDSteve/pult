@@ -13,12 +13,13 @@ use pult_engine::Running;
 /// How often `--log` writes a row.
 pub const LOG_INTERVAL: Duration = Duration::from_secs(10);
 
-/// One input at one moment: its peak since the last snapshot and its counters so far.
+/// One input at one moment: its peak since the last snapshot and its counters so far,
+/// summed over the rings of all buses it feeds.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct InputSnapshot {
     /// Linear peak since the previous snapshot.
     pub peak: f32,
-    /// Times the ring ran dry.
+    /// Times a ring ran dry.
     pub underruns: u64,
     /// Frames lost at capture.
     pub lost: u64,
@@ -32,6 +33,15 @@ pub struct InputSnapshot {
     pub aligned: u64,
 }
 
+/// One bus at one moment.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BusSnapshot {
+    /// Linear peak of the bus output since the previous snapshot.
+    pub peak: f32,
+    /// Clipped or invalid output samples so far.
+    pub clipped: u64,
+}
+
 /// The whole route at one moment.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Snapshot {
@@ -39,10 +49,8 @@ pub struct Snapshot {
     pub elapsed: Duration,
     /// The inputs, in route order.
     pub inputs: Vec<InputSnapshot>,
-    /// Linear peak of the mix since the previous snapshot.
-    pub mix_peak: f32,
-    /// Clipped or invalid output samples so far.
-    pub clipped: u64,
+    /// The buses, in route order.
+    pub buses: Vec<BusSnapshot>,
     /// Glitches the devices reported so far.
     pub glitches: u64,
 }
@@ -54,23 +62,35 @@ impl Snapshot {
             .inputs
             .iter()
             .map(|input| {
-                let stats = &input.handle.stats;
-                InputSnapshot {
-                    peak: stats.peak.take(),
-                    underruns: stats.underruns.get(),
-                    lost: stats.dropped_at_capture.get(),
-                    drops: stats.drops.get(),
-                    repeats: stats.repeats.get(),
-                    resyncs: stats.resyncs.get(),
-                    aligned: stats.aligned.get(),
-                }
+                input
+                    .routes
+                    .iter()
+                    .fold(InputSnapshot::default(), |sum, route| {
+                        let stats = &route.stats;
+                        InputSnapshot {
+                            peak: sum.peak.max(stats.peak.take()),
+                            underruns: sum.underruns + stats.underruns.get(),
+                            lost: sum.lost + stats.dropped_at_capture.get(),
+                            drops: sum.drops + stats.drops.get(),
+                            repeats: sum.repeats + stats.repeats.get(),
+                            resyncs: sum.resyncs + stats.resyncs.get(),
+                            aligned: sum.aligned + stats.aligned.get(),
+                        }
+                    })
+            })
+            .collect();
+        let buses = running
+            .buses
+            .iter()
+            .map(|bus| BusSnapshot {
+                peak: bus.handle.stats.peak.take(),
+                clipped: bus.handle.stats.clipped.get(),
             })
             .collect();
         Self {
             elapsed,
             inputs,
-            mix_peak: running.master.peak.take(),
-            clipped: running.master.clipped.get(),
+            buses,
             glitches: running.xruns(),
         }
     }
@@ -83,7 +103,9 @@ impl Snapshot {
         for (m, earlier) in merged.inputs.iter_mut().zip(&self.inputs) {
             m.peak = m.peak.max(earlier.peak);
         }
-        merged.mix_peak = merged.mix_peak.max(self.mix_peak);
+        for (m, earlier) in merged.buses.iter_mut().zip(&self.buses) {
+            m.peak = m.peak.max(earlier.peak);
+        }
         merged
     }
 }
@@ -104,8 +126,8 @@ fn db(linear: f32) -> String {
 }
 
 /// The live status line: run time; per input level, dropouts, frames lost at capture and
-/// the drift fixes (dropped / repeated frames, hard resyncs); then the mix.
-pub fn status_line(snap: &Snapshot) -> String {
+/// the drift fixes (dropped / repeated frames, hard resyncs); then each bus by `bus_names`.
+pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
     // Writing into a String cannot fail.
     let mut line = clock(snap.elapsed);
     for (i, input) in snap.inputs.iter().enumerate() {
@@ -121,13 +143,15 @@ pub fn status_line(snap: &Snapshot) -> String {
             input.resyncs
         );
     }
-    let _ = write!(
-        line,
-        " | mix {} dB clipped {} | glitches {}",
-        db(snap.mix_peak),
-        snap.clipped,
-        snap.glitches
-    );
+    for (bus, name) in snap.buses.iter().zip(bus_names) {
+        let _ = write!(
+            line,
+            " | {name} {} dB clipped {}",
+            db(bus.peak),
+            bus.clipped
+        );
+    }
+    let _ = write!(line, " | glitches {}", snap.glitches);
     line
 }
 
@@ -140,8 +164,8 @@ fn csv_db(linear: f32) -> String {
     }
 }
 
-/// The CSV header for `inputs` inputs.
-pub fn csv_header(inputs: usize) -> String {
+/// The CSV header for `inputs` inputs and the buses `bus_names`.
+pub fn csv_header(inputs: usize, bus_names: &[String]) -> String {
     let mut line = "elapsed_s".to_owned();
     for i in 1..=inputs {
         for field in [
@@ -150,7 +174,10 @@ pub fn csv_header(inputs: usize) -> String {
             let _ = write!(line, ",in{i}_{field}");
         }
     }
-    line.push_str(",mix_peak_db,clipped,glitches");
+    for name in bus_names {
+        let _ = write!(line, ",{name}_peak_db,{name}_clipped");
+    }
+    line.push_str(",glitches");
     line
 }
 
@@ -170,13 +197,10 @@ pub fn csv_row(snap: &Snapshot) -> String {
             input.aligned
         );
     }
-    let _ = write!(
-        line,
-        ",{},{},{}",
-        csv_db(snap.mix_peak),
-        snap.clipped,
-        snap.glitches
-    );
+    for bus in &snap.buses {
+        let _ = write!(line, ",{},{}", csv_db(bus.peak), bus.clipped);
+    }
+    let _ = write!(line, ",{}", snap.glitches);
     line
 }
 
@@ -191,11 +215,11 @@ impl Log {
     /// # Errors
     ///
     /// When the file cannot be created or written.
-    pub fn create(path: &Path, inputs: usize) -> io::Result<Self> {
+    pub fn create(path: &Path, inputs: usize, bus_names: &[String]) -> io::Result<Self> {
         let mut log = Self {
             out: BufWriter::new(File::create(path)?),
         };
-        log.line(&csv_header(inputs))?;
+        log.line(&csv_header(inputs, bus_names))?;
         Ok(log)
     }
 
@@ -226,27 +250,40 @@ mod tests {
                 drops,
                 ..InputSnapshot::default()
             }],
-            mix_peak: peak,
-            clipped: 0,
+            buses: vec![BusSnapshot { peak, clipped: 0 }],
             glitches: 1,
         }
     }
 
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(ToString::to_string).collect()
+    }
+
     #[test]
-    fn status_line_starts_with_the_run_time() {
-        let line = status_line(&snap(3_723_000, 0.5, 7));
+    fn status_line_starts_with_the_run_time_and_ends_with_the_buses() {
+        let mut two = snap(3_723_000, 0.5, 7);
+        two.buses.push(BusSnapshot {
+            peak: 0.0,
+            clipped: 4,
+        });
+        let line = status_line(&two, &names(&["A1", "B1"]));
         assert!(line.starts_with("1:02:03 [1]   -6.0 dB"), "{line}");
-        assert!(line.contains("fix -7/+0/0 | mix   -6.0 dB clipped 0 | glitches 1"));
+        assert!(
+            line.contains("fix -7/+0/0 | A1   -6.0 dB clipped 0 | B1   -inf dB clipped 4"),
+            "{line}"
+        );
+        assert!(line.ends_with(" | glitches 1"), "{line}");
     }
 
     #[test]
     fn csv_header_and_row_have_the_same_columns() {
         let mut two = snap(10_000, 0.0, 3);
         two.inputs.push(InputSnapshot::default());
-        let header = csv_header(2);
+        let header = csv_header(2, &names(&["A1"]));
         let row = csv_row(&two);
         assert_eq!(header.split(',').count(), row.split(',').count());
         assert!(header.starts_with("elapsed_s,in1_peak_db,in1_dropouts"));
+        assert!(header.ends_with(",in2_aligned,A1_peak_db,A1_clipped,glitches"));
         assert_eq!(row, "10.0,-inf,0,0,3,0,0,0,-inf,0,0,0,0,0,0,-inf,0,1");
     }
 
@@ -255,7 +292,7 @@ mod tests {
         let merged = snap(1_000, 0.8, 1).merge(&snap(2_000, 0.2, 5));
         assert_eq!(merged.inputs[0].peak, 0.8);
         assert_eq!(merged.inputs[0].drops, 5);
-        assert_eq!(merged.mix_peak, 0.8);
+        assert_eq!(merged.buses[0].peak, 0.8);
         assert_eq!(merged.elapsed, Duration::from_secs(2));
     }
 
@@ -263,7 +300,7 @@ mod tests {
     fn log_writes_header_and_rows() {
         let path = std::env::temp_dir().join(format!("pult-log-test-{}.csv", std::process::id()));
         {
-            let mut log = Log::create(&path, 1).expect("create log");
+            let mut log = Log::create(&path, 1, &names(&["A1"])).expect("create log");
             log.row(&snap(10_000, 0.5, 2)).expect("write row");
         }
         let text = std::fs::read_to_string(&path).expect("read log");

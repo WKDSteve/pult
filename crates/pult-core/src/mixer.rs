@@ -1,9 +1,11 @@
 //! Inputs, their rings and the mixer that sums them into one output.
 //!
 //! Each input device gets a [`Capture`] (its callback pushes into a ring) and a
-//! [`MixerInput`] (the output callback reads from that ring). The [`Mixer`] owns the inputs
-//! and fills the output buffer. Control and statistics go through an [`InputHandle`] the
-//! control thread keeps.
+//! [`MixerInput`] (the output callback reads from that ring). A [`Mixer`] owns the inputs of
+//! one bus and fills that bus's output buffer. An input that feeds several buses has one
+//! ring per bus, each with its own drift control (every output runs on its own clock), and
+//! shares one set of [`InputControls`] across them. Control and statistics go through an
+//! [`InputHandle`] and a [`BusHandle`] the control thread keeps.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,13 +16,15 @@ use crate::drift::{DriftControl, Event};
 use crate::level::{AtomicF32, Counter, PeakMeter};
 use crate::remix::remix_add;
 
-/// Gain and mute of one input, set by the control thread.
+/// Gain, mute and pan of one input, set by the control thread.
 #[derive(Debug)]
 pub struct InputControls {
     /// Linear gain factor.
     pub gain: AtomicF32,
     /// Muted inputs keep draining their ring but add nothing.
     pub muted: AtomicBool,
+    /// -1 (left) to 1 (right); see [`remix_add`].
+    pub pan: AtomicF32,
 }
 
 impl Default for InputControls {
@@ -28,11 +32,12 @@ impl Default for InputControls {
         Self {
             gain: AtomicF32::new(1.0),
             muted: AtomicBool::new(false),
+            pan: AtomicF32::new(0.0),
         }
     }
 }
 
-/// What happened to one input, counted by the audio threads.
+/// What happened to one ring of an input, counted by the audio threads.
 #[derive(Debug, Default)]
 pub struct InputStats {
     /// Peak after gain, as fed into the mix.
@@ -51,22 +56,49 @@ pub struct InputStats {
     pub aligned: Counter,
 }
 
-/// Statistics of the mixed output.
+/// Gain and mute of one bus, set by the control thread.
+#[derive(Debug)]
+pub struct BusControls {
+    /// Linear gain factor applied to the sum.
+    pub gain: AtomicF32,
+    /// A muted bus plays silence; its inputs keep draining.
+    pub muted: AtomicBool,
+}
+
+impl Default for BusControls {
+    fn default() -> Self {
+        Self {
+            gain: AtomicF32::new(1.0),
+            muted: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Statistics of one bus's output.
 #[derive(Debug, Default)]
-pub struct MasterStats {
-    /// Peak of the mix.
+pub struct BusStats {
+    /// Peak of the output after the bus gain.
     pub peak: PeakMeter,
-    /// Output samples beyond full scale, clipped to it.
+    /// Output samples beyond full scale (clipped to it) or invalid (replaced by silence).
     pub clipped: Counter,
 }
 
-/// The control thread's side of one input.
+/// The control thread's side of one input ring.
 #[derive(Debug, Clone)]
 pub struct InputHandle {
-    /// Gain and mute.
+    /// Gain, mute and pan, shared by all rings of the input.
     pub controls: Arc<InputControls>,
-    /// Peaks and counters.
+    /// Peaks and counters of this ring.
     pub stats: Arc<InputStats>,
+}
+
+/// The control thread's side of one bus.
+#[derive(Debug, Clone)]
+pub struct BusHandle {
+    /// Gain and mute.
+    pub controls: Arc<BusControls>,
+    /// Peak and clip counter.
+    pub stats: Arc<BusStats>,
 }
 
 /// Layout and buffering of one input, in frames.
@@ -87,18 +119,31 @@ pub struct InputConfig {
     pub settle: usize,
 }
 
-/// Creates the ring of one input and both of its ends.
+/// Creates the ring of one input with its own controls and both of its ends.
 ///
 /// # Panics
 ///
 /// When `channels` is zero.
 #[must_use]
 pub fn connect(config: InputConfig) -> (Capture, MixerInput, InputHandle) {
+    connect_with(config, Arc::new(InputControls::default()))
+}
+
+/// Creates one more ring of an input whose `controls` other rings already share.
+///
+/// # Panics
+///
+/// When `channels` is zero.
+#[must_use]
+pub fn connect_with(
+    config: InputConfig,
+    controls: Arc<InputControls>,
+) -> (Capture, MixerInput, InputHandle) {
     assert!(config.channels > 0, "an input needs at least one channel");
     let samples = config.capacity * config.channels;
     let (producer, consumer) = RingBuffer::new(samples);
     let handle = InputHandle {
-        controls: Arc::new(InputControls::default()),
+        controls,
         stats: Arc::new(InputStats::default()),
     };
     let capture = Capture {
@@ -119,7 +164,7 @@ pub fn connect(config: InputConfig) -> (Capture, MixerInput, InputHandle) {
     (capture, input, handle)
 }
 
-/// The capture end of an input: its device callback pushes here.
+/// The capture end of an input ring: its device callback pushes here.
 #[derive(Debug)]
 pub struct Capture {
     producer: Producer<f32>,
@@ -142,7 +187,7 @@ impl Capture {
     }
 }
 
-/// The playback end of an input, owned by the mixer.
+/// The playback end of an input ring, owned by the mixer of one bus.
 #[derive(Debug)]
 pub struct MixerInput {
     consumer: Consumer<f32>,
@@ -197,33 +242,41 @@ impl MixerInput {
         };
         let block = &self.scratch[..end];
         self.stats.peak.record_scaled(block, gain);
-        remix_add(block, ch, out, out_channels, gain);
+        let position = self.controls.pan.load();
+        remix_add(block, ch, out, out_channels, gain, position);
     }
 }
 
-/// Sums all inputs into the output buffer; runs inside the output device's callback.
+/// Sums the inputs of one bus into its output buffer; runs inside the output device's
+/// callback.
 #[derive(Debug)]
 pub struct Mixer {
     inputs: Vec<MixerInput>,
     out_channels: usize,
-    stats: Arc<MasterStats>,
+    controls: Arc<BusControls>,
+    stats: Arc<BusStats>,
 }
 
 impl Mixer {
     /// A mixer for an output with `out_channels` channels.
     #[must_use]
-    pub fn new(inputs: Vec<MixerInput>, out_channels: usize) -> (Self, Arc<MasterStats>) {
-        let stats = Arc::new(MasterStats::default());
+    pub fn new(inputs: Vec<MixerInput>, out_channels: usize) -> (Self, BusHandle) {
+        let handle = BusHandle {
+            controls: Arc::new(BusControls::default()),
+            stats: Arc::new(BusStats::default()),
+        };
         let mixer = Self {
             inputs,
             out_channels,
-            stats: Arc::clone(&stats),
+            controls: Arc::clone(&handle.controls),
+            stats: Arc::clone(&handle.stats),
         };
-        (mixer, stats)
+        (mixer, handle)
     }
 
-    /// Overwrites `out` (interleaved) with the mix of all inputs, clipped to full scale. A NaN
-    /// (a broken input) becomes silence: a device may turn it into full-scale noise.
+    /// Overwrites `out` (interleaved) with the mix of all inputs times the bus gain, clipped
+    /// to full scale. A NaN (a broken input) becomes silence: a device may turn it into
+    /// full-scale noise.
     pub fn process(&mut self, out: &mut [f32]) {
         out.fill(0.0);
         if self.out_channels == 0 {
@@ -233,14 +286,22 @@ impl Mixer {
         for input in &mut self.inputs {
             input.mix_into(out, self.out_channels, frames);
         }
+        let gain = if self.controls.muted.load(Ordering::Relaxed) {
+            0.0
+        } else {
+            self.controls.gain.load()
+        };
         let mut clipped = 0;
         for sample in out.iter_mut() {
-            if sample.is_nan() {
+            let value = *sample * gain;
+            if value.is_nan() {
                 clipped += 1;
                 *sample = 0.0;
-            } else if sample.abs() > 1.0 {
+            } else if value.abs() > 1.0 {
                 clipped += 1;
-                *sample = sample.clamp(-1.0, 1.0);
+                *sample = value.clamp(-1.0, 1.0);
+            } else {
+                *sample = value;
             }
         }
         if clipped > 0 {
@@ -300,6 +361,43 @@ mod tests {
     }
 
     #[test]
+    fn one_input_feeds_two_buses_with_shared_controls() {
+        let controls = Arc::new(InputControls::default());
+        let (mut to_a, ring_a, handle_a) = connect_with(config(1, 0), Arc::clone(&controls));
+        let (mut to_b, ring_b, handle_b) = connect_with(config(1, 0), Arc::clone(&controls));
+        let (mut bus_a, _) = Mixer::new(vec![ring_a], 2);
+        let (mut bus_b, bus_b_handle) = Mixer::new(vec![ring_b], 2);
+        controls.pan.store(1.0);
+        bus_b_handle.controls.gain.store(0.5);
+        for capture in [&mut to_a, &mut to_b] {
+            capture.push(&[0.8]);
+        }
+        let (mut out_a, mut out_b) = ([0.0; 2], [0.0; 2]);
+        bus_a.process(&mut out_a);
+        bus_b.process(&mut out_b);
+        assert_eq!(out_a, [0.0, 0.8]);
+        assert_eq!(out_b, [0.0, 0.4]);
+        assert!(Arc::ptr_eq(&handle_a.controls, &handle_b.controls));
+        assert!(!Arc::ptr_eq(&handle_a.stats, &handle_b.stats));
+        assert_eq!(bus_b_handle.stats.peak.take(), 0.4);
+    }
+
+    #[test]
+    fn a_muted_bus_is_silent_but_drains_its_inputs() {
+        let (mut capture, input, handle) = connect(config(1, 0));
+        let (mut mixer, bus) = Mixer::new(vec![input], 1);
+        bus.controls.muted.store(true, Ordering::Relaxed);
+        capture.push(&[0.5, 0.5]);
+        let mut out = [9.0; 2];
+        mixer.process(&mut out);
+        assert_eq!(out, [0.0; 2]);
+        assert_eq!(handle.stats.peak.take(), 0.5);
+        bus.controls.muted.store(false, Ordering::Relaxed);
+        mixer.process(&mut out);
+        assert_eq!(handle.stats.underruns.get(), 1);
+    }
+
+    #[test]
     fn counts_underruns_and_full_rings() {
         let (mut capture, input, handle) = connect(InputConfig {
             channels: 1,
@@ -346,23 +444,23 @@ mod tests {
     #[test]
     fn never_passes_nan_or_infinity_to_the_device() {
         let (mut capture, input, _) = connect(config(1, 0));
-        let (mut mixer, master) = Mixer::new(vec![input], 1);
+        let (mut mixer, bus) = Mixer::new(vec![input], 1);
         capture.push(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5]);
         let mut out = [0.0; 4];
         mixer.process(&mut out);
         assert_eq!(out, [0.0, 1.0, -1.0, 0.5]);
-        assert_eq!(master.clipped.get(), 3);
+        assert_eq!(bus.stats.clipped.get(), 3);
     }
 
     #[test]
     fn clips_the_mix_to_full_scale() {
         let (mut capture, input, _) = connect(config(1, 0));
-        let (mut mixer, master) = Mixer::new(vec![input], 1);
+        let (mut mixer, bus) = Mixer::new(vec![input], 1);
         capture.push(&[1.5, -2.0]);
         let mut out = [0.0; 2];
         mixer.process(&mut out);
         assert_eq!(out, [1.0, -1.0]);
-        assert_eq!(master.clipped.get(), 2);
-        assert_eq!(master.peak.take(), 1.0);
+        assert_eq!(bus.stats.clipped.get(), 2);
+        assert_eq!(bus.stats.peak.take(), 1.0);
     }
 }

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use args::{Command, RunSpec, ToneSpec, USAGE};
+use args::{Command, Routing, RunSpec, ToneSpec, USAGE};
 use monitor::{LOG_INTERVAL, Log, Snapshot};
 use pult_engine::{Devices, Running, Tone};
 
@@ -73,29 +73,43 @@ fn print_devices(devices: &Devices) {
     println!("(* = system default)");
 }
 
-/// Opens the log (before any device, so a bad path costs nothing) and runs the route.
+/// Reads the profile and opens the log (before any device, so a bad file costs nothing),
+/// then runs the route.
 fn start_run(spec: &RunSpec) -> Result<(), String> {
+    let route = match &spec.routing {
+        Routing::Inline(route) => route.clone(),
+        Routing::Profile(path) => pult_engine::profile::load(path).map_err(|e| e.to_string())?,
+    };
+    let bus_names: Vec<String> = route.buses.iter().map(|b| b.name.clone()).collect();
     let log = match &spec.log {
         Some(path) => Some(
-            Log::create(path, spec.route.sources.len())
+            Log::create(path, route.inputs.len(), &bus_names)
                 .map_err(|e| format!("cannot write the log {}: {e}", path.display()))?,
         ),
         None => None,
     };
-    let running = pult_engine::start(&spec.route).map_err(|e| e.to_string())?;
-    run(&running, log)
+    let running = pult_engine::start(&route).map_err(|e| e.to_string())?;
+    run(&running, log, bus_names)
 }
 
 /// Shows levels until Enter is pressed or a device fails.
-fn run(running: &Running, log: Option<Log>) -> Result<(), String> {
+fn run(running: &Running, log: Option<Log>, bus_names: Vec<String>) -> Result<(), String> {
     println!(
-        "Routing to {} at {} Hz; press Enter to stop.",
-        running.sink, running.sample_rate
+        "Routing at {} Hz; press Enter to stop.",
+        running.sample_rate
     );
-    for (i, input) in running.inputs.iter().enumerate() {
-        println!("  [{}] {}", i + 1, input.name);
+    for bus in &running.buses {
+        println!("  {} -> {}", bus.name, bus.device);
     }
-    let mut recorder = Recorder::new(log);
+    for (i, input) in running.inputs.iter().enumerate() {
+        let buses: Vec<&str> = input
+            .routes
+            .iter()
+            .map(|r| running.buses[r.bus].name.as_str())
+            .collect();
+        println!("  [{}] {} -> {}", i + 1, input.name, buses.join(", "));
+    }
+    let mut recorder = Recorder::new(log, bus_names);
     let result = wait_for_enter(|| running.fault(), Some(&mut || recorder.tick(running)));
     recorder.finish(running);
     result
@@ -106,15 +120,17 @@ fn run(running: &Running, log: Option<Log>) -> Result<(), String> {
 struct Recorder {
     start: Instant,
     log: Option<Log>,
+    bus_names: Vec<String>,
     interval: Option<Snapshot>,
     next_row: Duration,
 }
 
 impl Recorder {
-    fn new(log: Option<Log>) -> Self {
+    fn new(log: Option<Log>, bus_names: Vec<String>) -> Self {
         Self {
             start: Instant::now(),
             log,
+            bus_names,
             interval: None,
             next_row: LOG_INTERVAL,
         }
@@ -136,7 +152,7 @@ impl Recorder {
         } else {
             self.interval = Some(merged);
         }
-        monitor::status_line(&snap)
+        monitor::status_line(&snap, &self.bus_names)
     }
 
     /// Writes the rest of the last interval.

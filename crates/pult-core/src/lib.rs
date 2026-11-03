@@ -15,8 +15,8 @@ pub mod tone;
 pub use drift::{DriftControl, Event, Plan};
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
 pub use mixer::{
-    Capture, InputConfig, InputControls, InputHandle, InputStats, MasterStats, Mixer, MixerInput,
-    connect,
+    BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,
+    Mixer, MixerInput, connect, connect_with,
 };
 pub use remix::remix_add;
 pub use select::{SelectError, select};
