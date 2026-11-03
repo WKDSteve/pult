@@ -227,7 +227,7 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `pan <Eingang> <-1..1>` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
 | `route <Eingang> <Bus>`, `unroute <Eingang> <Bus>` | einen Eingang zusätzlich auf einen Bus legen, von ihm nehmen; der letzte Bus eines Eingangs bleibt (dafür `mute`) |
 | `show` | alle Eingänge und Busse mit Gain, Pan und Mute |
-| `save <Datei>` | den aktuellen Stand als Profil schreiben (eine vorhandene Datei wird ersetzt), später mit `--profile` laden |
+| `save <Datei>` | den aktuellen Stand als Profil schreiben, später mit `--profile` laden. Ein Profil mit denselben Bussen und Eingängen behält seine Kommentare und Reihenfolge, nur geänderte Werte werden ersetzt; jede andere Datei wird überschrieben |
 | `help` | die Befehle |
 | `quit`, Enter auf leerer Zeile, Strg+C | beenden |
 

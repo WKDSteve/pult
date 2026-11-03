@@ -188,7 +188,10 @@ impl Running {
 /// Writes `spec` as a profile to `path`, through a temporary file so that a failed write
 /// leaves an existing profile intact.
 fn save(path: &Path, spec: &RouteSpec) -> Result<(), String> {
-    let text = profile::render(spec);
+    let text = std::fs::read_to_string(path).map_or_else(
+        |_| profile::render(spec),
+        |existing| profile::merge(&existing, spec),
+    );
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".tmp");
     let temporary = Path::new(&temporary);

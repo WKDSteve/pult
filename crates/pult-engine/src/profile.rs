@@ -33,6 +33,8 @@ use serde::Deserialize;
 
 use std::fmt::Write as _;
 
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
+
 use crate::live::quoted;
 use crate::{BusSpec, Error, InputKind, InputSpec, RouteSpec};
 
@@ -265,6 +267,140 @@ pub fn render(spec: &RouteSpec) -> String {
     text
 }
 
+/// Writes `spec` into `existing`, the text of a profile with the same buses and inputs: only
+/// values that differ change, so comments, order and commented-out examples stay. Any other
+/// text, or one that would not read back to `spec`, gives way to [`render`].
+#[must_use]
+pub fn merge(existing: &str, spec: &RouteSpec) -> String {
+    merged(existing, spec)
+        .filter(|text| parse(text).as_ref() == Ok(spec))
+        .unwrap_or_else(|| render(spec))
+}
+
+/// The merge itself; `None` when `existing` is not a profile of these buses and inputs.
+fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
+    let mut file: DocumentMut = existing.parse().ok()?;
+
+    if file.get("latency_ms").is_some() || spec.latency_ms != DEFAULT_LATENCY_MS {
+        let same =
+            file.get("latency_ms").and_then(Item::as_integer) == Some(i64::from(spec.latency_ms));
+        if !same {
+            set(
+                file.as_table_mut(),
+                "latency_ms",
+                i64::from(spec.latency_ms).into(),
+            );
+        }
+    }
+
+    let buses = file.get_mut("bus")?.as_array_of_tables_mut()?;
+    if buses.len() != spec.buses.len() {
+        return None;
+    }
+    for (table, bus) in buses.iter_mut().zip(&spec.buses) {
+        if text_of(table, "name") != Some(&bus.name)
+            || text_of(table, "device") != Some(&bus.device)
+        {
+            return None;
+        }
+        set_label(table, bus.label.as_ref());
+        set_number(table, "gain_db", bus.gain_db);
+        set_switch(table, "mute", bus.muted);
+    }
+
+    let inputs = file.get_mut("input")?.as_array_of_tables_mut()?;
+    if inputs.len() != spec.inputs.len() {
+        return None;
+    }
+    for (table, input) in inputs.iter_mut().zip(&spec.inputs) {
+        let key = match input.kind {
+            InputKind::Device => "device",
+            InputKind::Process => "process",
+        };
+        if text_of(table, key) != Some(&input.device) {
+            return None;
+        }
+        let routed: Vec<&str> = input
+            .buses
+            .iter()
+            .map(|&bus| spec.buses[bus].name.as_str())
+            .collect();
+        let listed: Option<Vec<&str>> = table
+            .get("buses")
+            .and_then(Item::as_array)
+            .map(|list| list.iter().filter_map(Value::as_str).collect());
+        if listed.as_ref() != Some(&routed) {
+            set(table, "buses", Array::from_iter(routed).into());
+        }
+        set_label(table, input.label.as_ref());
+        set_number(table, "gain_db", input.gain_db);
+        set_number(table, "pan", input.pan);
+        set_switch(table, "mute", input.muted);
+    }
+    Some(file.to_string())
+}
+
+fn text_of<'a>(table: &'a Table, key: &str) -> Option<&'a str> {
+    table.get(key).and_then(Item::as_str)
+}
+
+/// Sets `key`, keeping the comment behind an old value.
+fn set(table: &mut Table, key: &str, value: Value) {
+    match table.get_mut(key).and_then(Item::as_value_mut) {
+        Some(old) => {
+            let decor = old.decor().clone();
+            *old = value;
+            *old.decor_mut() = decor;
+        }
+        None => {
+            table.insert(key, Item::Value(value));
+        }
+    }
+}
+
+fn set_label(table: &mut Table, label: Option<&String>) {
+    match label {
+        Some(label) if text_of(table, "label") != Some(label) => {
+            set(table, "label", label.as_str().into());
+        }
+        Some(_) => {}
+        None => {
+            table.remove("label");
+        }
+    }
+}
+
+/// Sets a number that defaults to 0, unless it reads as `number` already.
+fn set_number(table: &mut Table, key: &str, number: f32) {
+    let old = table.get(key).and_then(|item| {
+        item.as_float()
+            .or_else(|| item.as_integer().map(|whole| whole as f64))
+    });
+    // Exactly: parse reads the file's number to this very f32 if it did not change.
+    #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+    let same = old.map_or(number == 0.0, |old| old as f32 == number);
+    if !same {
+        // Through the text, so -3.7 stays -3.7 and does not grow the digits of an f32.
+        let shown = number.to_string();
+        let value = shown.parse::<i64>().map_or_else(
+            |_| shown.parse::<f64>().map_or(Value::from(0.0), Value::from),
+            Value::from,
+        );
+        set(table, key, value);
+    }
+}
+
+/// Sets a switch that defaults to off.
+fn set_switch(table: &mut Table, key: &str, on: bool) {
+    let same = table
+        .get(key)
+        .and_then(Item::as_bool)
+        .map_or(!on, |old| old == on);
+    if !same {
+        set(table, key, on.into());
+    }
+}
+
 /// The line of a label in a rendered profile; empty without one.
 fn label_line(label: Option<&String>) -> String {
     label.map_or_else(String::new, |label| format!("label = {}\n", quoted(label)))
@@ -389,6 +525,65 @@ mod tests {
             )
             .contains("input \"m\": label must not be empty")
         );
+    }
+
+    const EXAMPLE: &str = include_str!("../../../examples/pult.toml");
+
+    #[test]
+    fn merge_changes_only_what_differs_and_keeps_the_rest() {
+        let mut spec = parse(EXAMPLE).expect("example");
+        assert_eq!(merge(EXAMPLE, &spec), EXAMPLE, "nothing changed");
+
+        spec.inputs[0].gain_db = -3.7;
+        spec.inputs[0].pan = 0.5;
+        spec.inputs[0].label = Some("Musik".into());
+        spec.inputs[1].muted = false;
+        spec.buses[0].gain_db = -6.0;
+        spec.latency_ms = 80;
+        let text = merge(EXAMPLE, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+
+        // Every comment line of the example is still there, in its order.
+        let comments = |text: &str| -> Vec<String> {
+            text.lines()
+                .filter(|line| line.starts_with('#'))
+                .map(str::to_owned)
+                .collect()
+        };
+        assert_eq!(comments(&text), comments(EXAMPLE));
+        assert!(text.contains("# process = \"Spotify\""));
+        assert!(text.contains("gain_db = -3.7\n"), "{text}");
+        assert!(text.contains("latency_ms = 80\n"), "{text}");
+    }
+
+    #[test]
+    fn merge_keeps_the_comment_behind_a_value_and_changes_routes() {
+        let existing = "[[bus]]\nname = \"A1\"\ndevice = \"x\"\n\
+             [[bus]]\nname = \"A2\"\ndevice = \"y\"\n\
+             [[input]]\ndevice = \"m\"\nbuses = [\"A1\"] # the matrix\n\
+             gain_db = 0 # loud enough\n";
+        let mut spec = parse(existing).expect("profile");
+        spec.inputs[0].gain_db = -6.0;
+        spec.inputs[0].buses = vec![0, 1];
+        let text = merge(existing, &spec);
+        assert!(text.contains("gain_db = -6 # loud enough"), "{text}");
+        assert!(
+            text.contains("buses = [\"A1\", \"A2\"] # the matrix"),
+            "{text}"
+        );
+        assert_eq!(parse(&text), Ok(spec));
+    }
+
+    #[test]
+    fn merge_writes_anew_what_is_no_profile_of_this_route() {
+        let spec = parse(TWO_BUSES).expect("profile");
+        let fresh = render(&spec);
+        assert_eq!(merge("not = [toml", &spec), fresh);
+        assert_eq!(merge("# just a comment\n", &spec), fresh);
+        // Another device, another bus count, another input.
+        assert_eq!(merge(&TWO_BUSES.replace("Headset", "Boxen"), &spec), fresh);
+        assert_eq!(merge(EXAMPLE, &spec), fresh);
+        assert_eq!(merge(&TWO_BUSES.replace("CABLE", "VAIO"), &spec), fresh);
     }
 
     #[test]
