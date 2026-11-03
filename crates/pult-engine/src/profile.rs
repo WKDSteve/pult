@@ -337,7 +337,13 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_number(table, "pan", input.pan);
         set_switch(table, "mute", input.muted);
     }
-    Some(file.to_string())
+    // The parser reads line ends as \n; a Windows file keeps its own.
+    let text = file.to_string();
+    Some(if existing.contains("\r\n") {
+        text.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        text
+    })
 }
 
 fn text_of<'a>(table: &'a Table, key: &str) -> Option<&'a str> {
@@ -572,6 +578,17 @@ mod tests {
             "{text}"
         );
         assert_eq!(parse(&text), Ok(spec));
+    }
+
+    #[test]
+    fn merge_keeps_the_line_ends_of_a_windows_file() {
+        let existing = EXAMPLE.replace("\r\n", "\n").replace('\n', "\r\n");
+        let mut spec = parse(&existing).expect("example");
+        assert_eq!(merge(&existing, &spec), existing, "nothing changed");
+        spec.inputs[0].gain_db = -6.0;
+        let text = merge(&existing, &spec);
+        assert_eq!(parse(&text), Ok(spec));
+        assert_eq!(text.matches('\n').count(), text.matches("\r\n").count());
     }
 
     #[test]
