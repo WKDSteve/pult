@@ -22,6 +22,14 @@ allow = [
     "Unicode-3.0",
     # assert_no_alloc (the allocation guard of the audio callbacks): permissive, notice only.
     "BSD-1-Clause",
+    # pult-app (egui, wgpu): foldhash and others under Zlib, libloading under ISC; both
+    # permissive, notice only.
+    "Zlib",
+    "ISC",
+    # pult-app: egui's built-in fonts (epaint_default_fonts), shipped inside the binary. Both
+    # allow embedding and redistribution; the font may not be sold on its own.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 
 [bans]

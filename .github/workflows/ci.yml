@@ -46,9 +46,24 @@ jobs:
       - run: rustc --version && cargo --version && cargo audit --version && cargo deny --version
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # pult-app's snapshot tests render through wgpu on this machine's GPU (or WARP).
       - run: cargo test --workspace --locked
-      # The supply chain: known advisories, licenses, sources.
-      - run: cargo audit --deny warnings
+      # A snapshot that does not match leaves <name>.new.png and <name>.diff.png beside it.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (node24)
+        with:
+          name: snapshot-diffs
+          path: |
+            crates/pult-app/tests/snapshots/*.new.png
+            crates/pult-app/tests/snapshots/*.diff.png
+          if-no-files-found: ignore
+      # The supply chain: known advisories, licenses, sources. The three ignored advisories
+      # (zvariant, zbus_names, zvariant_derive unmaintained) reach the lock file only through
+      # accesskit_unix, eframe's Linux screen reader bridge, which is never built here; cargo
+      # deny, scoped to the Windows target, does not see them at all.
+      - run: >-
+          cargo audit --deny warnings
+          --ignore RUSTSEC-2026-0370 --ignore RUSTSEC-2026-0371 --ignore RUSTSEC-2026-0372
       - run: cargo deny check
 
   # A control or invisible character in a tracked text file is refused; the tool tests itself.

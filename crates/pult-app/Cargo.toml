@@ -18,6 +18,12 @@ path = "src/main.rs"
 
 [dependencies]
 pult-core.workspace = true
+# The same UI stack as takt (egui over eframe, wgpu); glow, x11 and wayland stay out.
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
+
+[dev-dependencies]
+# Renders views offscreen through wgpu and compares them with tests/snapshots/*.png.
+egui_kittest = { version = "0.37.0", features = ["wgpu", "snapshot"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,4 @@
+# Written by egui_kittest next to each snapshot; only the reference images are tracked.
+*.new.png
+*.diff.png
+*.old.png
