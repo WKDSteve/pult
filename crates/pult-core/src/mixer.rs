@@ -38,10 +38,12 @@ use crate::remix::remix_add;
 const MAX_CHUNK: usize = 1024;
 
 /// Seconds in which the rate control's proportional term would remove a level error; the
-/// integral time is four times that (critically damped, see [`crate::rate`]). Slow on
-/// purpose: an error up to the skip threshold (twice the band, 20 ms at 40 ms latency) asks
-/// for at most about 700 ppm, about one cent of pitch; real drift is tens of ppm.
-const STEER_SECONDS: f64 = 30.0;
+/// integral time is four times that (critically damped, see [`crate::rate`]). A compromise
+/// two long runs settled: fast enough that a clock jumping by 1500 ppm settles at about
+/// 22 ms, below the skip threshold (three times the band, 30 ms at 40 ms latency), so it is
+/// steered and learned rather than skipped; slow enough that an error up to that threshold
+/// asks for at most 2000 ppm, about three cents, and only for seconds.
+const STEER_SECONDS: f64 = 15.0;
 
 /// The largest correction against clock drift: 0.5 %, far beyond any real clock (they differ
 /// by tens of ppm) and still far below an audible pitch change.
@@ -191,6 +193,11 @@ pub fn connect_with(
     let samples = config.capacity * config.channels;
     let (producer, consumer) = RingBuffer::new(samples);
     let resampler = resampler(config);
+    let drift = DriftControl::new(config.target, config.band)
+        .smoothed(config.smoothing)
+        .settling(config.settle);
+    // The integral learns up to where the drift control skips a surplus; beyond is a backlog.
+    let window = drift.skip_threshold() as f64 / f64::from(config.input_rate);
     let scratch = vec![0.0; resampler.input_frames_max() * config.channels];
     let chunk_out = vec![0.0; MAX_CHUNK * config.channels];
     let open = Arc::new(AtomicBool::new(true));
@@ -209,12 +216,9 @@ pub fn connect_with(
         consumer,
         channels: config.channels,
         open,
-        drift: DriftControl::new(config.target, config.band)
-            .smoothed(config.smoothing)
-            .settling(config.settle),
+        drift,
         rate: RateControl::new(STEER_SECONDS, 4.0 * STEER_SECONDS, MAX_CORRECTION)
-            // Up to where the drift control skips a surplus; beyond it is a backlog.
-            .integrating_within(2.0 * config.band as f64 / f64::from(config.input_rate)),
+            .integrating_within(window),
         resampler,
         input_rate: f64::from(config.input_rate),
         output_rate: f64::from(config.output_rate),
@@ -832,6 +836,38 @@ mod tests {
             let ppm = handle.stats.correction_ppm.load();
             assert!(ppm.abs() < 50.0, "{rates}: correction {ppm} ppm");
         }
+    }
+
+    #[test]
+    fn learns_a_clock_that_jumps_without_skipping() {
+        // A steady input that suddenly runs 1500 ppm fast (a busy machine, a device that
+        // changed its clock): the resampler has to follow without a single resync.
+        let target = 1920;
+        let (mut capture, input, handle) = connect(InputConfig {
+            smoothing: 1.0 / 128.0,
+            settle: 96_000,
+            band: target / 4,
+            ..config(2, target)
+        });
+        let (mut mixer, _) = Mixer::new(vec![input], 2);
+        let mut out = vec![0.0; PERIOD * 2];
+        let mut owed = 0.0;
+        let mut frame = vec![0.1; (PERIOD + 2) * 2];
+        // Ten simulated minutes, the jump after one.
+        for callback in 0..60_000 {
+            let drift = if callback < 6000 { 0.0 } else { 1500e-6 };
+            owed += PERIOD as f64 * (1.0 + drift);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let frames = owed as usize;
+            owed -= frames as f64;
+            frame.resize(frames * 2, 0.1);
+            capture.push(&frame);
+            mixer.process(&mut out);
+        }
+        assert_eq!(handle.stats.resyncs.get(), 0);
+        assert_eq!(handle.stats.underruns.get(), 0);
+        let ppm = handle.stats.correction_ppm.load();
+        assert!((ppm - 1500.0).abs() < 50.0, "correction {ppm} ppm");
     }
 
     #[test]

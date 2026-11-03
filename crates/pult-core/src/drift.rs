@@ -101,11 +101,19 @@ impl DriftControl {
 
     /// The level beyond which the control skips back to the target at once. Block jitter
     /// can lift the level to nearly twice the target without any drift, so the limit lies
-    /// above that. A smaller surplus that lasts (the average beyond twice the band) is
-    /// skipped too, but judged by the average.
+    /// above that. A smaller surplus that lasts (the average beyond
+    /// [`Self::skip_threshold`]) is skipped too, but judged by the average.
     #[must_use]
     pub fn hard_limit(&self) -> usize {
         2 * self.target + 4 * self.band
+    }
+
+    /// How far the smoothed level may lie above the target, in frames, before the surplus
+    /// counts as a backlog and is skipped: three times the band. Below it, a clock that
+    /// changed its rate is left to the resampler.
+    #[must_use]
+    pub fn skip_threshold(&self) -> usize {
+        3 * self.band
     }
 
     /// Starts over as if new: the next plans prime and settle again. For a ring that was
@@ -166,10 +174,10 @@ impl DriftControl {
             return self.settle_step(after, read);
         }
         self.level += self.alpha * (after as f64 - self.level);
-        // A surplus the average still shows beyond twice the band is no drift but a backlog
+        // A surplus the average still shows beyond the threshold is no drift but a backlog
         // (a busy machine held one side back). Steering it off would shift the pitch for
         // seconds; skipping it is one short jump. Never below the target, by the actual level.
-        let limit = (self.target + 2 * self.band) as f64;
+        let limit = (self.target + self.skip_threshold()) as f64;
         if self.level > limit {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let surplus = (self.level - self.target as f64).round() as usize;
@@ -285,8 +293,8 @@ mod tests {
 
     #[test]
     fn a_lasting_surplus_is_skipped_once_but_a_sawtooth_is_not() {
-        // Below the hard limit (300) but 80 frames above the target for good: twice the band
-        // is 50, so the average crosses it and one skip takes the surplus back.
+        // Below the hard limit (300) but 80 frames above the target for good: the threshold
+        // is 75, so the average crosses it and one skip takes the surplus back.
         let mut control = DriftControl::new(100, 25).smoothed(0.25);
         let mut available = 110;
         let mut events = Vec::new();
