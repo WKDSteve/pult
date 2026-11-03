@@ -1,5 +1,7 @@
 //! `pult`: lists audio devices and runs a route from the command line.
 
+#![forbid(unsafe_code)]
+
 mod args;
 mod monitor;
 
@@ -41,6 +43,16 @@ fn main() -> ExitCode {
         }
         Command::Devices => pult_engine::list_devices()
             .map(|d| print_devices(&d))
+            .map_err(|e| e.to_string()),
+        Command::Programs => pult_engine::program_names()
+            .map(|names| {
+                for name in names {
+                    println!("{name}");
+                }
+                println!(
+                    "(capture one with --from app:<NAME>, or process = \"<NAME>\" in a profile)"
+                );
+            })
             .map_err(|e| e.to_string()),
         Command::Run(spec) => start_run(&spec),
         Command::Tone(spec) => pult_engine::play_tone(&spec.sink, spec.frequency, spec.gain_db)

@@ -5,6 +5,8 @@
 //! The realtime rule of the callbacks holds for every function they call: no allocation, no
 //! lock, no logging. The control thread talks to them through atomics only.
 
+#![forbid(unsafe_code)]
+
 pub mod drift;
 pub mod level;
 pub mod mixer;

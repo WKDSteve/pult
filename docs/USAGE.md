@@ -1,6 +1,6 @@
 # pult benutzen
 
-Stand Stufe 1 (im Bau): ein Kommandozeilen-Programm, ein Ausgang direkt über `--to` oder mehrere über ein Profil. Beispiel durchgehend: Alle Programme spielen über das virtuelle Kabel VB-CABLE, pult leitet den Ton über ein Focusrite Scarlett 2i2 zum Verstärker.
+Stand Stufe 1 (im Bau): ein Kommandozeilen-Programm, ein Ausgang direkt über `--to` oder mehrere über ein Profil; Eingänge sind Geräte oder einzelne Programme. Beispiel durchgehend: Alle Programme spielen über das virtuelle Kabel VB-CABLE, pult leitet den Ton über ein Focusrite Scarlett 2i2 zum Verstärker.
 
 ```
 Programme ──► CABLE Input ══ VB-CABLE ══ CABLE Output ──► pult ──► Scarlett 2i2 ──► Verstärker
@@ -159,6 +159,35 @@ pult run --profile meinprofil.toml --log abend.csv
 
 `--profile` lässt sich nicht mit `--from`, `--to` oder `--latency-ms` kombinieren.
 
+## 6. Ton einzelner Programme
+
+Statt eines Geräts kann ein Eingang der Ton eines laufenden Programms sein (Prozess-Loopback, ab Windows 10 Version
+2004). So lässt sich etwa Musik getrennt vom Spiel regeln oder nur ein Programm auf einen zweiten Bus legen.
+
+```
+pult programs
+pult run --from app:Spotify --from "CABLE Output" --to Focusrite
+```
+
+Im Profil steht dafür `process` statt `device`:
+
+```toml
+[[input]]
+process = "Spotify"        # eindeutiger Teil des Programmnamens (Spotify.exe)
+buses = ["A2"]
+```
+
+- `pult programs` listet die Namen aller laufenden Programme. Wie bei Geräten reicht ein eindeutiger Teil, Groß- und
+  Kleinschreibung zählen nicht.
+- Mitgenommen wird das Programm samt seiner Unterprozesse; bei einem Browser also alle Tabs. Laufen mehrere getrennte
+  Programme gleichen Namens, nimmt pult das erste.
+- Windows liefert den Ton als Stereo in der Abtastrate des Routings; eine abweichende Rate ist hier kein Problem.
+- Spielt das Programm nichts, zeigt pult Stille (`-inf dB`), ohne Aussetzer.
+- Beendet sich das Programm, meldet pult das wie ein abgestecktes Gerät; startet es wieder, wird es aufgenommen.
+- **Doppelt hören vermeiden:** pult nimmt den Ton ab, das Programm spielt ihn aber weiter auf sein eigenes Ausgabegerät.
+  Spielt es ins Kabel und geht `CABLE Output` ebenfalls über pult, kommt es doppelt. Abhilfe: in Windows unter
+  *Einstellungen, System, Sound, Lautstärkemixer* dem Programm ein Ausgabegerät geben, das sonst nicht zu hören ist.
+
 ## Fehlermeldungen
 
 | Meldung | Ursache und Abhilfe |
@@ -172,5 +201,7 @@ pult run --profile meinprofil.toml --log abend.csv
 | `buses … both play on …` | zwei Busse eines Profils nennen dasselbe Ausgangsgerät |
 | `… feeds bus "…", which is not defined` | im Profil fehlt ein `[[bus]]` mit diesem Namen, oder er ist anders geschrieben |
 | `unknown field …` | Tippfehler im Profil; die Meldung nennt Zeile und erlaubte Schlüssel |
+| `no running program matches "…"` | das Programm läuft nicht oder heißt anders: `pult programs` |
+| `capturing …: …` | Windows hat die Aufnahme des Programms abgelehnt (älter als Windows 10 2004?) |
 
 Exit-Codes: 0 fertig, 1 Fehler beim Öffnen oder im Lauf, 2 falscher Aufruf.

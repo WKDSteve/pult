@@ -21,6 +21,12 @@ device = "Focusrite"
 device = "CABLE Output"
 buses = ["A1"]
 
+# The sound of one program instead of a device (see `pult programs`); remove the # to try.
+# [[input]]
+# process = "Spotify"
+# buses = ["A1"]
+# gain_db = -3
+
 # The Scarlett's own inputs (microphone, guitar), quieter and muted to start with.
 [[input]]
 device = "Analogue 1 + 2"

@@ -11,7 +11,14 @@
 //! A device that disappears while a route runs (unplugged, disabled) does not end the
 //! route: [`Running::supervise`] takes its stream out, the others play on, and the device
 //! is opened again on the same rings once it is back (see `slot`).
+//!
+//! An input can also be the sound of one program (process loopback, see `process`); the
+//! Windows calls for that live in `ffi`, the only module with `unsafe` code.
 
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod ffi;
+mod process;
 pub mod profile;
 mod slot;
 
@@ -28,7 +35,9 @@ use pult_core::{
     MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
 };
 
-use slot::{Feed, Health, OPEN_TIMEOUT, Slot, fault_recorder};
+use process::PROCESS_CHANNELS;
+pub use process::program_names;
+use slot::{Feed, Health, OPEN_TIMEOUT, Slot, Source, fault_recorder};
 
 /// Weight of one callback in the drift control's level average: with 10 ms callbacks the
 /// average spans about 1.3 s, long enough to flatten the block jitter of virtual cables.
@@ -38,13 +47,15 @@ const DRIFT_SMOOTHING: f64 = 1.0 / 128.0;
 /// an input and then skips it once, instead of dropping single frames for twenty seconds.
 const SETTLE_SECONDS: usize = 2;
 
-/// Which side of a route a device is on.
+/// Which side of a route a device is on, or that a program is captured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     /// A capture device (microphone, line in, the output side of a virtual cable).
     Input,
     /// A playback device (interface outputs, speakers, headphones).
     Output,
+    /// A program whose sound is captured (process loopback).
+    Process,
 }
 
 impl fmt::Display for Role {
@@ -52,6 +63,7 @@ impl fmt::Display for Role {
         f.write_str(match self {
             Self::Input => "input",
             Self::Output => "output",
+            Self::Process => "program",
         })
     }
 }
@@ -108,12 +120,35 @@ pub enum Error {
         /// The device.
         device: String,
     },
+    /// Listing programs or capturing one failed.
+    Process {
+        /// What pult was doing.
+        context: String,
+        /// The system's message.
+        message: String,
+    },
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Audio { context, source } => write!(f, "{context}: {source}"),
+            Self::Select {
+                role: Role::Process,
+                source,
+            } => match source {
+                SelectError::NotFound { wanted } => {
+                    write!(
+                        f,
+                        "no running program matches \"{wanted}\" (see `pult programs`)"
+                    )
+                }
+                SelectError::Ambiguous { wanted, candidates } => write!(
+                    f,
+                    "\"{wanted}\" matches several programs: {}",
+                    candidates.join(", ")
+                ),
+            },
             Self::Select { role, source } => write!(f, "{role} device: {source}"),
             Self::InvalidRoute(why) => f.write_str(why),
             Self::UnsupportedFormat { device, format } => write!(
@@ -143,6 +178,7 @@ impl fmt::Display for Error {
                 f,
                 "{device}: its stream did not hand back its buffers; restart pult to use it"
             ),
+            Self::Process { context, message } => write!(f, "{context}: {message}"),
         }
     }
 }
@@ -224,11 +260,23 @@ pub fn list_devices() -> Result<Devices, Error> {
     Ok(Devices { inputs, outputs })
 }
 
+/// What an input captures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InputKind {
+    /// A capture device.
+    #[default]
+    Device,
+    /// The sound of a program and its child processes (process loopback).
+    Process,
+}
+
 /// One input (channel strip) of a route.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputSpec {
-    /// Device name, or a unique part of it.
+    /// Device name or program (executable) name, or a unique part of it.
     pub device: String,
+    /// Whether `device` names a device or a program.
+    pub kind: InputKind,
     /// Gain in dB.
     pub gain_db: f32,
     /// -1 (left) to 1 (right).
@@ -245,6 +293,7 @@ impl InputSpec {
     pub fn new(device: impl Into<String>, gain_db: f32, buses: Vec<usize>) -> Self {
         Self {
             device: device.into(),
+            kind: InputKind::Device,
             gain_db,
             pan: 0.0,
             muted: false,
@@ -485,6 +534,15 @@ impl Running {
     /// Looks for the device of a closed slot and opens it, if it fits the route.
     fn reopen(&mut self, index: usize) -> Result<(), Error> {
         let slot = &self.slots[index];
+        if slot.role == Role::Process {
+            let found = process::find(&slot.wanted)?;
+            let source = Source::Process {
+                pid: found.pid,
+                name: &found.name,
+                sample_rate: self.sample_rate,
+            };
+            return self.slots[index].open(&source, &self.xruns);
+        }
         let (device, name, config) = find_device(&self.host, slot.role, &slot.wanted)?;
         if config.sample_rate() != self.sample_rate {
             return Err(Error::RateMismatch {
@@ -494,7 +552,11 @@ impl Running {
                 reference_rate: self.sample_rate,
             });
         }
-        self.slots[index].open(&device, &config, &self.xruns)
+        let source = Source::Device {
+            device: &device,
+            config: &config,
+        };
+        self.slots[index].open(&source, &self.xruns)
     }
 
     /// Updates the input or bus behind a slot after it closed or opened.
@@ -549,21 +611,21 @@ fn find_device(
     role: Role,
     wanted: &str,
 ) -> Result<(Device, String, SupportedStreamConfig), Error> {
-    let mut devices: Vec<Device> = match role {
-        Role::Input => host
-            .input_devices()
-            .map_err(audio("listing input devices"))?
-            .collect(),
-        Role::Output => host
-            .output_devices()
+    let mut devices: Vec<Device> = if role == Role::Output {
+        host.output_devices()
             .map_err(audio("listing output devices"))?
-            .collect(),
+            .collect()
+    } else {
+        host.input_devices()
+            .map_err(audio("listing input devices"))?
+            .collect()
     };
     let device = devices.swap_remove(pick(&devices, wanted, role)?);
     let name = device.to_string();
-    let config = match role {
-        Role::Input => device.default_input_config(),
-        Role::Output => device.default_output_config(),
+    let config = if role == Role::Output {
+        device.default_output_config()
+    } else {
+        device.default_input_config()
     }
     .map_err(audio(format!("reading the format of {name}")))?;
     require_f32(&name, &config)?;
@@ -688,35 +750,55 @@ struct Rings<'a> {
     reference: &'a str,
 }
 
-/// An input whose device is found and whose rings exist, before its stream opens.
+/// What a slot opens at the start of a route.
+enum Opening {
+    Device(Device, SupportedStreamConfig),
+    Process { pid: u32, name: String },
+}
+
+/// An input whose device or program is found and whose rings exist, before its stream
+/// opens.
 struct FoundInput {
-    device: Device,
-    config: SupportedStreamConfig,
+    opening: Opening,
     captures: Vec<Capture>,
     running: RunningInput,
 }
 
-/// Finds the device of one input and makes its rings: one per bus it feeds.
+/// Finds the device or program of one input and makes its rings: one per bus it feeds.
 fn find_input(
     host: &cpal::Host,
     input: &InputSpec,
     rings: &mut Rings<'_>,
 ) -> Result<FoundInput, Error> {
-    let (device, name, config) = find_device(host, Role::Input, &input.device)?;
-    if config.sample_rate() != rings.sample_rate {
-        return Err(Error::RateMismatch {
-            device: name,
-            rate: config.sample_rate(),
-            reference: rings.reference.to_owned(),
-            reference_rate: rings.sample_rate,
-        });
-    }
+    let (opening, name, channels) = match input.kind {
+        InputKind::Device => {
+            let (device, name, config) = find_device(host, Role::Input, &input.device)?;
+            if config.sample_rate() != rings.sample_rate {
+                return Err(Error::RateMismatch {
+                    device: name,
+                    rate: config.sample_rate(),
+                    reference: rings.reference.to_owned(),
+                    reference_rate: rings.sample_rate,
+                });
+            }
+            let channels = config.channels();
+            (Opening::Device(device, config), name, channels)
+        }
+        InputKind::Process => {
+            let found = process::find(&input.device)?;
+            let opening = Opening::Process {
+                pid: found.pid,
+                name: found.name.clone(),
+            };
+            (opening, found.name, PROCESS_CHANNELS)
+        }
+    };
     let controls = Arc::new(InputControls::default());
     controls.gain.store(db_to_linear(input.gain_db));
     controls.pan.store(input.pan);
     controls.muted.store(input.muted, Ordering::Relaxed);
     let ring = InputConfig {
-        channels: usize::from(config.channels()),
+        channels: usize::from(channels),
         capacity: rings.capacity,
         target: rings.target,
         band: rings.band,
@@ -735,8 +817,7 @@ fn find_input(
         });
     }
     Ok(FoundInput {
-        device,
-        config,
+        opening,
         captures,
         running: RunningInput {
             name,
@@ -782,8 +863,12 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     let mut inputs = Vec::with_capacity(spec.inputs.len());
     for (input, found) in spec.inputs.iter().zip(found_inputs) {
         let feed = Feed::Input(found.captures);
-        slots.push(Slot::new(Role::Input, &input.device, feed, now));
-        opening.push((found.device, found.config));
+        let role = match input.kind {
+            InputKind::Device => Role::Input,
+            InputKind::Process => Role::Process,
+        };
+        slots.push(Slot::new(role, &input.device, feed, now));
+        opening.push(found.opening);
         inputs.push(found.running);
     }
     let mut buses = Vec::with_capacity(spec.buses.len());
@@ -792,7 +877,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         handle.controls.gain.store(db_to_linear(bus.gain_db));
         handle.controls.muted.store(bus.muted, Ordering::Relaxed);
         slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
-        opening.push((found.device, found.config));
+        opening.push(Opening::Device(found.device, found.config));
         buses.push(RunningBus {
             name: bus.name.clone(),
             device: found.name,
@@ -811,8 +896,16 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         xruns: Arc::new(Counter::default()),
     };
     // Inputs first, so the outputs find their rings filling.
-    for (index, (device, config)) in opening.iter().enumerate() {
-        running.slots[index].open(device, config, &running.xruns)?;
+    for (index, opening) in opening.iter().enumerate() {
+        let source = match opening {
+            Opening::Device(device, config) => Source::Device { device, config },
+            Opening::Process { pid, name } => Source::Process {
+                pid: *pid,
+                name,
+                sample_rate,
+            },
+        };
+        running.slots[index].open(&source, &running.xruns)?;
         running.mark(index, true);
     }
     Ok(running)

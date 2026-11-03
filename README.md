@@ -2,7 +2,7 @@
 
 Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mikrofon und Interface-Eingängen mischen und auf Hardware- und virtuelle Ausgänge verteilen. Der Name kommt vom *Mischpult*. pult ist die Schwester-App von [takt](https://github.com/WKDSteve/takt), der Medien-Suite: zwei eigenständige Programme, und läuft pult, kann takt sich später damit verbinden.
 
-> **Status (2026-11-03): Meilenstein 1 bestanden, Stufe 1 im Bau.** Ein Kommandozeilen-Programm, das Eingangsgeräte mischt und auf einen oder mehrere Ausgänge (Busse) spielt, zum Beispiel alle Programme über ein virtuelles Kabel auf das Scarlett 2i2 und weiter zum Verstärker; am echten Aufbau 2 Stunden ohne Aussetzer gelaufen. Welcher Eingang auf welchen Bus geht, mit Gain, Mute und Pan, steht in einem Profil (TOML). Pegel, Aussetzer und Drift-Korrekturen erscheinen live in der Konsole. Ein abgestecktes Gerät beendet den Lauf nicht: der Rest spielt weiter, das Gerät wird wieder aufgenommen, sobald es zurück ist. Noch ohne Oberfläche, Resampler und Prozess-Loopback. Einrichtung und Bedienung: [docs/USAGE.md](docs/USAGE.md).
+> **Status (2026-11-03): Meilenstein 1 bestanden, Stufe 1 im Bau.** Ein Kommandozeilen-Programm, das Eingangsgeräte mischt und auf einen oder mehrere Ausgänge (Busse) spielt, zum Beispiel alle Programme über ein virtuelles Kabel auf das Scarlett 2i2 und weiter zum Verstärker; am echten Aufbau 2 Stunden ohne Aussetzer gelaufen. Welcher Eingang auf welchen Bus geht, mit Gain, Mute und Pan, steht in einem Profil (TOML). Pegel, Aussetzer und Drift-Korrekturen erscheinen live in der Konsole. Ein abgestecktes Gerät beendet den Lauf nicht: der Rest spielt weiter, das Gerät wird wieder aufgenommen, sobald es zurück ist. Auch der Ton eines einzelnen Programms kann ein Eingang sein (Prozess-Loopback). Noch ohne Oberfläche und Resampler. Einrichtung und Bedienung: [docs/USAGE.md](docs/USAGE.md).
 
 **English.** pult is a personal virtual audio mixer for Windows written in Rust (so far a command line router that mixes input devices onto one or more output buses, configured by a TOML profile). Private, non-commercial; the documentation is in German on purpose, code and commit messages are in English.
 
@@ -18,7 +18,8 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Pegel, Aussetzer, Korrekturen, Clipping, Geräte-Glitches live | fertig |
 | Verschiedene Abtastraten | noch nicht: alle Geräte einer Route brauchen dieselbe Rate |
 | Geräte ab- und anstecken während des Laufs (Hot-Plug): der Rest spielt weiter, das Gerät kommt von selbst zurück | fertig; Handtest mit echtem Abstecken steht aus |
-| Oberfläche (Tauri), Szenen, Hub, Prozess-Loopback, EQ/Kompressor | geplant |
+| Ton einzelner Programme als Eingang (Prozess-Loopback, `--from app:Spotify`, `pult programs`); beendet sich das Programm, wird es beim Neustart wieder aufgenommen | fertig |
+| Oberfläche (Tauri), Szenen, Hub, EQ/Kompressor | geplant |
 
 ## Plattformen
 
@@ -32,10 +33,12 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Crate | Aufgabe |
 |---|---|
 | `crates/pult-core` | Mischen, Kanal-Zuordnung, Pegel, Drift-Regelung, Geräteauswahl, Testton; ohne Geräte-I/O, komplett testbar. Diese Typen kann takt später für die Anbindung nutzen. |
-| `crates/pult-engine` | Geräte über `cpal` (WASAPI): auflisten, Streams öffnen, Callbacks an den Kern binden; Profile lesen (`profile`) |
+| `crates/pult-engine` | Geräte über `cpal` (WASAPI): auflisten, Streams öffnen, Callbacks an den Kern binden; Profile lesen (`profile`); Ton einzelner Programme (`process`, Windows-Aufrufe in `ffi`) |
 | `crates/pult-cli` | das Programm `pult` |
 
 Echtzeit-Regel wie in takt: In den Audio-Callbacks wird nichts allokiert, nichts gesperrt und nichts geloggt. Ein Debug-Build bricht mit `assert_no_alloc` ab, sobald ein Callback doch allokiert.
+
+`unsafe` gibt es nur im Modul `ffi` von `pult-engine` (die Windows-Aufrufe für den Prozess-Loopback); der Workspace verbietet es sonst, `pult-core` und `pult-cli` verbieten es ganz (`forbid`).
 
 ## Bauen und prüfen
 

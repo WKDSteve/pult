@@ -512,6 +512,8 @@ dependencies = [
  "rtrb",
  "serde",
  "toml",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]

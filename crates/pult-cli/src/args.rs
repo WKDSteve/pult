@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use pult_engine::profile::{DEFAULT_LATENCY_MS, GAIN_DB, LATENCY_MS};
-use pult_engine::{BusSpec, InputSpec, RouteSpec};
+use pult_engine::{BusSpec, InputKind, InputSpec, RouteSpec};
 
 /// Test tone level when `--gain-db` is not given: quiet, for a chain ending at an amplifier.
 pub const DEFAULT_TONE_DB: f32 = -30.0;
@@ -21,6 +21,7 @@ pult - route and mix audio devices
 
 USAGE:
     pult devices
+    pult programs
     pult run --to <OUTPUT> --from <INPUT>[@GAIN_DB] [--from ...] [--latency-ms <MS>]
              [--log <FILE.csv>]
     pult run --profile <FILE.toml> [--log <FILE.csv>]
@@ -29,6 +30,8 @@ USAGE:
     pult --version
 
 Device names may be a unique part of the name, ignoring case (see `pult devices`).
+--from app:<PROGRAM> captures the sound of a running program instead of a device, for
+example \"app:Spotify\" (see `pult programs`).
 GAIN_DB is a gain in dB, for example \"CABLE Output@-6\". --latency-ms is the buffering per
 input (default 40); raise it if you hear dropouts. --profile reads inputs, buses (several
 outputs) and which input feeds which bus from a TOML file (see examples/pult.toml).
@@ -73,6 +76,8 @@ pub struct ToneSpec {
 pub enum Command {
     /// List the devices.
     Devices,
+    /// List the running programs.
+    Programs,
     /// Run a route until stopped.
     Run(RunSpec),
     /// Play a test tone until stopped.
@@ -109,6 +114,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
     };
     match sub.as_str() {
         "devices" => no_more(args).map(|()| Command::Devices),
+        "programs" => no_more(args).map(|()| Command::Programs),
         "run" => parse_run(args).map(Command::Run),
         "tone" => parse_tone(args).map(Command::Tone),
         "help" | "--help" | "-h" => Ok(Command::Help),
@@ -248,10 +254,19 @@ fn parse_source(raw: &str) -> Result<InputSpec, UsageError> {
         None => (raw, 0.0),
     };
     let device = device.trim();
+    let (device, kind) = match device.get(..4) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("app:") => {
+            (device[4..].trim(), InputKind::Process)
+        }
+        _ => (device, InputKind::Device),
+    };
     if device.is_empty() {
-        return Err(usage("--from needs a device name"));
+        return Err(usage("--from needs a device or program name"));
     }
-    Ok(InputSpec::new(device, gain_db, vec![0]))
+    Ok(InputSpec {
+        kind,
+        ..InputSpec::new(device, gain_db, vec![0])
+    })
 }
 
 #[cfg(test)]
@@ -280,6 +295,7 @@ mod tests {
     fn subcommands() {
         assert_eq!(parse(Vec::new()), Ok(Command::Help));
         assert_eq!(parse(["devices".to_owned()]), Ok(Command::Devices));
+        assert_eq!(parse(["programs".to_owned()]), Ok(Command::Programs));
         assert_eq!(parse(["--version".to_owned()]), Ok(Command::Version));
         assert!(parse(["devices".to_owned(), "x".to_owned()]).is_err());
         assert!(parse(["mix".to_owned()]).is_err());
@@ -313,6 +329,29 @@ mod tests {
                 log: Some(PathBuf::from("abend.csv")),
             }))
         );
+    }
+
+    #[test]
+    fn app_prefix_captures_a_program() {
+        let route = inline(&[
+            "--from",
+            "APP: Spotify@-3",
+            "--from",
+            "Appliance",
+            "--to",
+            "x",
+        ]);
+        assert_eq!(
+            route.inputs,
+            vec![
+                InputSpec {
+                    kind: InputKind::Process,
+                    ..InputSpec::new("Spotify", -3.0, vec![0])
+                },
+                InputSpec::new("Appliance", 0.0, vec![0]),
+            ]
+        );
+        assert!(run(&["--from", "app:", "--to", "x"]).is_err());
     }
 
     #[test]

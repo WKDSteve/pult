@@ -1,4 +1,4 @@
-//! One device of a running route, and how it survives being unplugged.
+//! One device (or program) of a running route, and how it survives being unplugged.
 //!
 //! A slot owns its device's stream and the state that stream's callback works on: the rings
 //! of an input or the mixer of a bus (a [`Feed`]). The callback holds the feed in a
@@ -16,6 +16,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, ErrorKind, SupportedStreamConfig};
 use pult_core::{Capture, Counter, Mixer};
 
+use crate::process::{PROCESS_CHANNELS, ProcessStream};
 use crate::{Error, Role, audio};
 
 /// How long a backend may take to open a stream.
@@ -49,6 +50,12 @@ pub(crate) struct Health {
 }
 
 impl Health {
+    /// Records `error` as the stream's fatal error, unless it already has one.
+    fn fail(&self, error: String) {
+        let mut slot = self.fatal.lock().unwrap_or_else(PoisonError::into_inner);
+        slot.get_or_insert(error);
+    }
+
     /// The first fatal error of the stream, if any.
     pub(crate) fn fatal(&self) -> Option<String> {
         self.fatal
@@ -70,8 +77,7 @@ pub(crate) fn fault_recorder(
         if err.kind() == ErrorKind::Xrun {
             xruns.add(1);
         } else if is_fatal(err.kind()) {
-            let mut slot = health.fatal.lock().unwrap_or_else(PoisonError::into_inner);
-            slot.get_or_insert_with(|| err.to_string());
+            health.fail(err.to_string());
         }
     }
 }
@@ -135,6 +141,28 @@ impl Watch {
     }
 }
 
+/// What a slot opens: a device in its shared-mode format, or a program's sound.
+pub(crate) enum Source<'a> {
+    /// An input or output device.
+    Device {
+        device: &'a Device,
+        config: &'a SupportedStreamConfig,
+    },
+    /// A process tree, captured at the route's rate.
+    Process {
+        pid: u32,
+        name: &'a str,
+        sample_rate: u32,
+    },
+}
+
+/// The running stream of a slot, held so that dropping it stops the stream.
+#[expect(dead_code, reason = "the streams are only kept alive, never read")]
+enum Stream {
+    Device(cpal::Stream),
+    Process(ProcessStream),
+}
+
 /// One device of a route: its stream while it plays, its feed while it does not.
 pub(crate) struct Slot {
     /// Input or output.
@@ -143,7 +171,7 @@ pub(crate) struct Slot {
     pub(crate) wanted: String,
     /// The device's full name when it was last opened.
     pub(crate) name: String,
-    stream: Option<cpal::Stream>,
+    stream: Option<Stream>,
     /// The feed while no stream holds it.
     held: Option<Feed>,
     home: Sender<Feed>,
@@ -174,18 +202,17 @@ impl Slot {
         }
     }
 
-    /// Opens and starts a stream on `device` in `config`, handing it the feed. A bus's
-    /// mixer starts on empty rings; an input must keep its channel count, since its rings
-    /// were made for it. The stall watch starts once the stream plays, since opening
-    /// several devices in a row can take seconds.
-    pub(crate) fn open(
-        &mut self,
-        device: &Device,
-        config: &SupportedStreamConfig,
-        xruns: &Arc<Counter>,
-    ) -> Result<(), Error> {
-        let name = device.to_string();
-        let channels = usize::from(config.channels());
+    /// Opens and starts a stream on `source`, handing it the feed. A bus's mixer starts on
+    /// empty rings; an input must keep its channel count, since its rings were made for it.
+    /// The stall watch starts once the stream plays, since opening several devices in a
+    /// row can take seconds.
+    pub(crate) fn open(&mut self, source: &Source<'_>, xruns: &Arc<Counter>) -> Result<(), Error> {
+        let (name, channels) = match source {
+            Source::Device { device, config } => {
+                (device.to_string(), usize::from(config.channels()))
+            }
+            Source::Process { name, .. } => ((*name).to_owned(), usize::from(PROCESS_CHANNELS)),
+        };
         let Some(mut feed) = self.held.take() else {
             return Err(Error::Stranded { device: name });
         };
@@ -204,28 +231,62 @@ impl Slot {
             Feed::Bus(mixer) => mixer.resume(channels),
         }
         let health = Arc::new(Health::default());
-        let beats = Arc::clone(&health);
-        let mut returning = Returning {
+        let returning = Returning {
             value: Some(feed),
             home: self.home.clone(),
         };
-        let built = match self.role {
-            Role::Input => device.build_input_stream::<f32, _, _>(
-                config.config(),
-                move |data, _| {
-                    assert_no_alloc(|| {
-                        beats.beats.add(1);
-                        if let Some(Feed::Input(captures)) = returning.get_mut() {
-                            for capture in captures {
-                                capture.push(data);
-                            }
-                        }
-                    });
-                },
-                fault_recorder(&health, xruns),
-                Some(OPEN_TIMEOUT),
-            ),
-            Role::Output => device.build_output_stream::<f32, _, _>(
+        // A failed build or start drops the callback, which sends the feed back.
+        let started = match source {
+            Source::Device { device, config } => {
+                Self::start_device(self.role, device, config, &health, xruns, returning)
+                    .map(Stream::Device)
+            }
+            Source::Process {
+                pid, sample_rate, ..
+            } => {
+                let failed = Arc::clone(&health);
+                ProcessStream::start(
+                    *pid,
+                    *sample_rate,
+                    input_callback(Arc::clone(&health), returning),
+                    move |error| failed.fail(error),
+                )
+                .map(Stream::Process)
+                .map_err(|message| Error::Process {
+                    context: format!("capturing {name}"),
+                    message,
+                })
+            }
+        };
+        match started {
+            Ok(stream) => {
+                self.stream = Some(stream);
+                self.health = health;
+                self.watch = Watch::new(Instant::now());
+                self.name = name;
+                self.refused = None;
+                Ok(())
+            }
+            Err(err) => {
+                self.reclaim();
+                Err(err)
+            }
+        }
+    }
+
+    /// Builds and plays a device stream whose callback owns `returning`.
+    fn start_device(
+        role: Role,
+        device: &Device,
+        config: &SupportedStreamConfig,
+        health: &Arc<Health>,
+        xruns: &Arc<Counter>,
+        mut returning: Returning<Feed>,
+    ) -> Result<cpal::Stream, Error> {
+        let name = device.to_string();
+        let built = if role == Role::Output {
+            let beats = Arc::clone(health);
+            device.build_output_stream::<f32, _, _>(
                 config.config(),
                 move |data, _| {
                     assert_no_alloc(|| {
@@ -236,29 +297,22 @@ impl Slot {
                         }
                     });
                 },
-                fault_recorder(&health, xruns),
+                fault_recorder(health, xruns),
                 Some(OPEN_TIMEOUT),
-            ),
+            )
+        } else {
+            let mut push = input_callback(Arc::clone(health), returning);
+            device.build_input_stream::<f32, _, _>(
+                config.config(),
+                move |data, _| push(data),
+                fault_recorder(health, xruns),
+                Some(OPEN_TIMEOUT),
+            )
         };
-        // A failed build or start drops the callback, which sends the feed back.
-        let stream = match built {
-            Ok(stream) => stream,
-            Err(err) => {
-                self.reclaim();
-                return Err(audio(format!("opening {name}"))(err));
-            }
-        };
-        if let Err(err) = stream.play() {
-            drop(stream);
-            self.reclaim();
-            return Err(audio(format!("starting {name}"))(err));
-        }
-        self.stream = Some(stream);
-        self.health = health;
-        self.watch = Watch::new(Instant::now());
-        self.name = name;
-        self.refused = None;
-        Ok(())
+        let stream = built.map_err(audio(format!("opening {name}")))?;
+        // A stream that does not start is dropped here, which hands the feed back.
+        stream.play().map_err(audio(format!("starting {name}")))?;
+        Ok(stream)
     }
 
     /// Why the stream should be given up, if it should: a fatal error it reported, or
@@ -303,6 +357,23 @@ impl Slot {
             }
             self.held = Some(feed);
         }
+    }
+}
+
+/// The data callback of an input: counts the call and pushes `data` into every ring.
+fn input_callback(
+    health: Arc<Health>,
+    mut returning: Returning<Feed>,
+) -> impl FnMut(&[f32]) + Send + 'static {
+    move |data| {
+        assert_no_alloc(|| {
+            health.beats.add(1);
+            if let Some(Feed::Input(captures)) = returning.get_mut() {
+                for capture in captures {
+                    capture.push(data);
+                }
+            }
+        });
     }
 }
 

@@ -15,6 +15,10 @@
 //! gain_db = -3                 # optional
 //! pan = 0                      # optional, -1 left to 1 right
 //! mute = false                 # optional
+//!
+//! [[input]]
+//! process = "Spotify"          # instead of device: the sound of a program
+//! buses = ["A1"]
 //! ```
 //!
 //! Unknown keys are errors, so a typo does not silently fall back to a default.
@@ -25,7 +29,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::{BusSpec, Error, InputSpec, RouteSpec};
+use crate::{BusSpec, Error, InputKind, InputSpec, RouteSpec};
 
 /// Buffering per input when a profile or the command line names none.
 pub const DEFAULT_LATENCY_MS: u32 = 40;
@@ -75,7 +79,8 @@ struct BusEntry {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputEntry {
-    device: String,
+    device: Option<String>,
+    process: Option<String>,
     buses: Vec<String>,
     #[serde(default)]
     gain_db: f32,
@@ -147,8 +152,21 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
     }
 
     let mut inputs = Vec::with_capacity(file.input.len());
-    for entry in file.input {
-        let what = format!("input \"{}\"", entry.device);
+    for (number, entry) in file.input.into_iter().enumerate() {
+        let (name, kind) = match (entry.device, entry.process) {
+            (Some(device), None) => (device, InputKind::Device),
+            (None, Some(program)) => (program, InputKind::Process),
+            (Some(_), Some(_)) => {
+                return fail(format!(
+                    "input {}: give either device or process, not both",
+                    number + 1
+                ));
+            }
+            (None, None) => {
+                return fail(format!("input {}: needs a device or a process", number + 1));
+            }
+        };
+        let what = format!("input \"{name}\"");
         check_gain(&what, entry.gain_db)?;
         if !(-1.0..=1.0).contains(&entry.pan) {
             return fail(format!("{what}: pan must be -1 to 1, not {}", entry.pan));
@@ -165,7 +183,8 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             routed.push(index);
         }
         inputs.push(InputSpec {
-            device: entry.device,
+            device: name,
+            kind,
             gain_db: entry.gain_db,
             pan: entry.pan,
             muted: entry.mute,
@@ -257,6 +276,16 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn an_input_is_a_device_or_a_program() {
+        let bus = "[[bus]]\nname = \"A1\"\ndevice = \"x\"\n[[input]]\nbuses = [\"A1\"]\n";
+        let spec = parse(&format!("{bus}process = \"Spotify\"")).expect("a program input");
+        assert_eq!(spec.inputs[0].kind, InputKind::Process);
+        assert_eq!(spec.inputs[0].device, "Spotify");
+        assert!(error(&format!("{bus}process = \"a\"\ndevice = \"b\"")).contains("not both"));
+        assert!(error(bus).contains("input 1: needs a device or a process"));
     }
 
     #[test]
