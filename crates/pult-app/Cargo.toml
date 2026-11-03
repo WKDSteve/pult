@@ -27,6 +27,9 @@ assert_no_alloc.workspace = true
 # AttachConsole (src/ffi.rs), so a release build without a console window can still answer
 # --help and say what is wrong with its command line in the terminal it was started from.
 windows = { workspace = true, features = ["Win32_System_Console"] }
+# The icon in the notification area (stage 3 UI): the window hides there and the route keeps
+# playing. Without default features: those only pull in the Linux tray (libappindicator, GTK).
+tray-icon = { version = "0.26.1", default-features = false }
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
 
 [dev-dependencies]

@@ -38,8 +38,9 @@ pub struct ConsoleState {
 }
 
 impl ConsoleState {
-    /// Takes what a view brings that the console must remember: events and new clips.
-    fn take(&mut self, view: &MixerView) {
+    /// Takes what a view brings that the console must remember: events and new clips. The
+    /// window calls it itself while it is hidden and draws nothing.
+    pub fn take(&mut self, view: &MixerView) {
         self.meters.fit(view);
         self.bus_clipped.resize(view.buses.len(), 0);
         for ((bus, meter), seen) in view

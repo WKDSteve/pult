@@ -18,6 +18,7 @@ use eframe::egui::{self, CentralPanel, Frame, ViewportCommand};
 use pult_app::console::{self, ConsoleState};
 use pult_app::start::{self, Choice, Opening, Start, USAGE};
 use pult_app::theme::Theme;
+use pult_app::tray::{self, Answer, Close, Command, Tray};
 use pult_core::view::{Desk, FakeDesk};
 use pult_engine::EngineDesk;
 
@@ -42,6 +43,23 @@ struct App {
     state: ConsoleState,
     clock: Instant,
     title: String,
+    /// The icon in the notification area; `None` when the shell refused it, then closing quits.
+    tray: Option<Tray>,
+    window: Window,
+    /// The user saw the hint on the first close; later closes hide at once.
+    told: bool,
+}
+
+/// Where the window stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Window {
+    Shown,
+    /// The hint on the first close is up.
+    Asking,
+    /// In the tray: nothing is drawn, the desk is still asked for views.
+    Hidden,
+    /// Quitting from the tray menu or the hint: the next close is not stopped.
+    Quitting,
 }
 
 impl App {
@@ -54,6 +72,9 @@ impl App {
             state: ConsoleState::default(),
             clock: Instant::now(),
             title: String::new(),
+            tray: Tray::new(ctx, "pult").ok(),
+            window: Window::Shown,
+            told: false,
         };
         match start {
             Start::Profile(path) => {
@@ -93,6 +114,45 @@ impl App {
         self.state = ConsoleState::default();
     }
 
+    fn hide(&mut self, ctx: &egui::Context) {
+        self.window = Window::Hidden;
+        ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+    }
+
+    fn quit(&mut self, ctx: &egui::Context) {
+        self.window = Window::Quitting;
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+    }
+
+    /// Does what the tray asked for and what closing the window means.
+    fn tray_and_close(&mut self, ctx: &egui::Context) {
+        while let Some(command) = self.tray.as_ref().and_then(Tray::command) {
+            match command {
+                Command::Show => {
+                    self.window = Window::Shown;
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                }
+                Command::Quit => self.quit(ctx),
+            }
+        }
+        if !ctx.input(|i| i.viewport().close_requested()) || self.window == Window::Quitting {
+            return;
+        }
+        match tray::on_close(self.tray.is_some(), self.desk.is_some(), self.told) {
+            Close::Quit => {}
+            Close::Hide => {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                self.hide(ctx);
+            }
+            Close::Ask => {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                self.window = Window::Asking;
+            }
+        }
+    }
+
     /// The window title: the profile's file name, or what is shown instead.
     fn wanted_title(&self) -> String {
         let name = match (&self.desk, &self.profile) {
@@ -113,9 +173,24 @@ impl eframe::App for App {
         if title != self.title {
             ui.ctx()
                 .send_viewport_cmd(ViewportCommand::Title(title.clone()));
+            if let Some(tray) = &self.tray {
+                tray.set_tooltip(&title);
+            }
             self.title = title;
         }
+        let ctx = ui.ctx().clone();
+        self.tray_and_close(&ctx);
         self.check_opening();
+        if self.window == Window::Hidden {
+            // Still asked for views: the engine looks for lost devices then, and the events
+            // view keeps what happened meanwhile.
+            if let Some(desk) = &mut self.desk {
+                let view = desk.view();
+                self.state.take(&view);
+            }
+            ctx.request_repaint_after(FRAME);
+            return;
+        }
         if let Some(desk) = &mut self.desk {
             let now = self.clock.elapsed().as_secs_f64();
             let view = desk.view();
@@ -124,7 +199,17 @@ impl eframe::App for App {
                     self.state.refused(view.elapsed, &reason);
                 }
             }
-            ui.ctx().request_repaint_after(FRAME);
+            if self.window == Window::Asking {
+                match tray::hint(ui) {
+                    Some(Answer::ToTray) => {
+                        self.told = true;
+                        self.hide(&ctx);
+                    }
+                    Some(Answer::Quit) => self.quit(&ctx),
+                    None => {}
+                }
+            }
+            ctx.request_repaint_after(FRAME);
             return;
         }
         let base = Theme::current().palette.base;

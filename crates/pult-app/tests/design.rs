@@ -232,3 +232,21 @@ fn start_screen() {
     harness.run_steps(4);
     harness.snapshot("start_screen");
 }
+
+#[test]
+fn tray_hint() {
+    let mut harness = Harness::builder()
+        .with_size(vec2(1280.0, 760.0))
+        .with_pixels_per_point(1.5)
+        .build_ui(|ui| {
+            Theme::current().apply(ui.ctx());
+            let base = Theme::current().palette.base;
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::new().fill(base))
+                .show(ui, |ui| {
+                    let _ = pult_app::tray::hint(ui);
+                });
+        });
+    harness.run_steps(4);
+    harness.snapshot("tray_hint");
+}

@@ -13,4 +13,5 @@ pub mod log;
 pub mod matrix;
 pub mod start;
 pub mod theme;
+pub mod tray;
 pub mod widgets;

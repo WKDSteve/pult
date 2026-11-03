@@ -9,6 +9,7 @@ use pult_app::console::{self, ConsoleState, Tab};
 use pult_app::log::Source;
 use pult_app::start::{self, Choice};
 use pult_app::theme::Theme;
+use pult_app::tray::{self, Answer};
 use pult_core::view::{Desk, FakeDesk, MixerView};
 
 /// `FakeDesk`'s third input: -3 dB, on bus A2 only.
@@ -203,6 +204,31 @@ fn while_the_profile_opens_the_start_screen_offers_nothing() {
     // Nothing to click until the route stands or fails.
     assert!(harness.query_by_label("Try again").is_none());
     assert!(harness.query_by_label("Demo desk").is_none());
+}
+
+#[test]
+fn the_first_close_asks_whether_to_hide_or_quit() {
+    for (button, answer) in [("To the tray", Answer::ToTray), ("Quit pult", Answer::Quit)] {
+        let mut harness = HarnessBuilder::default()
+            .with_size(vec2(1280.0, 760.0))
+            .build_ui_state(
+                |ui, picked: &mut Vec<Answer>| {
+                    if let Some(answer) = tray::hint(ui) {
+                        picked.push(answer);
+                    }
+                },
+                Vec::new(),
+            );
+        harness.run_steps(2);
+        assert!(
+            harness
+                .query_by_label("pult keeps playing in the tray")
+                .is_some()
+        );
+        harness.get_by_label(button).click();
+        harness.run_steps(2);
+        assert_eq!(harness.state(), &[answer]);
+    }
 }
 
 #[test]
