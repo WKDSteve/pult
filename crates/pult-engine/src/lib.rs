@@ -516,7 +516,7 @@ impl Running {
                 self.mark(index, false);
                 changes.push(Change::Lost {
                     label: self.label(index),
-                    reason,
+                    reason: readable(&reason),
                 });
             } else if self.slots[index].retry_due(now) {
                 match self.reopen(index) {
@@ -532,7 +532,7 @@ impl Running {
                         ..
                     }) => {}
                     Err(err) => {
-                        let reason = err.to_string();
+                        let reason = readable(&err.to_string());
                         if self.slots[index].refused.as_ref() != Some(&reason) {
                             self.slots[index].refused = Some(reason.clone());
                             changes.push(Change::Refused {
@@ -607,6 +607,37 @@ impl Running {
             Some(bus) => format!("{} {}", self.buses[bus].name, self.buses[bus].device),
         }
     }
+}
+
+/// Windows cannot put the audio client's own error codes into words (`FormatMessageW()`
+/// returned error 317); the ones a lost or busy device brings, in words with their name.
+const AUDIO_CLIENT_ERRORS: &[(i32, &str)] = &[
+    (
+        -2_004_287_484,
+        "the device was removed or disabled (AUDCLNT_E_DEVICE_INVALIDATED)",
+    ),
+    (
+        -2_004_287_478,
+        "another program uses the device exclusively (AUDCLNT_E_DEVICE_IN_USE)",
+    ),
+    (
+        -2_004_287_472,
+        "the Windows audio service is not running (AUDCLNT_E_SERVICE_NOT_RUNNING)",
+    ),
+    (
+        -2_004_287_450,
+        "Windows reset the audio device (AUDCLNT_E_RESOURCES_INVALIDATED)",
+    ),
+];
+
+/// `reason` with a known audio client error code put into words; anything else unchanged.
+fn readable(reason: &str) -> String {
+    for (code, words) in AUDIO_CLIENT_ERRORS {
+        if reason.contains(&format!("os error {code})")) {
+            return (*words).to_owned();
+        }
+    }
+    reason.to_owned()
 }
 
 fn pick(devices: &[Device], wanted: &str, role: Role) -> Result<usize, Error> {
@@ -947,6 +978,28 @@ mod tests {
         let (target, band, capacity) = buffering(44_100, 0);
         assert_eq!((target, band), (44, 11));
         assert!(capacity > DriftControl::new(target, band).hard_limit());
+    }
+
+    #[test]
+    fn audio_client_errors_read_as_words() {
+        // What cpal reports when the Scarlett is pulled during a run.
+        let pulled = "Failed to get current padding: OS Error -2004287484 (FormatMessageW() \
+                      returned error 317) (os error -2004287484)";
+        assert_eq!(
+            readable(pulled),
+            "the device was removed or disabled (AUDCLNT_E_DEVICE_INVALIDATED)"
+        );
+        assert_eq!(readable("device not available"), "device not available");
+        // The codes are the HRESULTs 0x8889_0004, 000A, 0010 and 0026 read as i32.
+        for (code, hresult) in [
+            (-2_004_287_484, 0x8889_0004_u32),
+            (-2_004_287_478, 0x8889_000A),
+            (-2_004_287_472, 0x8889_0010),
+            (-2_004_287_450, 0x8889_0026),
+        ] {
+            assert_eq!(code, hresult.cast_signed());
+            assert!(AUDIO_CLIENT_ERRORS.iter().any(|(c, _)| *c == code));
+        }
     }
 
     #[test]
