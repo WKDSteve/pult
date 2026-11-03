@@ -49,6 +49,11 @@ pub struct InputControls {
     pub gain: AtomicF32,
     /// Muted inputs keep draining their ring but add nothing.
     pub muted: AtomicBool,
+    /// Silent because other inputs are soloed; the control thread sets it for every input
+    /// that is not soloed while any is. Acts like `muted` without touching it.
+    pub soloed_out: AtomicBool,
+    /// The peak meter measures before gain and mute (true) or after them (false).
+    pub meter_pre_fader: AtomicBool,
     /// -1 (left) to 1 (right); see [`remix_add`].
     pub pan: AtomicF32,
 }
@@ -58,6 +63,8 @@ impl Default for InputControls {
         Self {
             gain: AtomicF32::new(1.0),
             muted: AtomicBool::new(false),
+            soloed_out: AtomicBool::new(false),
+            meter_pre_fader: AtomicBool::new(false),
             pan: AtomicF32::new(0.0),
         }
     }
@@ -304,10 +311,17 @@ impl MixerInput {
     /// Resamples `frames` output frames from the ring, chunk by chunk, and adds them into
     /// `out`.
     fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize) {
-        let gain = if self.controls.muted.load(Ordering::Relaxed) {
+        let silent = self.controls.muted.load(Ordering::Relaxed)
+            || self.controls.soloed_out.load(Ordering::Relaxed);
+        let gain = if silent {
             0.0
         } else {
             self.controls.gain.load()
+        };
+        let metered = if self.controls.meter_pre_fader.load(Ordering::Relaxed) {
+            1.0
+        } else {
+            gain
         };
         let position = self.controls.pan.load();
         let ch = self.channels;
@@ -316,7 +330,7 @@ impl MixerInput {
             let n = (frames - done).min(MAX_CHUNK);
             self.next_chunk(n);
             let block = &self.resampled[..n * ch];
-            self.stats.peak.record_scaled(block, gain);
+            self.stats.peak.record_scaled(block, metered);
             let rest = &mut out[done * out_channels..];
             remix_add(block, ch, rest, out_channels, gain, position);
             done += n;
@@ -552,6 +566,32 @@ mod tests {
         handle_b.controls.muted.store(true, Ordering::Relaxed);
         let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 2, 0.2, 1);
         assert!(all_near(&out, &[0.1, 0.1]), "{:?}", &out[..2]);
+    }
+
+    #[test]
+    fn solo_silences_like_mute_and_the_meter_can_measure_before_the_fader() {
+        let (mut a, input_a, handle_a) = connect(config(1, 0));
+        let (mut b, input_b, _) = connect(config(1, 0));
+        let (mut mixer, _) = Mixer::new(vec![input_a, input_b], 1);
+        handle_a.controls.soloed_out.store(true, Ordering::Relaxed);
+        handle_a.controls.gain.store(0.5);
+        run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 5);
+        handle_a.stats.peak.take();
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 1);
+        assert!(all_near(&out, &[0.2]), "{:?}", &out[..1]);
+        assert_eq!(handle_a.stats.peak.take(), 0.0);
+
+        // Before the fader the meter shows what arrives, soloed out, muted or not.
+        handle_a
+            .controls
+            .meter_pre_fader
+            .store(true, Ordering::Relaxed);
+        run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 1);
+        assert!((handle_a.stats.peak.take() - 0.2).abs() < 2e-3);
+        handle_a.controls.soloed_out.store(false, Ordering::Relaxed);
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 1);
+        assert!(all_near(&out, &[0.3]), "{:?}", &out[..1]);
+        assert!((handle_a.stats.peak.take() - 0.2).abs() < 2e-3);
     }
 
     #[test]

@@ -15,6 +15,7 @@
 //! An input can also be the sound of one program (process loopback, see `process`); the
 //! Windows calls for that live in `ffi`, the only module with `unsafe` code.
 
+mod desk;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod ffi;
@@ -36,6 +37,7 @@ use pult_core::{
     MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
 };
 
+pub use desk::EngineDesk;
 use process::PROCESS_CHANNELS;
 pub use process::program_names;
 use slot::{Feed, Health, OPEN_TIMEOUT, Slot, Source, fault_recorder};
