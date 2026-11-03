@@ -109,6 +109,10 @@ impl Realtime {
 
 /// The error callback of one stream. A glitch, a followed device change or a refused
 /// realtime priority keeps the stream running and is not fatal; anything else is.
+///
+/// A glitch before the stream's first data is no glitch: WASAPI's discontinuity flag is
+/// undefined on the first packet after a start. cpal leaves it out only at device position 0,
+/// so whoever joins a capture device others are reading got one on every start.
 pub(crate) fn fault_recorder(
     health: &Arc<Health>,
     xruns: &Arc<Counter>,
@@ -117,7 +121,9 @@ pub(crate) fn fault_recorder(
     let xruns = Arc::clone(xruns);
     move |err| {
         if err.kind() == ErrorKind::Xrun {
-            xruns.add(1);
+            if health.beats.get() > 0 {
+                xruns.add(1);
+            }
         } else if is_fatal(err.kind()) {
             health.fail(err.to_string());
         }
@@ -492,6 +498,7 @@ mod tests {
         let health = Arc::new(Health::default());
         let xruns = Arc::new(Counter::default());
         let mut record = fault_recorder(&health, &xruns);
+        health.beats.add(1);
         record(ErrorKind::Xrun.into());
         record(ErrorKind::DeviceChanged.into());
         assert_eq!(health.fatal(), None);
@@ -499,6 +506,18 @@ mod tests {
         let first = health.fatal().expect("a fatal error");
         record(ErrorKind::BackendError.into());
         assert_eq!(health.fatal(), Some(first));
+        assert_eq!(xruns.get(), 1);
+    }
+
+    #[test]
+    fn a_glitch_before_the_first_data_does_not_count() {
+        let health = Arc::new(Health::default());
+        let xruns = Arc::new(Counter::default());
+        let mut record = fault_recorder(&health, &xruns);
+        record(ErrorKind::Xrun.into());
+        assert_eq!(xruns.get(), 0);
+        health.beats.add(1);
+        record(ErrorKind::Xrun.into());
         assert_eq!(xruns.get(), 1);
     }
 
