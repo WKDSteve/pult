@@ -38,10 +38,13 @@ struct Editor {
 impl Editor {
     /// Applies one key; returns what it finished, if anything.
     fn key(&mut self, key: KeyEvent) -> Option<Input> {
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Windows reports AltGr as Ctrl+Alt; its characters (\ @ { [ on a German keyboard)
+        // are text, not shortcuts.
+        let shortcut = key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
-            KeyCode::Char('c' | 'd') if control => return Some(Input::Interrupt),
-            KeyCode::Char(c) if !control => self.text.push(c),
+            KeyCode::Char('c' | 'd') if shortcut => return Some(Input::Interrupt),
+            KeyCode::Char(c) if !shortcut => self.text.push(c),
             KeyCode::Backspace => {
                 self.text.pop();
             }
@@ -232,7 +235,8 @@ impl Console {
                 for note in notes {
                     if *live {
                         // Padded to cover the status line it replaces; a long note may wrap.
-                        let _ = writeln!(out, "\r{note:<columns$}", columns = width - 1);
+                        let _ =
+                            writeln!(out, "\r{note:<columns$}", columns = width.saturating_sub(1));
                     } else {
                         let _ = writeln!(out, "{note}");
                     }
@@ -360,6 +364,18 @@ mod tests {
         );
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(editor.key(ctrl_c), Some(Input::Interrupt));
+    }
+
+    #[test]
+    fn editor_takes_altgr_characters_as_text() {
+        let mut editor = Editor::default();
+        let altgr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        editor.key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        editor.key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        for c in ['\\', '@', '{'] {
+            assert_eq!(editor.key(KeyEvent::new(KeyCode::Char(c), altgr)), None);
+        }
+        assert_eq!(editor.text, "C:\\@{");
     }
 
     #[test]
