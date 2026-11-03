@@ -35,5 +35,6 @@ pub use remix::remix_add;
 pub use select::{SelectError, select};
 pub use tone::Sine;
 pub use view::{
-    Action, BusView, Desk, EventView, FakeDesk, InputView, MeterPoint, MixerView, Reply, SourceKind,
+    Action, BusView, Desk, EventKind, EventView, FakeDesk, InputView, MeterPoint, MixerView, Reply,
+    SourceKind,
 };

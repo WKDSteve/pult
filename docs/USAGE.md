@@ -139,6 +139,7 @@ latency_ms = 40
 [[bus]]
 name = "A1"                # 1 bis 8 Zeichen: Buchstaben, Ziffern, - oder _
 device = "Focusrite"       # eindeutiger Teil des Gerätenamens
+label = "Boxen"            # optional: so nennt ihn das Fenster
 gain_db = 0                # optional
 mute = false               # optional
 
@@ -150,6 +151,7 @@ gain_db = -6
 [[input]]
 device = "CABLE Output"
 buses = ["A1", "A2"]       # die Matrix: auf welche Busse dieser Eingang geht
+label = "Musik"            # optional: so nennt ihn das Fenster statt des Gerätenamens
 gain_db = 0                # optional, -96 bis 24
 pan = 0                    # optional, -1 links bis 1 rechts
 mute = false               # optional

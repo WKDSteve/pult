@@ -46,6 +46,8 @@ pub enum SourceKind {
 pub struct InputView {
     /// The device's or program's full name.
     pub name: String,
+    /// What the profile calls it (`Musik`), if it does; [`InputView::shown_name`] picks.
+    pub label: Option<String>,
     /// Device or program.
     pub kind: SourceKind,
     /// Its sample rate in Hz.
@@ -71,11 +73,21 @@ pub struct InputView {
     pub dropouts: u64,
 }
 
+impl InputView {
+    /// What a strip calls it: its label, else its full name.
+    #[must_use]
+    pub fn shown_name(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.name)
+    }
+}
+
 /// One bus as its master strip shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BusView {
-    /// The short name (`A1`).
+    /// The short name (`A1`), which commands and addresses use.
     pub name: String,
+    /// What the profile calls it (`Boxen`), if it does; [`BusView::shown_name`] picks.
+    pub label: Option<String>,
     /// The output device's full name.
     pub device: String,
     /// Its sample rate in Hz.
@@ -92,11 +104,34 @@ pub struct BusView {
     pub clipped: u64,
 }
 
+impl BusView {
+    /// What its strip calls it: its label, else its short name.
+    #[must_use]
+    pub fn shown_name(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.name)
+    }
+}
+
+/// What kind of thing happened to a device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventKind {
+    /// It stopped; the rest plays on.
+    Lost,
+    /// It plays again.
+    Back,
+    /// It is there again but does not open yet.
+    Refused,
+    /// It plays, but Windows refused it realtime priority.
+    Slow,
+}
+
 /// Something that happened to a device, as one line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventView {
     /// When, as time since the route started.
     pub elapsed: Duration,
+    /// What kind of thing, for those who show it without reading the text.
+    pub kind: EventKind,
     /// What, as the console says it (`A1 Focusrite is back`).
     pub text: String,
 }
@@ -216,6 +251,7 @@ impl FakeDesk {
     pub fn new() -> Self {
         let input = |name: &str, kind, sample_rate, gain_db, muted, buses: Vec<usize>| InputView {
             name: name.to_owned(),
+            label: None,
             kind,
             sample_rate,
             gain_db,
@@ -230,6 +266,7 @@ impl FakeDesk {
         };
         let bus = |name: &str, device: &str, sample_rate| BusView {
             name: name.to_owned(),
+            label: None,
             device: device.to_owned(),
             sample_rate,
             gain_db: 0.0,
@@ -367,12 +404,14 @@ impl Desk for FakeDesk {
             self.view.inputs[2].present = false;
             self.view.events.push(EventView {
                 elapsed: self.view.elapsed,
+                kind: EventKind::Lost,
                 text: format!("[3] {} is gone (demo)", self.view.inputs[2].name),
             });
         } else if self.frame % 600 == 90 && !self.view.inputs[2].present {
             self.view.inputs[2].present = true;
             self.view.events.push(EventView {
                 elapsed: self.view.elapsed,
+                kind: EventKind::Back,
                 text: format!("[3] {} is back", self.view.inputs[2].name),
             });
         }
@@ -582,12 +621,25 @@ mod tests {
         for _ in 0..700 {
             let view = mixer.view();
             missing |= !view.inputs[2].present;
-            events.extend(view.events.into_iter().map(|e| e.text));
+            events.extend(view.events);
         }
         assert!(missing);
         assert_eq!(events.len(), 2, "{events:?}");
-        assert!(events[0].ends_with("is gone (demo)"));
-        assert!(events[1].ends_with("is back"));
+        assert!(events[0].text.ends_with("is gone (demo)"));
+        assert_eq!(events[0].kind, EventKind::Lost);
+        assert!(events[1].text.ends_with("is back"));
+        assert_eq!(events[1].kind, EventKind::Back);
+    }
+
+    #[test]
+    fn a_label_goes_before_the_name() {
+        let mut view = FakeDesk::new().view();
+        assert_eq!(view.inputs[0].shown_name(), view.inputs[0].name);
+        assert_eq!(view.buses[0].shown_name(), "A1");
+        view.inputs[0].label = Some("Musik".to_owned());
+        view.buses[0].label = Some("Boxen".to_owned());
+        assert_eq!(view.inputs[0].shown_name(), "Musik");
+        assert_eq!(view.buses[0].shown_name(), "Boxen");
     }
 
     #[test]

@@ -280,6 +280,8 @@ pub struct InputSpec {
     pub device: String,
     /// Whether `device` names a device or a program.
     pub kind: InputKind,
+    /// What an interface calls it instead of the device's name.
+    pub label: Option<String>,
     /// Gain in dB.
     pub gain_db: f32,
     /// -1 (left) to 1 (right).
@@ -297,6 +299,7 @@ impl InputSpec {
         Self {
             device: device.into(),
             kind: InputKind::Device,
+            label: None,
             gain_db,
             pan: 0.0,
             muted: false,
@@ -312,6 +315,8 @@ pub struct BusSpec {
     pub name: String,
     /// Output device name, or a unique part of it.
     pub device: String,
+    /// What an interface calls it instead of its short name.
+    pub label: Option<String>,
     /// Gain of the mix in dB.
     pub gain_db: f32,
     /// Starts muted.
@@ -325,6 +330,7 @@ impl BusSpec {
         Self {
             name: name.into(),
             device: device.into(),
+            label: None,
             gain_db: 0.0,
             muted: false,
         }

@@ -6,12 +6,14 @@
 //! [[bus]]
 //! name = "A1"                  # 1 to 8 letters, digits, - or _
 //! device = "Focusrite"         # a unique part of the output's name
+//! label = "Boxen"              # optional, what the window calls it
 //! gain_db = 0                  # optional
 //! mute = false                 # optional
 //!
 //! [[input]]
 //! device = "CABLE Output"
 //! buses = ["A1"]               # the matrix: which buses this input feeds
+//! label = "Musik"              # optional, what the window calls it
 //! gain_db = -3                 # optional
 //! pan = 0                      # optional, -1 left to 1 right
 //! mute = false                 # optional
@@ -75,6 +77,7 @@ struct File {
 struct BusEntry {
     name: String,
     device: String,
+    label: Option<String>,
     #[serde(default)]
     gain_db: f32,
     #[serde(default)]
@@ -87,6 +90,7 @@ struct InputEntry {
     device: Option<String>,
     process: Option<String>,
     buses: Vec<String>,
+    label: Option<String>,
     #[serde(default)]
     gain_db: f32,
     #[serde(default)]
@@ -109,6 +113,13 @@ fn check_gain(what: &str, gain_db: f32) -> Result<(), ProfileError> {
             GAIN_DB.end()
         ))
     }
+}
+
+fn check_label(what: &str, label: Option<&String>) -> Result<(), ProfileError> {
+    if label.is_some_and(|label| label.trim().is_empty()) {
+        return fail(format!("{what}: label must not be empty"));
+    }
+    Ok(())
 }
 
 fn valid_bus_name(name: &str) -> bool {
@@ -148,9 +159,11 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             return fail(format!("bus \"{}\" is defined twice", entry.name));
         }
         check_gain(&format!("bus {}", entry.name), entry.gain_db)?;
+        check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
         buses.push(BusSpec {
             name: entry.name,
             device: entry.device,
+            label: entry.label,
             gain_db: entry.gain_db,
             muted: entry.mute,
         });
@@ -173,6 +186,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         };
         let what = format!("input \"{name}\"");
         check_gain(&what, entry.gain_db)?;
+        check_label(&what, entry.label.as_ref())?;
         if !(-1.0..=1.0).contains(&entry.pan) {
             return fail(format!("{what}: pan must be -1 to 1, not {}", entry.pan));
         }
@@ -190,6 +204,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         inputs.push(InputSpec {
             device: name,
             kind,
+            label: entry.label,
             gain_db: entry.gain_db,
             pan: entry.pan,
             muted: entry.mute,
@@ -218,9 +233,10 @@ pub fn render(spec: &RouteSpec) -> String {
     for bus in &spec.buses {
         let _ = write!(
             text,
-            "\n[[bus]]\nname = {}\ndevice = {}\ngain_db = {}\nmute = {}\n",
+            "\n[[bus]]\nname = {}\ndevice = {}\n{}gain_db = {}\nmute = {}\n",
             quoted(&bus.name),
             quoted(&bus.device),
+            label_line(bus.label.as_ref()),
             bus.gain_db,
             bus.muted
         );
@@ -237,15 +253,21 @@ pub fn render(spec: &RouteSpec) -> String {
             .collect();
         let _ = write!(
             text,
-            "\n[[input]]\n{key} = {}\nbuses = [{}]\ngain_db = {}\npan = {}\nmute = {}\n",
+            "\n[[input]]\n{key} = {}\nbuses = [{}]\n{}gain_db = {}\npan = {}\nmute = {}\n",
             quoted(&input.device),
             buses.join(", "),
+            label_line(input.label.as_ref()),
             input.gain_db,
             input.pan,
             input.muted
         );
     }
     text
+}
+
+/// The line of a label in a rendered profile; empty without one.
+fn label_line(label: Option<&String>) -> String {
+    label.map_or_else(String::new, |label| format!("label = {}\n", quoted(label)))
 }
 
 /// Reads the profile at `path`.
@@ -338,10 +360,35 @@ mod tests {
         spec.inputs[0].kind = InputKind::Process;
         spec.inputs[0].device = "Spo\"ti\\fy".into();
         spec.inputs[1].gain_db = -96.0;
+        spec.inputs[1].label = Some("Mu\"sik".into());
         spec.buses[0].gain_db = 24.0;
+        spec.buses[1].label = Some("Kopfhörer".into());
         spec.latency_ms = 80;
         let text = render(&spec);
         assert_eq!(parse(&text), Ok(spec), "{text}");
+    }
+
+    #[test]
+    fn a_label_is_optional_but_not_empty() {
+        let spec = parse(
+            "[[bus]]\nname = \"A1\"\ndevice = \"x\"\nlabel = \"Boxen\"\n\
+             [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\nlabel = \"Musik\"",
+        )
+        .expect("labels");
+        assert_eq!(spec.buses[0].label.as_deref(), Some("Boxen"));
+        assert_eq!(spec.inputs[0].label.as_deref(), Some("Musik"));
+        assert_eq!(parse(TWO_BUSES).expect("no labels").inputs[0].label, None);
+        assert!(
+            error("[[bus]]\nname = \"A1\"\ndevice = \"x\"\nlabel = \" \"")
+                .contains("bus A1: label must not be empty")
+        );
+        assert!(
+            error(
+                "[[bus]]\nname = \"A1\"\ndevice = \"x\"\n\
+                 [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\nlabel = \"\""
+            )
+            .contains("input \"m\": label must not be empty")
+        );
     }
 
     #[test]

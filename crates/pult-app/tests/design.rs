@@ -65,6 +65,7 @@ fn showcase(t: f64) -> MixerView {
             let seed = i as f64;
             InputView {
                 name: name.to_owned(),
+                label: None,
                 kind,
                 sample_rate,
                 gain_db,
@@ -92,6 +93,7 @@ fn showcase(t: f64) -> MixerView {
         let seed = 10.0 + j as f64;
         BusView {
             name: name.to_owned(),
+            label: None,
             device: device.to_owned(),
             sample_rate: 48_000,
             gain_db,
@@ -119,10 +121,12 @@ fn first_events() -> Vec<EventView> {
     vec![
         EventView {
             elapsed: Duration::from_secs(5112),
+            kind: pult_core::view::EventKind::Lost,
             text: "[7] USB Mic is gone".to_owned(),
         },
         EventView {
             elapsed: Duration::from_secs(7980),
+            kind: pult_core::view::EventKind::Lost,
             text: "A1 Scarlett 2i2 is back".to_owned(),
         },
     ]

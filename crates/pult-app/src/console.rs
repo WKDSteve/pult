@@ -372,6 +372,7 @@ mod tests {
             .iter()
             .map(|text| EventView {
                 elapsed: Duration::ZERO,
+                kind: pult_core::view::EventKind::Lost,
                 text: (*text).to_owned(),
             })
             .collect();

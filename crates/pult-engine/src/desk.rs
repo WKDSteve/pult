@@ -8,11 +8,11 @@ use std::time::Instant;
 
 use pult_core::control::{Command, Target};
 use pult_core::{
-    Action, BusView, Desk, Dropouts, EventView, InputView, MeterPoint, MixerView, Reply,
+    Action, BusView, Desk, Dropouts, EventKind, EventView, InputView, MeterPoint, MixerView, Reply,
     SourceKind, linear_to_db,
 };
 
-use crate::{InputKind, Running, profile};
+use crate::{Change, InputKind, Running, profile};
 
 /// A running route behind the [`Desk`] interface. Taking a view also supervises the devices
 /// (a lost one is looked for again), so call [`Desk::view`] a few times a second.
@@ -115,6 +115,12 @@ impl Desk for EngineDesk {
             .into_iter()
             .map(|change| EventView {
                 elapsed,
+                kind: match change {
+                    Change::Lost { .. } => EventKind::Lost,
+                    Change::Back { .. } => EventKind::Back,
+                    Change::Refused { .. } => EventKind::Refused,
+                    Change::Slow { .. } => EventKind::Slow,
+                },
                 text: change.to_string(),
             })
             .collect();
@@ -144,6 +150,7 @@ impl Desk for EngineDesk {
                 }
                 InputView {
                     name: input.name.clone(),
+                    label: spec.label.clone(),
                     kind: match spec.kind {
                         InputKind::Device => SourceKind::Device,
                         InputKind::Process => SourceKind::Program,
@@ -172,6 +179,7 @@ impl Desk for EngineDesk {
             .zip(&running.spec.buses)
             .map(|(bus, spec)| BusView {
                 name: bus.name.clone(),
+                label: spec.label.clone(),
                 device: bus.device.clone(),
                 sample_rate: bus.sample_rate,
                 gain_db: spec.gain_db,

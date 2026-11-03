@@ -198,6 +198,7 @@ mod tests {
     fn event(text: &str) -> EventView {
         EventView {
             elapsed: Duration::ZERO,
+            kind: pult_core::view::EventKind::Lost,
             text: text.to_owned(),
         }
     }
