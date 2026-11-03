@@ -52,7 +52,11 @@ cargo deny check
 cargo audit --deny warnings
 ```
 
-Das Programm liegt danach unter `target\release\pult.exe`. Die Toolchain gibt `rust-toolchain.toml` vor, die CI läuft auf einem Self-hosted-Windows-Runner (`.github/workflows/ci.yml`).
+Die Programme liegen danach unter `target\release\pult.exe` (Kommandozeile) und `target\release\pult-app.exe` (Fenster).
+
+Für den eigenen Benutzer installieren, ohne Setup und ohne Adminrechte: `scripts\build-install.ps1` baut beide und kopiert sie nach `%LOCALAPPDATA%\pult\bin`, dazu ein Startmenü-Eintrag „pult“ für das Fenster (`-BuildOnly` baut nur). `scripts\uninstall.ps1` entfernt beides wieder, die Profile bleiben.
+
+Die Toolchain gibt `rust-toolchain.toml` vor, die CI läuft auf einem Self-hosted-Windows-Runner (`.github/workflows/ci.yml`).
 
 ## Planung
 
