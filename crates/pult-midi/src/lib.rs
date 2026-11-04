@@ -3,7 +3,8 @@
 //! on the owner's thread and the device's own: never in an audio callback.
 //!
 //! No MIDI is touched until there is something to do: no file with bindings, no learning, no thread
-//! and no open port. On Windows a port has one user, and it might be another program's.
+//! and no open port: a port can have one user only, depending on the driver, and it might be
+//! another program's.
 
 pub mod device;
 pub mod file;
@@ -17,7 +18,7 @@ use pult_core::protocol::Op;
 use pult_core::view::{Desk, MixerView};
 use pult_hub::{MidiAsk, Pump};
 
-use device::{Incoming, Outgoing, Wanted};
+use device::{Incoming, Outgoing, Wanted, is_only_keys};
 use file::Saved;
 
 /// What may wait from the device. A fader in a hurry sends about a thousand messages a second at
@@ -27,7 +28,8 @@ const INBOX: usize = 1024;
 /// How many buttons are lit at one go: a slow device must not choke on a scene.
 const LIGHTS_AT_ONCE: usize = 16;
 
-/// A controller on a route.
+/// A controller on a route. Its flags have nothing to do with each other: no state machine in them.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Midi {
     path: PathBuf,
     map: Map,
@@ -42,6 +44,8 @@ pub struct Midi {
     spawns: bool,
     wanted: Wanted,
     notes: Vec<String>,
+    /// The learning under way said already that keys are no controls.
+    told_keys: bool,
 }
 
 impl Midi {
@@ -75,6 +79,7 @@ impl Midi {
             thread: None,
             spawns,
             wanted: Wanted::Nothing,
+            told_keys: false,
             notes: problem
                 .into_iter()
                 .map(|why| format!("no MIDI: {why}"))
@@ -104,6 +109,7 @@ impl Midi {
             return;
         }
         self.map.learn(target);
+        self.told_keys = false;
         self.follow_wanted();
     }
 
@@ -177,6 +183,14 @@ impl Midi {
     /// what to tell the person. A fader's every step is not worth a line, nor a light per message.
     pub fn poll(&mut self, desk: &mut dyn Desk, view: &MixerView) -> Vec<String> {
         for message in self.drain() {
+            if is_only_keys(&message.1) {
+                if self.map.learning().is_some() && !self.told_keys {
+                    self.told_keys = true;
+                    self.notes
+                        .push("that is a key; use a knob, a pad or a button".to_owned());
+                }
+                continue;
+            }
             let step = self.map.step(message.0, view);
             if step.learned {
                 if self.device.is_none() {
@@ -236,6 +250,7 @@ impl Midi {
                     self.connected = false;
                     self.notes.push(format!("MIDI device {name} is gone"));
                 }
+                Incoming::Closed(_) => self.connected = false,
                 Incoming::Problem(why) => self.notes.push(format!("MIDI: {why}")),
                 Incoming::Bytes { .. } => {}
             }
@@ -391,6 +406,50 @@ mod tests {
         bench.device_says(&[0x90, 7, 127]);
         bench.poll();
         assert!(bench.desk.view().inputs[0].muted, "through the desk");
+    }
+
+    #[test]
+    fn a_key_of_an_apc_key_binds_nothing_and_its_port_is_not_chosen() {
+        let folder = Folder::new("keys");
+        let mut bench = Bench::new(&folder);
+        bench.midi.learn("input/1/mute".to_owned());
+        bench.sent();
+        bench
+            .to_midi
+            .send(Incoming::Bytes {
+                port: "APC Key 25 mk2".into(),
+                bytes: vec![0x90, 0x45, 90],
+            })
+            .expect("sent");
+        assert_eq!(
+            bench.poll(),
+            ["that is a key; use a knob, a pad or a button"]
+        );
+        assert_eq!(bench.midi.status().bindings, []);
+        bench
+            .to_midi
+            .send(Incoming::Bytes {
+                port: "APC Key 25 mk2".into(),
+                bytes: vec![0x90, 0x46, 90],
+            })
+            .expect("sent");
+        assert_eq!(bench.poll(), Vec::<String>::new(), "said once a learning");
+        assert_eq!(bench.midi.status().device, None);
+        assert!(bench.midi.map.learning().is_some(), "it goes on waiting");
+
+        // The same number from the port of the controls is a button.
+        bench
+            .to_midi
+            .send(Incoming::Bytes {
+                port: "MIDIIN2 (APC Key 25 mk2)".into(),
+                bytes: vec![0x90, 0x45, 127],
+            })
+            .expect("sent");
+        assert_eq!(bench.poll(), ["note 69 -> input/1/mute"]);
+        assert_eq!(
+            bench.midi.status().device.as_deref(),
+            Some("MIDIIN2 (APC Key 25 mk2)")
+        );
     }
 
     #[test]

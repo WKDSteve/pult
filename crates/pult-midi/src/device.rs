@@ -25,6 +25,8 @@ pub enum Incoming {
     Connected(String),
     /// It went away.
     Lost(String),
+    /// It is no longer in use, and still there.
+    Closed(String),
     /// Something did not work, once per kind of trouble.
     Problem(String),
 }
@@ -63,6 +65,15 @@ pub fn clean_name(name: &str) -> &str {
         Some(inner) => inner.trim(),
         None => name,
     }
+}
+
+/// Whether the port `name` is only a keyboard, on a device that has its controls on a port of their
+/// own. Measured on the APC Key 25 mk2: `APC Key 25 mk2` is its keys, `MIDIIN2 (APC Key 25 mk2)` its
+/// knobs, pads and buttons, with the same note numbers on both. A key is no control to bind, and
+/// choosing this port would leave the controls out.
+#[must_use]
+pub fn is_only_keys(name: &str) -> bool {
+    name.to_ascii_lowercase().contains("apc key") && clean_name(name) == name.trim()
 }
 
 /// The port among `ports` that is the wanted `device`: with exactly that name, for a device with
@@ -122,6 +133,61 @@ pub fn ports() -> Result<(Vec<String>, Vec<String>), String> {
 struct Open {
     inputs: Vec<(String, MidiInputConnection<()>)>,
     output: Option<MidiOutputConnection>,
+    /// The port that was told to be the device in use.
+    device: Option<String>,
+}
+
+/// What to do about the ports.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Plan {
+    /// Inputs to close.
+    close: Vec<String>,
+    /// Inputs to open.
+    open: Vec<String>,
+    /// The device in use went away: unplugged.
+    lost: Option<String>,
+    /// The device in use is no longer wanted, and still there.
+    closed: Option<String>,
+    /// The port that is the device in use from now on, also when it is open already: a learning
+    /// listened to it before it was chosen.
+    announce: Option<String>,
+}
+
+/// What `wanted` comes to, with the ports `inputs` there and `open` open, and `device` in use.
+fn plan(wanted: &Wanted, inputs: &[String], open: &[String], device: Option<&str>) -> Plan {
+    let chosen: Vec<&String> = match wanted {
+        Wanted::Nothing => Vec::new(),
+        Wanted::Any => inputs.iter().collect(),
+        Wanted::Device(device) => find_port(inputs, device).into_iter().collect(),
+    };
+    let mut plan = Plan {
+        close: open
+            .iter()
+            .filter(|name| !chosen.contains(name))
+            .cloned()
+            .collect(),
+        open: chosen
+            .iter()
+            .filter(|name| !open.contains(name))
+            .map(|name| (*name).clone())
+            .collect(),
+        ..Plan::default()
+    };
+    if let Some(device) = device
+        && !chosen.iter().any(|name| *name == device)
+    {
+        if inputs.iter().any(|name| name == device) {
+            plan.closed = Some(device.to_owned());
+        } else {
+            plan.lost = Some(device.to_owned());
+        }
+    }
+    if let (Wanted::Device(_), Some(name)) = (wanted, chosen.first())
+        && device != Some(name.as_str())
+    {
+        plan.announce = Some((*name).clone());
+    }
+    plan
 }
 
 /// The thread's work, until the other side of `outgoing` is gone.
@@ -179,39 +245,23 @@ fn follow(
             return;
         }
     };
-    let chosen: Vec<&String> = match wanted {
-        Wanted::Nothing => Vec::new(),
-        Wanted::Any => inputs.iter().collect(),
-        Wanted::Device(device) => find_port(&inputs, device).into_iter().collect(),
-    };
-    // What went, or is wanted no longer.
-    let gone: Vec<String> = open
-        .inputs
-        .iter()
-        .filter(|(name, _)| !chosen.contains(&name))
-        .map(|(name, _)| name.clone())
-        .collect();
-    if !gone.is_empty() {
-        open.inputs.retain(|(name, _)| !gone.contains(name));
+    let open_names: Vec<String> = open.inputs.iter().map(|(name, _)| name.clone()).collect();
+    let plan = plan(wanted, &inputs, &open_names, open.device.as_deref());
+    open.inputs.retain(|(name, _)| !plan.close.contains(name));
+    if let Some(name) = plan.lost {
         open.output = None;
-        for name in &gone {
-            // Only the device in use: a port a learning listened to does not matter.
-            if matches!(wanted, Wanted::Device(_)) || !inputs.contains(name) {
-                tell(incoming, Incoming::Lost(name.clone()));
-            }
-        }
+        open.device = None;
+        tell(incoming, Incoming::Lost(name));
     }
-    for name in chosen {
-        if open.inputs.iter().any(|(known, _)| known == name) {
-            continue;
-        }
+    if let Some(name) = plan.closed {
+        open.output = None;
+        open.device = None;
+        tell(incoming, Incoming::Closed(name));
+    }
+    for name in &plan.open {
         match connect_input(name, incoming) {
             Ok(connection) => {
                 open.inputs.push((name.clone(), connection));
-                if matches!(wanted, Wanted::Device(_)) {
-                    open.output = output_for(name, &outputs).and_then(connect_output);
-                    tell(incoming, Incoming::Connected(name.clone()));
-                }
                 *told = None;
             }
             Err(why) => {
@@ -222,6 +272,13 @@ fn follow(
                 }
             }
         }
+    }
+    if let Some(name) = plan.announce
+        && open.inputs.iter().any(|(known, _)| *known == name)
+    {
+        open.output = output_for(&name, &outputs).and_then(connect_output);
+        tell(incoming, Incoming::Connected(name.clone()));
+        open.device = Some(name);
     }
 }
 
@@ -320,6 +377,106 @@ mod tests {
         assert_eq!(clean_name("APC MINI"), "APC MINI");
         assert_eq!(clean_name("nanoKONTROL (Port 1)"), "nanoKONTROL (Port 1)");
         assert_eq!(clean_name(" MIDIINSIDE (x) "), "MIDIINSIDE (x)");
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    const KEYS: &str = "APC Key 25 mk2";
+    const CONTROLS: &str = "MIDIIN2 (APC Key 25 mk2)";
+
+    #[test]
+    fn a_learning_listens_to_all_and_tells_of_no_device() {
+        let inputs = names(&[KEYS, CONTROLS]);
+        assert_eq!(
+            plan(&Wanted::Any, &inputs, &[], None),
+            Plan {
+                open: inputs.clone(),
+                ..Plan::default()
+            }
+        );
+    }
+
+    /// Measured on the real device: the port was open from the learning, so it never came to be
+    /// connected, and no output and no light came with it.
+    #[test]
+    fn a_port_chosen_while_it_is_open_is_announced_all_the_same() {
+        let inputs = names(&[KEYS, CONTROLS]);
+        assert_eq!(
+            plan(&Wanted::Device(CONTROLS.to_owned()), &inputs, &inputs, None),
+            Plan {
+                close: names(&[KEYS]),
+                announce: Some(CONTROLS.to_owned()),
+                ..Plan::default()
+            },
+            "the other port closes, and that is no device lost"
+        );
+    }
+
+    #[test]
+    fn a_device_is_opened_and_announced_once() {
+        let inputs = names(&[KEYS, CONTROLS]);
+        let wanted = Wanted::Device(CONTROLS.to_owned());
+        assert_eq!(
+            plan(&wanted, &inputs, &[], None),
+            Plan {
+                open: names(&[CONTROLS]),
+                announce: Some(CONTROLS.to_owned()),
+                ..Plan::default()
+            }
+        );
+        assert_eq!(
+            plan(&wanted, &inputs, &names(&[CONTROLS]), Some(CONTROLS)),
+            Plan::default()
+        );
+    }
+
+    #[test]
+    fn an_unplugged_device_is_lost_and_found_again() {
+        let wanted = Wanted::Device(CONTROLS.to_owned());
+        assert_eq!(
+            plan(&wanted, &[], &names(&[CONTROLS]), Some(CONTROLS)),
+            Plan {
+                close: names(&[CONTROLS]),
+                lost: Some(CONTROLS.to_owned()),
+                ..Plan::default()
+            }
+        );
+        assert_eq!(
+            plan(&wanted, &names(&[KEYS, CONTROLS]), &[], None),
+            Plan {
+                open: names(&[CONTROLS]),
+                announce: Some(CONTROLS.to_owned()),
+                ..Plan::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_device_no_longer_wanted_is_closed_not_lost() {
+        let inputs = names(&[KEYS, CONTROLS]);
+        assert_eq!(
+            plan(
+                &Wanted::Nothing,
+                &inputs,
+                &names(&[CONTROLS]),
+                Some(CONTROLS)
+            ),
+            Plan {
+                close: names(&[CONTROLS]),
+                closed: Some(CONTROLS.to_owned()),
+                ..Plan::default()
+            }
+        );
+    }
+
+    #[test]
+    fn the_keys_of_an_apc_key_are_told_from_its_controls() {
+        assert!(is_only_keys("APC Key 25 mk2"));
+        assert!(is_only_keys("APC Key 25"));
+        assert!(!is_only_keys("MIDIIN2 (APC Key 25 mk2)"));
+        assert!(!is_only_keys("APC MINI"));
     }
 
     #[test]

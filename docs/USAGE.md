@@ -343,7 +343,8 @@ Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün,
   sich, ändert `relative = true` oder `false` in der Datei das.
 - **Belegung:** `%APPDATA%\pult\midi.toml`. pult schreibt sie beim Lernen neu, Kommentare darin bleiben nicht. Eine Datei, die sich
   nicht lesen lässt, bleibt unberührt, und MIDI bleibt aus, bis sie repariert ist.
-- **Anschluss:** Ohne Belegung öffnet pult keinen MIDI-Anschluss: Unter Windows kann ihn immer nur ein Programm halten. Geräte lassen
+- **Anschluss:** Ohne Belegung öffnet pult keinen MIDI-Anschluss. Ob ein anderes Programm ihn zugleich nutzen kann, hängt vom Treiber
+  ab; ein zweites Programm, das dieselben Tasten beleuchtet, überschreibt aber die Farben von pult. Geräte lassen
   sich ab- und anstecken, pult findet sie nach wenigen Sekunden wieder und leuchtet neu. MIDI läuft nie in den Audio-Callbacks.
 - **Farben** sind für die APC-Reihe hinterlegt (APC mini, die mk2-Geräte wie der APC Key 25 mk2); andere Geräte bekommen den Wert 127.
 
