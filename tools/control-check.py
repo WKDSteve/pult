@@ -5,7 +5,8 @@ and "In 5" only, with a config folder of its own.
 usage: python tools/control-check.py <pult.exe> <out dir> [seconds of steady reading] [seconds of scenes]
 
 Pairs like a local program, reads the state, sets a gain, gets a refusal, then keeps reading
-and holds an event stream open. Then it changes scenes every half second with every core busy.
+and holds an event stream open. Then it changes scenes every half second with every core busy,
+and drives the route with `pult <command>` as a person would.
 Ends with a non-zero status when anything is not as it should be, among it a dropout or a
 glitch during the reading or the scenes. The first seconds are shown but do not count: a start on
 a busy machine can cost one resync (pult/start-unter-last-ein-aussetzer).
@@ -273,6 +274,35 @@ def main():
             if troubles(last) != at_start:
                 failed.append(f"during the scenes: {at_start} became {troubles(last)}")
 
+            # The same through the program itself: status, output, and how long it takes.
+            def command(*words):
+                begun = time.time()
+                done = subprocess.run(
+                    [str(pult), *words], capture_output=True, text=True, env=env, timeout=30
+                )
+                return done.returncode, done.stdout.strip(), done.stderr.strip(), time.time() - begun
+
+            slowest_call = 0
+            for words, wanted_status, wanted_text in [
+                (("scene", "leise"), 0, "scene Leise over 300 ms"),
+                (("gain", "A1", "-3", "over", "100"), 0, "over 100 ms"),
+                (("mute", "pulttone"), 0, "muted"),
+                (("unmute", "1"), 0, "unmuted"),
+                (("scenes",), 0, "Leise\nNormal"),
+                (("scene", "nichts"), 1, "no scene"),
+                (("gain", "A1", "60"), 1, "is outside"),
+                (("mute", "nichts"), 2, "no input or bus matches"),
+            ]:
+                status, out_text, err_text, took = command(*words)
+                slowest_call = max(slowest_call, took)
+                print(f"pult {' '.join(words)}: {status} in {took:.2f} s: {out_text or err_text}")
+                if status != wanted_status or wanted_text not in (out_text + err_text):
+                    failed.append(f"pult {' '.join(words)}: {status} {out_text} {err_text}")
+            print(f"the slowest command took {slowest_call:.2f} s")
+            status, out_text, err_text, _ = command("show")
+            if status != 0 or "gain -3.0 dB" not in out_text:
+                failed.append(f"pult show: {status} {out_text} {err_text}")
+
             # Into the profile, with the scenes and the comments left as they were.
             status, text = op(port, token, op="scene", name="leise")
             status, text = op(port, token, op="save")
@@ -288,6 +318,11 @@ def main():
             begun = time.time()
             run.communicate(b"\n", timeout=30)
             print(f"ended in {time.time() - begun:.1f} s with a stream open")
+            status, out_text, err_text, _ = command("show")
+            if status != 1 or "no pult is running" not in err_text:
+                failed.append(f"pult show after the end: {status} {out_text} {err_text}")
+            if (config / "cli").exists():
+                failed.append("the session of the command line stayed")
             stream.close()
             if (config / "hub.json").exists() or (config / "control.secret").exists():
                 failed.append("the files of the hub stayed")

@@ -301,7 +301,7 @@ pult show
 
 ### In Neovim
 
-Mit `my.nvim` gibt es dieselben Wörter als `:Pult` (`:Pult scene abend`), mit Vervollständigung von Befehlen, Szenen,
+Mit `my.nvim` gibt es dieselben Wörter als `:My pult` (`:My pult scene abend`), mit Vervollständigung von Befehlen, Szenen,
 Eingängen und Bussen. `pult` muss dafür im `PATH` liegen, oder `vim.g.pult_exe` nennt das Programm.
 
 ## Fehlermeldungen
