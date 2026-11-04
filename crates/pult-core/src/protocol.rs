@@ -508,7 +508,7 @@ mod tests {
         let mut older = serde_json::to_value(&state).expect("to JSON");
         older.as_object_mut().expect("an object").remove("scenes");
         let read: State = serde_json::from_value(older).expect("from JSON");
-        assert!(read.scenes.is_empty());
+        assert_eq!(read.scenes, Vec::<String>::new());
     }
 
     #[test]
