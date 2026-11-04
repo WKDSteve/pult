@@ -22,6 +22,7 @@ impl Subject for Pult {
             control_secret: cfg.control_secret,
             instance: cfg.instance,
             status: cfg.status,
+            link: pult_hub::link().0,
         }))
     }
 

@@ -2814,6 +2814,8 @@ dependencies = [
  "assert_no_alloc",
  "rtrb",
  "rubato",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2839,6 +2841,9 @@ dependencies = [
  "appkit-hub",
  "appkit-testkit",
  "axum",
+ "futures-core",
+ "pult-core",
+ "serde_json",
  "tokio",
 ]
 

@@ -4,6 +4,8 @@
 //! pult keeps no vault and has no engine process: what the kit calls the runtime is only the
 //! status `hello` reports. The audio crates know nothing of this one, so axum and tokio stay
 //! away from the callbacks.
+//!
+//! The hub never touches the mixer itself; see [`link`]. `docs/CONTROL.md` describes the routes.
 
 use std::io;
 use std::net::SocketAddr;
@@ -13,9 +15,13 @@ use std::time::Duration;
 use appkit_core::authn::{Clock, Secret};
 use appkit_core::identity::AppIdentity;
 use appkit_hub::{
-    Core, GuardRules, HubStatus, Limits, Page, Pages, RunningServer, Runtime, ServeParts, serve,
+    GuardRules, HubStatus, Limits, Page, Pages, RunningServer, Runtime, ServeParts, serve,
 };
-use axum::Router;
+
+mod link;
+mod routes;
+
+pub use link::{Link, Pump, link};
 
 /// The names of pult as a hub. The port is listed in `appkit-testkit::ports`.
 pub const IDENTITY: AppIdentity = AppIdentity {
@@ -28,7 +34,7 @@ pub const IDENTITY: AppIdentity = AppIdentity {
 };
 
 /// The routes that need a session, below the namespace of the app.
-pub const DATA_ROUTES: [&str; 2] = ["state", "ops"];
+pub const DATA_ROUTES: [&str; 3] = ["state", "stream", "ops"];
 
 /// How to start the hub.
 pub struct Start {
@@ -46,16 +52,23 @@ pub struct Start {
     pub instance: Secret,
     /// What `hello` says.
     pub status: HubStatus,
+    /// The way to the owner of the mixer.
+    pub link: Arc<Link>,
 }
 
-/// What the kit keeps for the vault that is read: pult has neither, only the status.
-struct Status(HubStatus);
+/// What the kit keeps for the vault that is read: pult has none, only the status and the way
+/// to the mixer.
+pub(crate) struct Status {
+    hello: HubStatus,
+    pub(crate) link: Arc<Link>,
+    pub(crate) streams: routes::Streams,
+}
 
 impl Runtime for Status {
     type Target = ();
 
     fn status(&self) -> &HubStatus {
-        &self.0
+        &self.hello
     }
 
     fn stop(&self) {}
@@ -74,21 +87,15 @@ impl Pages for NoPages {
     }
 }
 
-fn routes(_core: &Arc<Core<Status>>) -> Router<Arc<Core<Status>>> {
-    Router::new()
-}
-
 /// Starts the hub.
 ///
 /// # Errors
 ///
 /// When the address is not loopback or cannot be bound.
 pub async fn start(start: Start) -> io::Result<RunningServer> {
-    let idle = HubStatus {
-        engine_ready: false,
-        problem: None,
-        capabilities: Vec::new(),
-    };
+    let link = start.link;
+    let again = start.status.clone();
+    let same = Arc::clone(&link);
     serve(
         ServeParts {
             addr: start.addr,
@@ -102,11 +109,20 @@ pub async fn start(start: Start) -> io::Result<RunningServer> {
             build_id: None,
             guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
             ui: Arc::new(NoPages),
-            runtime: Status(start.status),
-            build: Arc::new(move |()| Status(idle.clone())),
+            runtime: Status {
+                hello: start.status,
+                link,
+                streams: routes::Streams::default(),
+            },
+            // pult has no vault to choose, so the kit never calls this.
+            build: Arc::new(move |()| Status {
+                hello: again.clone(),
+                link: Arc::clone(&same),
+                streams: routes::Streams::default(),
+            }),
             vaults: None,
         },
-        routes,
+        routes::routes,
     )
     .await
 }

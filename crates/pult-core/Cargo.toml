@@ -12,10 +12,12 @@ publish.workspace = true
 [dependencies]
 rtrb.workspace = true
 rubato = { version = "5.0.1", default-features = false }
+serde.workspace = true
 
 [dev-dependencies]
 # The mixer test proves the audio path allocates nothing.
 assert_no_alloc.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

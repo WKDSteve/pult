@@ -18,6 +18,7 @@ pub mod drift;
 pub mod dropouts;
 pub mod level;
 pub mod mixer;
+pub mod protocol;
 pub mod rate;
 pub mod remix;
 pub mod select;
