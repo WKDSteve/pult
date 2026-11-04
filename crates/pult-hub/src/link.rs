@@ -125,8 +125,15 @@ impl Pump {
                     continue;
                 }
                 Op::Unlearn { target } => {
-                    self.midi_asks.push(MidiAsk::Forget(target.clone()));
-                    let _ = asked.answer.send(Ok(Vec::new()));
+                    // It may name what this route does not have, so it cannot be checked like a
+                    // learning; but it comes back in a line for the terminal.
+                    let answer = if target.chars().any(char::is_control) {
+                        Err("an address has no control characters".to_owned())
+                    } else {
+                        self.midi_asks.push(MidiAsk::Forget(target.clone()));
+                        Ok(Vec::new())
+                    };
+                    let _ = asked.answer.send(answer);
                     continue;
                 }
                 _ => {}
@@ -310,11 +317,15 @@ mod tests {
         let mut free = ask(Op::Unlearn {
             target: "input/9/gain".to_owned(),
         });
+        let mut escape = ask(Op::Unlearn {
+            target: "x\u{1b}[2J".to_owned(),
+        });
         let view = desk.view();
         pump.pump(&mut desk, &view);
         assert!(good.try_recv().expect("an answer").is_ok());
         assert!(bad.try_recv().expect("an answer").is_err());
         assert!(free.try_recv().expect("an answer").is_ok());
+        assert!(escape.try_recv().expect("an answer").is_err());
         assert_eq!(
             pump.take_midi_asks(),
             [

@@ -73,7 +73,8 @@ pub fn clean_name(name: &str) -> &str {
 /// choosing this port would leave the controls out.
 #[must_use]
 pub fn is_only_keys(name: &str) -> bool {
-    name.to_ascii_lowercase().contains("apc key") && clean_name(name) == name.trim()
+    let lower = name.to_ascii_lowercase();
+    lower.contains("apc key") && lower.contains("mk2") && clean_name(name) == name.trim()
 }
 
 /// The port among `ports` that is the wanted `device`: with exactly that name, for a device with
@@ -474,7 +475,10 @@ mod tests {
     #[test]
     fn the_keys_of_an_apc_key_are_told_from_its_controls() {
         assert!(is_only_keys("APC Key 25 mk2"));
-        assert!(is_only_keys("APC Key 25"));
+        assert!(
+            !is_only_keys("APC Key 25"),
+            "not measured; filtering it could leave nothing"
+        );
         assert!(!is_only_keys("MIDIIN2 (APC Key 25 mk2)"));
         assert!(!is_only_keys("APC MINI"));
     }

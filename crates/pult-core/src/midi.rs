@@ -166,10 +166,11 @@ pub struct Bound {
 }
 
 /// Whether the first value of a control looks like the step of an endless knob: small steps around
-/// zero. A fader or a knob with ends sends these only right at its ends.
+/// zero. A fader or a knob with ends sends these only right at its ends. Measured on the APC Key 25
+/// mk2: a fast turn sends up to 6 and 123, also as the first value a learning sees.
 #[must_use]
 pub fn looks_relative(value: u8) -> bool {
-    matches!(value, 1..=3 | 125..=127)
+    matches!(value, 1..=7 | 121..=127)
 }
 
 /// How many steps of an endless knob go from the bottom to the top of a value on the device `name`.
@@ -178,7 +179,8 @@ pub fn looks_relative(value: u8) -> bool {
 /// need many turns otherwise.
 #[must_use]
 pub fn knob_steps(name: &str) -> f32 {
-    if name.to_ascii_lowercase().contains("apc key") {
+    let name = name.to_ascii_lowercase();
+    if name.contains("apc key") && name.contains("mk2") {
         400.0
     } else {
         127.0
@@ -1034,6 +1036,7 @@ mod tests {
     #[test]
     fn the_device_decides_how_far_a_step_of_a_knob_goes() {
         assert_eq!(knob_steps("nanoKONTROL2"), 127.0);
+        assert_eq!(knob_steps("APC Key 25"), 127.0, "not measured");
         assert_eq!(knob_steps("MIDIIN2 (APC Key 25 mk2)"), 400.0);
         let view = view();
         let knob = Bound {
@@ -1053,16 +1056,16 @@ mod tests {
             number(&map.step(cc(48, 1), &view))
         };
         let coarse = step(None);
-        let fine = step(Some("APC Key 25 mk2"));
+        let fine = step(Some("MIDIIN2 (APC Key 25 mk2)"));
         assert!(fine > 0.0 && fine < coarse, "{fine} {coarse}");
     }
 
     #[test]
     fn a_first_value_in_the_middle_is_no_step() {
-        for value in [4, 64, 100, 124] {
+        for value in [8, 64, 100, 120] {
             assert!(!looks_relative(value), "{value}");
         }
-        for value in [1, 3, 125, 127] {
+        for value in [1, 6, 123, 127] {
             assert!(looks_relative(value), "{value}");
         }
     }
