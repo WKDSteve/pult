@@ -335,6 +335,14 @@ fn learn_and_midi_name_what_keeps_midi_off() {
     let said = stderr(&output);
     assert!(said.contains("midi.toml does not read"), "{said}");
     assert!(!said.contains("nothing moved"), "{said}");
+    assert_eq!(stdout(&output), "", "it does not ask for a movement first");
+    let output = pult(&folder.0, &["unlearn", "input/1/gain"]);
+    assert_eq!(output.status.code(), Some(1), "nothing was freed");
+    assert!(
+        stderr(&output).contains("cannot unlearn"),
+        "{}",
+        stderr(&output)
+    );
     assert!(
         started.elapsed() < Duration::from_secs(20),
         "it does not wait"

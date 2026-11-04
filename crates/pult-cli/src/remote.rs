@@ -103,8 +103,19 @@ fn midi_devices() -> Result<Vec<String>, Problem> {
     Ok(lines)
 }
 
+/// Fails with what keeps MIDI off, if anything does: asking would look as if it had a chance.
+fn refuse_if_midi_is_off(client: &mut Client, what: &str) -> Result<(), Problem> {
+    match client.state()?.midi.and_then(|midi| midi.problem) {
+        Some(why) => Err(Problem::Client(ClientError::Failed(format!(
+            "cannot {what}: {why}"
+        )))),
+        None => Ok(()),
+    }
+}
+
 /// Asks for a learning and waits until the movement came or it gave up.
 fn learn(client: &mut Client, target: &str) -> Result<Vec<String>, Problem> {
+    refuse_if_midi_is_off(client, "learn")?;
     for line in client.op(&Op::Learn {
         target: target.to_owned(),
     })? {
@@ -119,11 +130,6 @@ fn learn(client: &mut Client, target: &str) -> Result<Vec<String>, Problem> {
                 "this pult has no MIDI".to_owned(),
             )));
         };
-        if let Some(why) = midi.problem {
-            return Err(Problem::Client(ClientError::Failed(format!(
-                "cannot learn: {why}"
-            ))));
-        }
         if midi.learning.as_deref() != Some(target) {
             return match midi.bindings.iter().find(|b| b.target == target) {
                 Some(bound) => Ok(vec![format!("{} -> {target}", bound.control)]),
@@ -187,6 +193,7 @@ fn answer(request: &Remote) -> Result<Vec<String>, Problem> {
         }
         Remote::Learn(target) => learn(&mut client, target),
         Remote::Unlearn(target) => {
+            refuse_if_midi_is_off(&mut client, "unlearn")?;
             client.op(&Op::Unlearn {
                 target: target.clone(),
             })?;
