@@ -14,17 +14,16 @@ use std::time::Duration;
 
 use appkit_core::authn::{Clock, Secret};
 use appkit_core::identity::AppIdentity;
-use appkit_hub::{
-    GuardRules, HubStatus, Limits, Page, Pages, RunningServer, Runtime, ServeParts, serve,
-};
+use appkit_hub::{GuardRules, HubStatus, Limits, RunningServer, Runtime, ServeParts, serve};
 
 mod client;
 mod control;
 mod link;
+mod pages;
 mod routes;
 
 pub use appkit_hub::env::Env;
-pub use client::{Client, ClientError};
+pub use client::{Client, ClientError, start_window};
 pub use control::Control;
 pub use link::{Link, Pump, link};
 
@@ -79,19 +78,6 @@ impl Runtime for Status {
     fn stop(&self) {}
 }
 
-/// No page yet: the placeholder of the kit is served.
-struct NoPages;
-
-impl Pages for NoPages {
-    fn page(&self, _request_path: &str) -> Option<Page> {
-        None
-    }
-
-    fn has_index(&self) -> bool {
-        false
-    }
-}
-
 /// Starts the hub.
 ///
 /// # Errors
@@ -113,7 +99,7 @@ pub async fn start(start: Start) -> io::Result<RunningServer> {
             version: env!("CARGO_PKG_VERSION"),
             build_id: None,
             guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
-            ui: Arc::new(NoPages),
+            ui: Arc::new(pages::Remote),
             runtime: Status {
                 hello: start.status,
                 link,

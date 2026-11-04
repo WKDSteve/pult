@@ -191,6 +191,14 @@ impl App {
         ctx.send_viewport_cmd(ViewportCommand::Close);
     }
 
+    /// Ends the program when a client of the control interface asked for that.
+    fn quit_if_asked(&mut self, ctx: &egui::Context) {
+        let asked = self.hub.as_ref().is_some_and(|(_, pump)| pump.stop_asked());
+        if asked && self.window != Window::Quitting {
+            self.quit(ctx);
+        }
+    }
+
     /// Does what the tray asked for and what closing the window means.
     fn tray_and_close(&mut self, ctx: &egui::Context) {
         while let Ok(command) = self.commands.try_recv() {
@@ -260,6 +268,7 @@ impl eframe::App for App {
                     self.state.settings_problem(view.elapsed, &note);
                 }
             }
+            self.quit_if_asked(ctx);
             ctx.request_repaint_after(FRAME);
         }
     }
@@ -295,6 +304,7 @@ impl eframe::App for App {
                     None => {}
                 }
             }
+            self.quit_if_asked(&ctx);
             ctx.request_repaint_after(FRAME);
             return;
         }

@@ -37,6 +37,11 @@ USAGE:
     pult scene <NAME>       pult scenes
     pult show [--json]
     pult save
+    pult open [--print]     the remote control page in the browser, or its link
+    pult stop               end the route, as Enter in it would
+
+  The window:
+    pult start [--open]     start it unless a route runs; --open shows the page too
 
 A target is an input number (1), a unique part of its name or label (cable) or a bus name
 (A1). `save` writes to the profile the route came from. These end with status 1 when no pult
@@ -100,6 +105,18 @@ pub enum Remote {
     Save,
     /// The words of a command of its input line, understood against its inputs and buses.
     Line(String),
+    /// The remote control page, with a new pairing code.
+    Open {
+        /// Only print the link.
+        print: bool,
+    },
+    /// Ends the route.
+    Stop,
+    /// Starts the window unless a route runs.
+    Start {
+        /// Opens the page too.
+        open: bool,
+    },
 }
 
 /// What the user asked for.
@@ -161,6 +178,19 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
             Some(_) => Err(usage(
                 "a running pult saves to the profile it came from; save takes no file here",
             )),
+        },
+        "stop" => no_more(args).map(|()| Command::Remote(Remote::Stop)),
+        "open" => match args.next().as_deref() {
+            None => Ok(Command::Remote(Remote::Open { print: false })),
+            Some("--print") => {
+                no_more(args).map(|()| Command::Remote(Remote::Open { print: true }))
+            }
+            Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
+        },
+        "start" => match args.next().as_deref() {
+            None => Ok(Command::Remote(Remote::Start { open: false })),
+            Some("--open") => no_more(args).map(|()| Command::Remote(Remote::Start { open: true })),
+            Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
         },
         "gain" | "mute" | "unmute" | "pan" | "route" | "unroute" | "scene" => {
             // Quoted or not: the input line reads a name of several words either way.

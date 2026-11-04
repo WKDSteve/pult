@@ -2,10 +2,11 @@
 //! script or editor.
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 use pult_core::control::{self, Command};
 use pult_core::protocol::{Op, State};
-use pult_hub::{Client, ClientError};
+use pult_hub::{Client, ClientError, start_window};
 
 use crate::args::Remote;
 
@@ -46,9 +47,69 @@ impl From<ClientError> for Problem {
     }
 }
 
+/// How long a window that was just started may take to bring up its route.
+const ROUTE_TRIES: usize = 60;
+const ROUTE_WAIT: Duration = Duration::from_millis(250);
+
+/// Starts the window unless a route runs, and shows the page if asked to and there is a route.
+fn start(open: bool) -> Result<Vec<String>, Problem> {
+    let mut lines = Vec::new();
+    let client = match Client::find() {
+        Ok(client) => {
+            lines.push("pult is running already".to_owned());
+            client
+        }
+        Err(ClientError::NotRunning) => {
+            let program = std::env::current_exe()
+                .map_err(|e| Problem::Client(ClientError::Failed(e.to_string())))?;
+            start_window(&program).map_err(|why| Problem::Client(ClientError::Failed(why)))?;
+            lines.push("started the window".to_owned());
+            let Some(client) = wait_for_route() else {
+                lines.push("no route yet: pick a profile in the window".to_owned());
+                return Ok(lines);
+            };
+            client
+        }
+        Err(other) => return Err(other.into()),
+    };
+    if open {
+        client.open_page()?;
+    }
+    Ok(lines)
+}
+
+fn wait_for_route() -> Option<Client> {
+    for _ in 0..ROUTE_TRIES {
+        if let Ok(client) = Client::find() {
+            return Some(client);
+        }
+        std::thread::sleep(ROUTE_WAIT);
+    }
+    None
+}
+
 fn answer(request: &Remote) -> Result<Vec<String>, Problem> {
-    let mut client = Client::find()?;
+    if let Remote::Start { open } = request {
+        return start(*open);
+    }
+    let mut client = match Client::find() {
+        // Nothing to end is what was asked for.
+        Err(ClientError::NotRunning) if *request == Remote::Stop => {
+            return Ok(vec!["no pult is running".to_owned()]);
+        }
+        found => found?,
+    };
     match request {
+        Remote::Start { .. } => unreachable!("handled above"),
+        Remote::Stop => {
+            client.stop()?;
+            Ok(vec!["stopped".to_owned()])
+        }
+        Remote::Open { print: true } => Ok(vec![client.page_link()?]),
+        Remote::Open { print: false } => {
+            client.open_page()?;
+            Ok(Vec::new())
+        }
         Remote::Show { json: true } => {
             let state = client.state()?;
             let text = serde_json::to_string(&state)

@@ -31,7 +31,6 @@ impl Drop for Folder {
 
 /// A hub on the demo desk, pumped by a thread as the owner of a route would.
 struct Hub {
-    control: Option<Control>,
     stop: Arc<AtomicBool>,
     owner: Option<thread::JoinHandle<()>>,
 }
@@ -47,14 +46,15 @@ impl Hub {
         let stopping = Arc::clone(&stop);
         let owner = thread::spawn(move || {
             let mut desk = FakeDesk::new();
-            while !stopping.load(Ordering::Relaxed) {
+            // As a route: it ends when asked to, and its hub with it.
+            while !stopping.load(Ordering::Relaxed) && !pump.stop_asked() {
                 let view = desk.view();
                 pump.pump(&mut desk, &view);
                 thread::sleep(Duration::from_millis(5));
             }
+            drop(control);
         });
         Self {
-            control: Some(control),
             stop,
             owner: Some(owner),
         }
@@ -63,7 +63,6 @@ impl Hub {
 
 impl Drop for Hub {
     fn drop(&mut self) {
-        self.control.take();
         self.stop.store(true, Ordering::Relaxed);
         if let Some(owner) = self.owner.take() {
             let _ = owner.join();
@@ -209,6 +208,70 @@ fn what_needs_no_pult_is_refused_before_looking_for_one() {
     assert_eq!(output.status.code(), Some(2));
     let output = pult(&folder.0, &["scenes", "abend"]);
     assert_eq!(output.status.code(), Some(2));
+    for args in [
+        &["stop", "now"][..],
+        &["open", "--pdf"],
+        &["start", "--tray"],
+        &["open", "--print", "x"],
+    ] {
+        let output = pult(&folder.0, args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[test]
+fn stop_ends_the_route_and_says_so() {
+    let folder = Folder::new("stop");
+    let hub = Hub::start(&folder.0);
+    let output = pult(&folder.0, &["stop"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "stopped");
+    assert!(!folder.0.join("hub.json").exists());
+    assert!(!folder.0.join("control.secret").exists());
+    drop(hub);
+
+    // Nothing to end is no failure: it is what was asked for.
+    let output = pult(&folder.0, &["stop"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "no pult is running");
+}
+
+#[test]
+fn open_gives_a_link_with_a_code_in_its_fragment() {
+    let folder = Folder::new("open");
+    let _hub = Hub::start(&folder.0);
+    let output = pult(&folder.0, &["open", "--print"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let link = stdout(&output);
+    assert!(link.trim().starts_with("http://127.0.0.1:"), "{link}");
+    assert!(link.contains("/#pair="), "{link}");
+}
+
+#[test]
+fn start_with_a_route_running_starts_nothing_and_without_a_window_says_so() {
+    let folder = Folder::new("start");
+    let hub = Hub::start(&folder.0);
+    let output = pult(&folder.0, &["start"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "pult is running already");
+    drop(hub);
+
+    // A copy of the program alone in a folder: no route, and no window to start.
+    let alone = folder
+        .0
+        .join(format!("pult{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(env!("CARGO_BIN_EXE_pult"), &alone).expect("a copy");
+    let output = Command::new(&alone)
+        .arg("start")
+        .env("PULT_CONFIG_DIR", &folder.0)
+        .output()
+        .expect("pult runs");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("no window beside"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

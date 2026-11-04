@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>pult</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/style.css" />
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>pult</h1>
+      <p id="route" class="dim"></p>
+      <p id="health" class="dim"></p>
+    </header>
+    <p id="notice" role="status"></p>
+    <main id="mixer" hidden>
+      <section aria-labelledby="scenes-title" id="scenes-section" hidden>
+        <h2 id="scenes-title">Scenes</h2>
+        <div id="scenes" class="row"></div>
+      </section>
+      <section aria-labelledby="inputs-title">
+        <h2 id="inputs-title">Inputs</h2>
+        <ul id="inputs" class="strips"></ul>
+      </section>
+      <section aria-labelledby="buses-title">
+        <h2 id="buses-title">Buses</h2>
+        <ul id="buses" class="strips"></ul>
+      </section>
+    </main>
+  </body>
+</html>

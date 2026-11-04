@@ -108,6 +108,7 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `{"op": "scene", "name": "abend"}` | zu einer Szene wechseln, Groß- und Kleinschreibung zählen nicht |
 | `{"op": "meter_point", "value": "pre"}` | Eingangs-Meter vor (`pre`) oder hinter (`post`) den Fader legen |
 | `{"op": "save"}` | den Stand in das Profil speichern, aus dem die Route kam |
+| `{"op": "stop"}` | die Route beenden; wer sie betreibt, macht das in der nächsten Runde selbst und räumt auf |
 
 | Adresse | Wert |
 |---|---|
@@ -133,8 +134,16 @@ sauber, wenn der Client gerade nichts tut. Ohne `ramp_ms` dauert eine Änderung 
 Fehler haben die Form `{"error": {"code": "…", "message": "…"}}`. Operationen sind wie alle Änderungen begrenzt (Kit:
 `429`).
 
+## Die Seite
+
+`GET /` liefert ohne Anmeldung eine kleine Fernbedienung, Dateien aus dem Programm, nur mit der strengen Richtlinie des Kits
+und ohne Daten: Die kommen über die Routen oben, mit einer Sitzung. Ein Link von `pult open --print` hat die Form
+`http://127.0.0.1:<port>/#pair=<code>`. Der Code steht im Fragment, geht also an keinen Server und in keinen Referrer, und die
+Seite nimmt ihn als Erstes aus der Adressleiste.
+
 ## Zum Ausprobieren
 
 `tools/control-check.py` fährt das alles einmal gegen einen echten Lauf durch (nur auf den stummen Ausgängen „Voicemeeter
-In 4/5“, mit eigenem Konfigurationsordner), wechselt auch Szenen unter Last und zeigt in Python, wie ein Client aussieht. Für Rust-Clients liegen die
+In 4/5“, mit eigenem Konfigurationsordner), wechselt auch Szenen unter Last und zeigt in Python, wie ein Client aussieht. `tools/page-check.mjs` prüft die Seite in einem
+echten Chrome gegen das Demo-Pult (`cargo run -p pult-hub --example demo-hub`). Für Rust-Clients liegen die
 Nachrichten als Typen in `pult_core::protocol`, ohne Geräte-Code.

@@ -12,8 +12,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use appkit_core::registry;
+use appkit_hub::browser;
 use appkit_hub::client::{self, Reply};
 use appkit_hub::env::Env;
+use appkit_hub::launch::{LaunchOpts, Window, spawn};
 use pult_core::protocol::{Op, State};
 use serde_json::{Value, json};
 use tokio::runtime::Runtime;
@@ -27,6 +29,11 @@ pub(crate) const SESSION_FOLDER: &str = "cli";
 /// only just started.
 const STATE_TRIES: usize = 20;
 const STATE_WAIT: Duration = Duration::from_millis(100);
+
+/// How long a route that was asked to stop may take: its owner looks in a few times a second,
+/// and its devices take a moment to close.
+const STOP_TRIES: usize = 100;
+const STOP_WAIT: Duration = Duration::from_millis(100);
 
 /// Why a client got no answer it can use.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +152,48 @@ impl Client {
             .unwrap_or_default())
     }
 
+    /// Asks the route to end, as the person at it could, and waits until it has.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClientError`] when it refuses or does not end in time.
+    pub fn stop(&mut self) -> Result<(), ClientError> {
+        self.op(&Op::Stop {})?;
+        for _ in 0..STOP_TRIES {
+            let still = self
+                .runtime
+                .block_on(appkit_hub::instance::running_hub(&self.dir, &IDENTITY));
+            if still.is_none() {
+                return Ok(());
+            }
+            std::thread::sleep(STOP_WAIT);
+        }
+        Err(ClientError::Failed(
+            "the route was asked to stop and still runs".to_owned(),
+        ))
+    }
+
+    /// A link to the page with a new pairing code, good once and for a minute (`SRV-10`): the code
+    /// is in the fragment, which goes to no server and no referrer. It needs no session.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClientError`] when the hub gives no code.
+    pub fn page_link(&self) -> Result<String, ClientError> {
+        let code = self.pairing_code()?;
+        Ok(format!("http://127.0.0.1:{}/#pair={code}", self.port))
+    }
+
+    /// Opens the page in the default browser, with a new pairing code.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClientError`] when the hub gives no code or no browser starts.
+    pub fn open_page(&self) -> Result<(), ClientError> {
+        browser::open(&self.page_link()?, &[self.port])
+            .map_err(|why| failed("cannot open the browser", why))
+    }
+
     /// One request under the session, with a new one when the old is no longer known.
     fn call(&mut self, method: &str, path: &str, body: &str) -> Result<Reply, ClientError> {
         if self.token.is_none() {
@@ -171,28 +220,7 @@ impl Client {
 
     /// Gets a session with the control secret, and keeps it for the next call.
     fn pair(&mut self) -> Result<(), ClientError> {
-        let secret = registry::read_secret(&self.dir)
-            .map_err(|e| failed("cannot read the control secret", e))?
-            .ok_or(ClientError::NotRunning)?;
-        let bearer = format!("Bearer {secret}");
-        let headers = [
-            ("Authorization", bearer.as_str()),
-            ("Content-Type", "application/json"),
-        ];
-        let reply = self
-            .runtime
-            .block_on(client::request(
-                self.port,
-                "POST",
-                "/api/control/pair",
-                &headers,
-                "{}",
-            ))
-            .map_err(|e| failed("the hub did not answer", e))?;
-        if reply.status != 200 {
-            return Err(refusal(&reply));
-        }
-        let code = field(&reply, "code")?;
+        let code = self.pairing_code()?;
         let origin = format!("http://127.0.0.1:{}", self.port);
         let headers = [
             ("Origin", origin.as_str()),
@@ -218,6 +246,58 @@ impl Client {
         self.token = Some(token);
         Ok(())
     }
+
+    /// A pairing code, against the control secret.
+    fn pairing_code(&self) -> Result<String, ClientError> {
+        let secret = registry::read_secret(&self.dir)
+            .map_err(|e| failed("cannot read the control secret", e))?
+            .ok_or(ClientError::NotRunning)?;
+        let bearer = format!("Bearer {secret}");
+        let headers = [
+            ("Authorization", bearer.as_str()),
+            ("Content-Type", "application/json"),
+        ];
+        let reply = self
+            .runtime
+            .block_on(client::request(
+                self.port,
+                "POST",
+                "/api/control/pair",
+                &headers,
+                "{}",
+            ))
+            .map_err(|e| failed("the hub did not answer", e))?;
+        if reply.status != 200 {
+            return Err(refusal(&reply));
+        }
+        field(&reply, "code")
+    }
+}
+
+/// Starts the window of pult, the program `pult-app` beside `program`, on its own: nothing of this
+/// process goes along. It opens the profile it had last, and its hub comes up with the route.
+///
+/// # Errors
+///
+/// A text when there is no such program beside it, or it does not start.
+pub fn start_window(program: &Path) -> Result<(), String> {
+    let folder = program.parent().ok_or("the program has no folder")?;
+    let window = folder.join(format!("pult-app{}", std::env::consts::EXE_SUFFIX));
+    if !window.is_file() {
+        return Err(format!(
+            "no window beside this program: {}",
+            window.display()
+        ));
+    }
+    spawn(
+        &window,
+        &[],
+        &LaunchOpts {
+            cwd: folder,
+            window: Window::Default,
+        },
+    )
+    .map(|_| ())
 }
 
 /// Where the kept session lies.
@@ -421,6 +501,28 @@ mod tests {
             Err(ClientError::Refused(why)) => assert!(why.contains("no scene"), "{why}"),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_page_link_carries_a_code_only_in_its_fragment() {
+        let folder = Folder::new("link");
+        let _running = Running::start(&folder);
+        let client = Client::find_with(&folder.env()).expect("a pult");
+        let link = client.page_link().expect("a link");
+        let (place, code) = link.split_once("/#pair=").expect("the fragment");
+        assert_eq!(place, format!("http://127.0.0.1:{}", client.port));
+        assert!(
+            code.len() >= 32 && code.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{code}"
+        );
+        assert!(browser::is_allowed(&link, &[client.port]), "{link}");
+    }
+
+    #[test]
+    fn no_window_beside_the_program_is_said() {
+        let folder = Folder::new("window");
+        let why = start_window(&folder.0.join("pult.exe")).expect_err("nothing there");
+        assert!(why.contains("no window beside"), "{why}");
     }
 
     #[test]

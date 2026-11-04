@@ -274,6 +274,8 @@ pub enum Op {
     /// Saves the current state to the profile the route came from. A variant with fields,
     /// empty as they are: serde would let anything pass beside a unit variant.
     Save {},
+    /// Ends the route, as the person at it could. The one who runs it does that, not the desk.
+    Stop {},
 }
 
 impl Op {
@@ -344,6 +346,7 @@ impl Op {
                 MeterPlace::Post => MeterPoint::PostFader,
             })),
             Self::Save {} => Ok(Action::SaveProfile { path: None }),
+            Self::Stop {} => Err("ending the route is not for the desk".to_owned()),
         }
     }
 }
@@ -667,6 +670,7 @@ mod tests {
             r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":-1}"#,
             r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":"soon"}"#,
             r#"{"op":"scene"}"#,
+            r#"{"op":"stop","now":true}"#,
             r#"{"op":"scene","name":"Abend","path":"x"}"#,
         ] {
             assert!(serde_json::from_str::<Op>(json).is_err(), "{json}");

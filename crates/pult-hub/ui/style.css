@@ -1,0 +1,137 @@
+:root {
+  color-scheme: light dark;
+  --base: #f4f4f2;
+  --surface: #ffffff;
+  --line: #c9c9c4;
+  --text: #1b1b1a;
+  --dim: #55554f;
+  --accent: #0b5cad;
+  --on-accent: #ffffff;
+  --alert: #a3190f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --base: #161716;
+    --surface: #212321;
+    --line: #434641;
+    --text: #ecece8;
+    --dim: #b0b1aa;
+    --accent: #7db8f5;
+    --on-accent: #101a24;
+    --alert: #ff9a90;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 44rem;
+  padding: 1rem;
+  background: var(--base);
+  color: var(--text);
+  font: 15px/1.4 system-ui, sans-serif;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+h2 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--dim);
+}
+
+p {
+  margin: 0.15rem 0;
+}
+
+.dim {
+  color: var(--dim);
+}
+
+#notice:not(:empty) {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+#notice.problem {
+  border-color: var(--alert);
+  color: var(--alert);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.strips {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 0.75rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.strip .name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.strip .detail {
+  grid-column: 1 / -1;
+  color: var(--dim);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.strip meter,
+.strip input[type="range"] {
+  width: 100%;
+}
+
+.strip .level {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+button {
+  min-height: 2rem;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--base);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

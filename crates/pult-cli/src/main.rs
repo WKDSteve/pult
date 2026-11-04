@@ -180,6 +180,9 @@ fn run(desk: &mut EngineDesk, log: Option<Log>, bus_names: Vec<String>, pump: Op
                 let tick = recorder.tick(desk);
                 console.notes(&tick.notes);
                 console.status(tick.line);
+                if tick.stop {
+                    break;
+                }
                 next = Instant::now() + STATUS_INTERVAL;
             }
         }
@@ -250,6 +253,7 @@ impl Recorder {
         Tick {
             notes,
             line: monitor::status_line(&snap, &self.bus_names),
+            stop: self.pump.as_ref().is_some_and(Pump::stop_asked),
         }
     }
 
@@ -282,6 +286,8 @@ impl Recorder {
 struct Tick {
     notes: Vec<String>,
     line: String,
+    /// A client asked for the route to end.
+    stop: bool,
 }
 
 /// Keeps the tone playing until Enter is pressed or the device fails.

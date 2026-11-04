@@ -43,6 +43,8 @@ pub struct Pump {
     /// The view to publish next, with the highest peaks since the last one.
     pending: Option<MixerView>,
     published_at: Option<Duration>,
+    /// A client asked for the route to end.
+    stop_asked: bool,
 }
 
 /// A way between a hub and the owner of a mixer.
@@ -62,6 +64,7 @@ pub fn link() -> (Arc<Link>, Pump) {
             seq: 0,
             pending: None,
             published_at: None,
+            stop_asked: false,
         },
     )
 }
@@ -92,6 +95,13 @@ impl Pump {
         }
         let mut done = Vec::new();
         while let Ok(asked) = self.ops.try_recv() {
+            // Not an action of the desk: ending the route is the owner's.
+            if matches!(asked.op, Op::Stop {}) {
+                self.stop_asked = true;
+                let _ = asked.answer.send(Ok(vec!["stopping".to_owned()]));
+                done.push("asked to stop".to_owned());
+                continue;
+            }
             let answer = asked.op.action(view).and_then(|action| desk.act(action));
             match &answer {
                 Ok(lines) => done.extend(lines.iter().map(|line| printable(line))),
@@ -101,6 +111,12 @@ impl Pump {
             let _ = asked.answer.send(answer);
         }
         done
+    }
+
+    /// Whether a client asked for the route to end; the owner ends it, as if the person had.
+    #[must_use]
+    pub fn stop_asked(&self) -> bool {
+        self.stop_asked
     }
 
     /// Notes the events of `view` and merges it into the state that is due next.
@@ -240,6 +256,24 @@ mod tests {
         assert!(good_answer.try_recv().expect("an answer").is_ok());
         assert!(bad_answer.try_recv().expect("an answer").is_err());
         assert!((desk.view().inputs[0].gain_db + 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_stop_is_for_the_owner_and_not_for_the_desk() {
+        let (link, mut pump) = link();
+        let mut desk = FakeDesk::new();
+        assert!(!pump.stop_asked());
+        let (asked, mut answer) = oneshot::channel();
+        let sent = link.ops.try_send(Asked {
+            op: Op::Stop {},
+            answer: asked,
+        });
+        assert!(sent.is_ok());
+        let view = desk.view();
+        let done = pump.pump(&mut desk, &view);
+        assert_eq!(done, ["asked to stop"]);
+        assert!(pump.stop_asked());
+        assert!(answer.try_recv().expect("an answer").is_ok());
     }
 
     #[test]

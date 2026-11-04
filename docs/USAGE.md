@@ -291,6 +291,9 @@ pult show
 | `pult scenes` | die Szenen, je eine Zeile |
 | `pult show` | Eingänge, Busse und Szenen; `pult show --json` den ganzen Zustand für Programme |
 | `pult save` | in das Profil speichern, aus dem die Route kam; eine andere Datei geht von außen nicht |
+| `pult open` | die Fernbedienung im Browser öffnen, `pult open --print` nennt nur den Link |
+| `pult stop` | die Route beenden, wie Enter in ihr oder Beenden im Fenster; läuft keine, ist das kein Fehler |
+| `pult start` | das Fenster starten, außer es läuft schon eine Route; `pult start --open` zeigt danach die Fernbedienung |
 
 - **Eingänge** findet pult über die Nummer, einen eindeutigen Teil des Namens oder des Labels. Anführungszeichen sind
   nicht nötig: `pult mute Analogue 1` und `pult mute "Analogue 1"` meinen dasselbe.
@@ -298,6 +301,19 @@ pult show
 - **Dauer:** Eine Änderung wirkt mit der nächsten Runde der Route, bei `pult run` nach höchstens 200 ms.
 - **Sitzung:** pult merkt sich die Anmeldung in `%APPDATA%\pult\cli`, nur für deinen Benutzer lesbar, und löscht sie am
   Ende des Laufs.
+
+### Die Fernbedienung im Browser
+
+`pult open` zeigt eine kleine Seite: Pegel, Gain, Mute, Szenen und welche Route läuft, in Hell und Dunkel, auch schmal. Sie
+ist eine Fernbedienung, kein zweites Pult; was angezeigt wird, kommt immer von pult. Der Link gilt einmal und 60 Sekunden,
+die Anmeldung danach nur für diesen Tab, bis die Route endet. Nach dem Ende der Route verlangt die Seite einen neuen Link
+(`pult open`). Sie hört nur auf `127.0.0.1` und lädt nichts von anderswo.
+
+### Aus dem Hub
+
+In `hub-desktop` ist pult eine Kachel: Sie startet das Fenster mit dem zuletzt geöffneten Profil, zeigt die Fernbedienung,
+zeigt, ob eine Route läuft, und beendet sie. Dafür müssen `pult.exe` und `pult-app.exe` nebeneinander liegen, wie
+`scripts\build-install.ps1` sie ablegt.
 
 ### In Neovim
 
