@@ -1,0 +1,22 @@
+[package]
+name = "pult-hub"
+description = "The local control interface of pult, on appkit-hub; keeps the server away from the audio crates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+appkit-core.workspace = true
+appkit-hub.workspace = true
+axum.workspace = true
+
+[dev-dependencies]
+appkit-testkit.workspace = true
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/pult-core", "crates/pult-engine", "crates/pult-cli", "crates/pult-app"]
+members = [
+    "crates/pult-core",
+    "crates/pult-engine",
+    "crates/pult-hub",
+    "crates/pult-cli",
+    "crates/pult-app",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +20,12 @@ publish = false
 [workspace.dependencies]
 pult-core = { path = "crates/pult-core" }
 pult-engine = { path = "crates/pult-engine" }
+pult-hub = { path = "crates/pult-hub" }
+# The kit the local hubs of all these apps are built on, pinned by its tag.
+appkit-core = { git = "https://github.com/WKDSteve/appkit", tag = "v0.32.1" }
+appkit-hub = { git = "https://github.com/WKDSteve/appkit", tag = "v0.32.1" }
+appkit-testkit = { git = "https://github.com/WKDSteve/appkit", tag = "v0.32.1" }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 cpal = "0.18.2"
 rtrb = "0.4.1"
 assert_no_alloc = "1.1.2"

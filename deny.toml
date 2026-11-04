@@ -20,6 +20,10 @@ allow = [
     "MIT",
     "Apache-2.0",
     "Unicode-3.0",
+    # pult-hub, through appkit-hub: matchit (the router of axum) is MIT AND BSD-3-Clause, and
+    # notify (the file watcher of the kit) is CC0-1.0, a public domain dedication.
+    "BSD-3-Clause",
+    "CC0-1.0",
     # assert_no_alloc (the allocation guard of the audio callbacks): permissive, notice only.
     "BSD-1-Clause",
     # pult-app (egui, wgpu): foldhash and others under Zlib, libloading under ISC; both
@@ -42,4 +46,5 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# The hub kit of the family, pinned by its tag (crates/pult-hub).
+allow-git = ["https://github.com/WKDSteve/appkit"]
