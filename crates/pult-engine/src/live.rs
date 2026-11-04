@@ -79,6 +79,9 @@ impl Running {
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
             Command::Scene(name) => self.scene(name),
             Command::Scenes => Ok(vec![self.scene_names()]),
+            Command::Learn(_) | Command::Unlearn(_) => {
+                Err("MIDI is not for the route but for the one who runs it".to_owned())
+            }
             Command::Show => Ok(self.show()),
             Command::Save(path) => self.save_profile(Path::new(path)),
             Command::Help => Ok(HELP.lines().map(str::to_owned).collect()),

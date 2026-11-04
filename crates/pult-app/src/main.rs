@@ -41,6 +41,8 @@ struct App {
     desk: Option<Box<dyn Desk>>,
     /// The control interface, once a real route plays; never for the demo.
     hub: Option<(pult_hub::Control, pult_hub::Pump)>,
+    /// The MIDI controller, which runs with the hub: one owner per machine.
+    midi: Option<pult_midi::Midi>,
     /// The profile while it opens in the background.
     opening: Option<Opening<EngineDesk>>,
     /// Why the profile did not open; shown on the start screen.
@@ -81,6 +83,7 @@ impl App {
             profile: None,
             desk: None,
             hub: None,
+            midi: None,
             opening: None,
             problem: None,
             state: ConsoleState::default(),
@@ -131,7 +134,10 @@ impl App {
                 self.use_desk(Box::new(desk));
                 if self.hub.is_none() {
                     match pult_hub::Control::start() {
-                        Ok(hub) => self.hub = Some(hub),
+                        Ok(hub) => {
+                            self.hub = Some(hub);
+                            self.midi = Some(pult_midi::Midi::start());
+                        }
                         Err(why) => self.notes.push(format!("no control interface: {why}")),
                     }
                 }
@@ -257,10 +263,10 @@ impl eframe::App for App {
             // Still asked for views: the engine looks for lost devices then, and the events
             // view keeps what happened meanwhile.
             if let Some(desk) = &mut self.desk {
-                let view = desk.view();
+                let mut view = desk.view();
                 self.state.take(&view);
-                if let Some((_, pump)) = &mut self.hub {
-                    for line in pump.pump(desk.as_mut(), &view) {
+                if let (Some((_, pump)), Some(midi)) = (&mut self.hub, &mut self.midi) {
+                    for line in pult_midi::serve(pump, midi, desk.as_mut(), &mut view) {
                         self.state.remote(view.elapsed, &line);
                     }
                 }
@@ -281,12 +287,12 @@ impl eframe::App for App {
         }
         if let Some(desk) = &mut self.desk {
             let now = self.clock.elapsed().as_secs_f64();
-            let view = desk.view();
+            let mut view = desk.view();
             for note in self.notes.drain(..) {
                 self.state.settings_problem(view.elapsed, &note);
             }
-            if let Some((_, pump)) = &mut self.hub {
-                for line in pump.pump(desk.as_mut(), &view) {
+            if let (Some((_, pump)), Some(midi)) = (&mut self.hub, &mut self.midi) {
+                for line in pult_midi::serve(pump, midi, desk.as_mut(), &mut view) {
                     self.state.remote(view.elapsed, &line);
                 }
             }

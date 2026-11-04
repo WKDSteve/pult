@@ -24,7 +24,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Geräte ab- und anstecken während des Laufs (Hot-Plug): der Rest spielt weiter, das Gerät kommt von selbst zurück | fertig, am echten Aufbau geprüft |
 | Ton einzelner Programme als Eingang (Prozess-Loopback, `--from app:Spotify`, `pult programs`); beendet sich das Programm, wird es beim Neustart wieder aufgenommen | fertig |
 | Szenen im Profil: Gain, Pan, Mute und Matrix wechseln ohne Aussetzer, auf Wunsch weich überblendet; keine Änderung springt mehr (`docs/USAGE.md`) | fertig |
-| Steuern von außen: `pult mute mikro`, `:My pult` in Neovim, eine Fernbedienung im Browser (`pult open`), Kachel im Hub (`docs/USAGE.md`, `docs/CONTROL.md`) | fertig |
+| Steuern von außen: `pult mute mikro`, `:My pult` in Neovim, eine Fernbedienung im Browser (`pult open`), Kachel im Hub, MIDI-Controller (`pult learn`) (`docs/USAGE.md`, `docs/CONTROL.md`) | fertig |
 | EQ/Kompressor | geplant |
 
 ## Plattformen
@@ -41,6 +41,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | `crates/pult-core` | Mischen, Kanal-Zuordnung, Pegel, Drift-Regelung mit Resampler, Geräteauswahl, Testton; ohne Geräte-I/O, komplett testbar. Diese Typen kann takt später für die Anbindung nutzen. |
 | `crates/pult-engine` | Geräte über `cpal` (WASAPI): auflisten, Streams öffnen, Callbacks an den Kern binden; Profile lesen (`profile`); Ton einzelner Programme (`process`, Windows-Aufrufe in `ffi`) |
 | `crates/pult-hub` | die lokale Steuerschnittstelle auf `appkit-hub` ([`docs/CONTROL.md`](docs/CONTROL.md)); hält `axum` und `tokio` von den Audio-Crates fern |
+| `crates/pult-midi` | der MIDI-Controller auf `midir`: Gerät und Belegung, außerhalb der Audio-Callbacks |
 | `crates/pult-cli` | das Programm `pult` |
 
 Echtzeit-Regel wie in takt: In den Audio-Callbacks wird nichts allokiert, nichts gesperrt und nichts geloggt. Ein Debug-Build bricht mit `assert_no_alloc` ab, sobald ein Callback doch allokiert.

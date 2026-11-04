@@ -15,6 +15,9 @@ pub const DEFAULT_TONE_HZ: f32 = 440.0;
 /// The bus name of a route given with `--to`.
 pub const INLINE_BUS: &str = "A1";
 
+/// How long `pult midi listen` listens when not told.
+const DEFAULT_LISTEN_SECONDS: u64 = 20;
+
 /// The usage text of `pult help`.
 pub const USAGE: &str = "\
 pult - route and mix audio devices
@@ -39,6 +42,14 @@ USAGE:
     pult save
     pult open [--print]     the remote control page in the browser, or its link
     pult stop               end the route, as Enter in it would
+    pult learn <ADDRESS>    the next movement on the MIDI controller binds it; waits for it
+    pult unlearn <ADDRESS>  take a binding off; an address is input/1/gain, bus/A1/mute,
+                            matrix/1/A1 or scene/abend
+    pult midi               the device and what is bound
+
+  Without a running pult:
+    pult midi devices       the MIDI ports of this machine
+    pult midi listen [S]    print what they send for S seconds (default 20)
 
   The window:
     pult start [--open]     start it unless a route runs; --open shows the page too
@@ -112,6 +123,16 @@ pub enum Remote {
     },
     /// Ends the route.
     Stop,
+    /// The next movement binds this; waits for it.
+    Learn(String),
+    /// Takes a binding off.
+    Unlearn(String),
+    /// The device and what is bound.
+    Midi,
+    /// The ports of this machine.
+    MidiDevices,
+    /// Prints what the ports say for so many seconds.
+    MidiListen(u64),
     /// Starts the window unless a route runs.
     Start {
         /// Opens the page too.
@@ -180,6 +201,31 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
             )),
         },
         "stop" => no_more(args).map(|()| Command::Remote(Remote::Stop)),
+        "midi" => match args.next().as_deref() {
+            None => Ok(Command::Remote(Remote::Midi)),
+            Some("devices") => no_more(args).map(|()| Command::Remote(Remote::MidiDevices)),
+            Some("listen") => match args.next() {
+                None => Ok(Command::Remote(Remote::MidiListen(DEFAULT_LISTEN_SECONDS))),
+                Some(seconds) => seconds
+                    .parse()
+                    .map(|s| Command::Remote(Remote::MidiListen(s)))
+                    .map_err(|_| usage(format!("\"{seconds}\" is no number of seconds"))),
+            },
+            Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
+        },
+        "learn" | "unlearn" => {
+            let target = args.collect::<Vec<String>>().join(" ");
+            if target.trim().is_empty() {
+                return Err(usage(format!(
+                    "{sub} needs an address (input/1/gain, scene/abend)"
+                )));
+            }
+            Ok(Command::Remote(if sub == "learn" {
+                Remote::Learn(target)
+            } else {
+                Remote::Unlearn(target)
+            }))
+        }
         "open" => match args.next().as_deref() {
             None => Ok(Command::Remote(Remote::Open { print: false })),
             Some("--print") => {

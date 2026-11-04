@@ -41,6 +41,9 @@ pub struct State {
     /// The scenes it can change to, in profile order; none from a run older than scenes.
     #[serde(default)]
     pub scenes: Vec<String>,
+    /// The MIDI controller, where one runs; none from a run older than that.
+    #[serde(default)]
+    pub midi: Option<crate::midi::MidiStatus>,
 }
 
 /// Where the input meters measure.
@@ -193,6 +196,7 @@ impl State {
             buses: view.buses.iter().map(BusState::new).collect(),
             events,
             scenes: view.scenes.clone(),
+            midi: view.midi.clone(),
         }
     }
 }
@@ -276,6 +280,16 @@ pub enum Op {
     Save {},
     /// Ends the route, as the person at it could. The one who runs it does that, not the desk.
     Stop {},
+    /// The next movement on the MIDI controller binds this. For the one who runs it, not the desk.
+    Learn {
+        /// An address, or `scene/<name>`.
+        target: String,
+    },
+    /// Takes a MIDI binding away. For the one who runs it, not the desk.
+    Unlearn {
+        /// An address, or `scene/<name>`.
+        target: String,
+    },
 }
 
 impl Op {
@@ -309,6 +323,12 @@ impl Op {
                 0,
             ),
             Command::Scene(name) => Self::Scene { name: name.clone() },
+            Command::Learn(target) => Self::Learn {
+                target: target.clone(),
+            },
+            Command::Unlearn(target) => Self::Unlearn {
+                target: target.clone(),
+            },
             Command::Scenes | Command::Show | Command::Save(_) | Command::Help | Command::Stop => {
                 return None;
             }
@@ -347,6 +367,9 @@ impl Op {
             })),
             Self::Save {} => Ok(Action::SaveProfile { path: None }),
             Self::Stop {} => Err("ending the route is not for the desk".to_owned()),
+            Self::Learn { .. } | Self::Unlearn { .. } => {
+                Err("MIDI bindings are not for the desk".to_owned())
+            }
         }
     }
 }
@@ -671,6 +694,8 @@ mod tests {
             r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":"soon"}"#,
             r#"{"op":"scene"}"#,
             r#"{"op":"stop","now":true}"#,
+            r#"{"op":"learn"}"#,
+            r#"{"op":"unlearn","target":"x","y":1}"#,
             r#"{"op":"scene","name":"Abend","path":"x"}"#,
         ] {
             assert!(serde_json::from_str::<Op>(json).is_err(), "{json}");

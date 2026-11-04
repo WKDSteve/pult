@@ -4,6 +4,7 @@ members = [
     "crates/pult-core",
     "crates/pult-engine",
     "crates/pult-hub",
+    "crates/pult-midi",
     "crates/pult-cli",
     "crates/pult-app",
 ]
@@ -21,6 +22,7 @@ publish = false
 pult-core = { path = "crates/pult-core" }
 pult-engine = { path = "crates/pult-engine" }
 pult-hub = { path = "crates/pult-hub" }
+pult-midi = { path = "crates/pult-midi" }
 # The kit the local hubs of all these apps are built on, pinned by its tag.
 appkit-core = { git = "https://github.com/WKDSteve/appkit", tag = "v0.32.1" }
 appkit-hub = { git = "https://github.com/WKDSteve/appkit", tag = "v0.32.1" }

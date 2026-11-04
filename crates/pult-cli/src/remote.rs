@@ -2,11 +2,12 @@
 //! script or editor.
 
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pult_core::control::{self, Command};
 use pult_core::protocol::{Op, State};
 use pult_hub::{Client, ClientError, start_window};
+use pult_midi::device::{listen, ports};
 
 use crate::args::Remote;
 
@@ -46,6 +47,10 @@ impl From<ClientError> for Problem {
         Self::Client(error)
     }
 }
+
+/// How long `pult learn` waits: a little longer than the route does.
+const LEARN_WAIT: Duration = Duration::from_secs(32);
+const LEARN_LOOK: Duration = Duration::from_millis(250);
 
 /// How long a window that was just started may take to bring up its route.
 const ROUTE_TRIES: usize = 60;
@@ -88,9 +93,78 @@ fn wait_for_route() -> Option<Client> {
     None
 }
 
+/// The ports of this machine, one per line.
+fn midi_devices() -> Result<Vec<String>, Problem> {
+    let (inputs, outputs) = ports().map_err(|why| Problem::Client(ClientError::Failed(why)))?;
+    let mut lines = vec!["inputs:".to_owned()];
+    lines.extend(inputs.iter().map(|name| format!("  {name}")));
+    lines.push("outputs:".to_owned());
+    lines.extend(outputs.iter().map(|name| format!("  {name}")));
+    Ok(lines)
+}
+
+/// Asks for a learning and waits until the movement came or it gave up.
+fn learn(client: &mut Client, target: &str) -> Result<Vec<String>, Problem> {
+    for line in client.op(&Op::Learn {
+        target: target.to_owned(),
+    })? {
+        println!("{line}");
+    }
+    let until = Instant::now() + LEARN_WAIT;
+    // A learning asked for just now shows only with the next state.
+    std::thread::sleep(LEARN_LOOK);
+    while Instant::now() < until {
+        let Some(midi) = client.state()?.midi else {
+            return Err(Problem::Client(ClientError::Failed(
+                "this pult has no MIDI".to_owned(),
+            )));
+        };
+        if midi.learning.as_deref() != Some(target) {
+            return match midi.bindings.iter().find(|b| b.target == target) {
+                Some(bound) => Ok(vec![format!("{} -> {target}", bound.control)]),
+                None => Err(Problem::Client(ClientError::Failed(format!(
+                    "nothing moved for {target}"
+                )))),
+            };
+        }
+        std::thread::sleep(LEARN_LOOK);
+    }
+    Err(Problem::Client(ClientError::Failed(format!(
+        "nothing moved for {target}"
+    ))))
+}
+
+/// The device and what is bound.
+fn midi_shown(state: &State) -> Vec<String> {
+    let Some(midi) = &state.midi else {
+        return vec!["this pult has no MIDI".to_owned()];
+    };
+    let mut lines = vec![match (&midi.device, midi.connected) {
+        (Some(device), true) => format!("device: {device}"),
+        (Some(device), false) => format!("device: {device} (not there)"),
+        (None, _) => "no device yet; `pult learn <address>` finds it".to_owned(),
+    }];
+    lines.extend(
+        midi.bindings
+            .iter()
+            .map(|bound| format!("{} -> {}", bound.control, bound.target)),
+    );
+    if let Some(target) = &midi.learning {
+        lines.push(format!("waiting for a movement for {target}"));
+    }
+    lines
+}
+
 fn answer(request: &Remote) -> Result<Vec<String>, Problem> {
     if let Remote::Start { open } = request {
         return start(*open);
+    }
+    if *request == Remote::MidiDevices {
+        return midi_devices();
+    }
+    if let Remote::MidiListen(seconds) = request {
+        listen(*seconds).map_err(|why| Problem::Client(ClientError::Failed(why)))?;
+        return Ok(Vec::new());
     }
     let mut client = match Client::find() {
         // Nothing to end is what was asked for.
@@ -100,7 +174,17 @@ fn answer(request: &Remote) -> Result<Vec<String>, Problem> {
         found => found?,
     };
     match request {
-        Remote::Start { .. } => unreachable!("handled above"),
+        Remote::Start { .. } | Remote::MidiDevices | Remote::MidiListen(_) => {
+            unreachable!("handled above")
+        }
+        Remote::Learn(target) => learn(&mut client, target),
+        Remote::Unlearn(target) => {
+            client.op(&Op::Unlearn {
+                target: target.clone(),
+            })?;
+            Ok(vec![format!("asked to free {target}")])
+        }
+        Remote::Midi => Ok(midi_shown(&client.state()?)),
         Remote::Stop => {
             client.stop()?;
             Ok(vec!["stopped".to_owned()])

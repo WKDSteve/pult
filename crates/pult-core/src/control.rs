@@ -7,6 +7,7 @@
 //! pan <input> <-1..1>    pan (mono) or balance (stereo) of an input
 //! route <input> <bus>    send an input to a bus too; unroute <input> <bus> takes it off
 //! scene <name>           change to a scene of the profile; scenes lists them
+//! learn <target>         the next movement on the MIDI controller binds it; unlearn takes it off
 //! show                   current gains, mutes and pans
 //! save <file>            the current state as a profile
 //! help                   the commands
@@ -46,6 +47,10 @@ pub enum Command {
     Scene(String),
     /// Lists the scenes.
     Scenes,
+    /// Lets the next movement on the MIDI controller bind this address or `scene/<name>`.
+    Learn(String),
+    /// Takes the MIDI binding of this address or `scene/<name>` away.
+    Unlearn(String),
     /// Lists the current state.
     Show,
     /// Writes the current state as a profile to this path.
@@ -63,6 +68,8 @@ mute <target>        mute an input or bus; unmute <target> undoes it
 pan <input> <-1..1>  pan a mono input, balance a stereo one
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
 scene <name>         change to a scene of the profile; scenes lists them
+learn <address>      the next movement on the MIDI controller binds it (learn input/1/gain,
+                     learn scene/abend); unlearn <address> takes it off
 show                 list gains, mutes and pans
 save <file>          write the current state as a profile
 quit                 stop (an empty line too)
@@ -111,6 +118,18 @@ pub fn parse<S: AsRef<str>>(line: &str, inputs: &[S], buses: &[S]) -> Result<Com
         "show" | "list" | "ls" => no_arguments(rest, Command::Show),
         "help" | "?" | "h" => no_arguments(rest, Command::Help),
         "scenes" => no_arguments(rest, Command::Scenes),
+        "learn" | "unlearn" => {
+            // The rest of the line, so the name of a scene keeps its spaces.
+            let target = line.trim_start()[keyword.len()..].trim();
+            if target.is_empty() {
+                return error("which address? (learn input/1/gain, learn scene/abend)");
+            }
+            Ok(if keyword.eq_ignore_ascii_case("learn") {
+                Command::Learn(target.to_owned())
+            } else {
+                Command::Unlearn(target.to_owned())
+            })
+        }
         "scene" => {
             // The rest of the line, so a name keeps its spaces.
             let name = line.trim_start()[keyword.len()..].trim();
@@ -283,6 +302,18 @@ mod tests {
             Command::Scene("spät am  Abend".into())
         );
         assert_eq!(ok("scenes"), Command::Scenes);
+        assert_eq!(
+            ok("learn input/1/gain"),
+            Command::Learn("input/1/gain".into())
+        );
+        assert_eq!(
+            ok("LEARN scene/spät am Abend"),
+            Command::Learn("scene/spät am Abend".into())
+        );
+        assert_eq!(
+            ok("unlearn bus/A1/mute"),
+            Command::Unlearn("bus/A1/mute".into())
+        );
         assert_eq!(ok("mute cable"), Command::Mute(Target::Input(0), true));
         assert_eq!(
             ok("unmute Analogue 1"),
@@ -349,6 +380,8 @@ mod tests {
         assert!(bad("gain A1 -6 over -5").contains("\"-5\" is no time"));
         assert!(bad("pan 1 0 over 1.5").contains("\"1.5\" is no time"));
         assert!(bad("scene").contains("scene needs a name"));
+        assert!(bad("learn").contains("which address"));
+        assert!(bad("unlearn").contains("which address"));
         assert!(bad("scenes abend").contains("too much"));
         assert!(bad("gain 4 0").contains("no input 4; inputs are 1 to 3"));
         assert!(bad("mute 0").contains("no input 0"));

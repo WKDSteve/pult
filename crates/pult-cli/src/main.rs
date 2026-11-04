@@ -17,9 +17,11 @@ use std::time::{Duration, Instant};
 use args::{Command, Routing, RunSpec, ToneSpec, USAGE};
 use console::{Console, Input};
 use monitor::{LOG_INTERVAL, Log, Snapshot};
+use pult_core::view::MixerView;
 use pult_core::{Desk, Dropouts, control};
 use pult_engine::{Devices, EngineDesk, Running, Tone};
 use pult_hub::{Control, Pump};
+use pult_midi::Midi;
 
 // Debug builds abort on any allocation inside an audio callback (see pult-engine).
 #[cfg(debug_assertions)]
@@ -28,6 +30,9 @@ static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisable
 
 /// How often the status line is refreshed.
 const STATUS_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How often a MIDI controller in use is looked at: far more often, a fader is in the hand.
+const MIDI_INTERVAL: Duration = Duration::from_millis(20);
 
 fn main() -> ExitCode {
     let command = match args::parse(std::env::args().skip(1)) {
@@ -160,13 +165,20 @@ fn run(desk: &mut EngineDesk, log: Option<Log>, bus_names: Vec<String>, pump: Op
     let mut next = Instant::now();
     // Nothing but the user ends a run: lost devices are the supervisor's business.
     loop {
-        match console.wait(next) {
+        let until = if recorder.has_midi() {
+            next.min(Instant::now() + MIDI_INTERVAL)
+        } else {
+            next
+        };
+        match console.wait(until) {
             Some(Input::Interrupt) => break,
             Some(Input::Line(line)) => {
                 let running = desk.running_mut();
                 let parsed = control::parse(&line, &running.input_names(), &running.bus_names());
                 let answer = match parsed {
                     Ok(control::Command::Stop) => break,
+                    Ok(control::Command::Learn(target)) => recorder.learn(target),
+                    Ok(control::Command::Unlearn(target)) => recorder.forget(&target),
                     Ok(command) => running.apply(&command),
                     Err(err) => Err(err.to_string()),
                 };
@@ -175,6 +187,9 @@ fn run(desk: &mut EngineDesk, log: Option<Log>, bus_names: Vec<String>, pump: Op
                     Err(err) => vec![format!("  not done: {err}")],
                 };
                 console.notes(&lines);
+            }
+            None if Instant::now() < next => {
+                console.notes(&recorder.midi_notes(desk));
             }
             None => {
                 let tick = recorder.tick(desk);
@@ -202,6 +217,10 @@ struct Recorder {
     dropouts: Dropouts,
     /// The way to the clients of the control interface, if it runs.
     pump: Option<Pump>,
+    /// The MIDI controller, which runs with the control interface: one owner per machine.
+    midi: Option<Midi>,
+    /// The newest view, for what the controller asks between two ticks.
+    view: Option<MixerView>,
 }
 
 impl Recorder {
@@ -213,8 +232,47 @@ impl Recorder {
             interval: None,
             next_row: LOG_INTERVAL,
             dropouts: Dropouts::default(),
+            midi: pump.as_ref().map(|_| Midi::start()),
             pump,
+            view: None,
         }
+    }
+
+    /// Whether a controller may speak.
+    fn has_midi(&self) -> bool {
+        self.midi.as_ref().is_some_and(Midi::is_active)
+    }
+
+    /// Lets the next movement bind `target`, typed at the input line.
+    fn learn(&mut self, target: String) -> Result<Vec<String>, String> {
+        let (Some(midi), Some(view)) = (&mut self.midi, &self.view) else {
+            return Err("no MIDI: this run has no control interface".to_owned());
+        };
+        pult_core::midi::check_target(&target, view)?;
+        let line = format!("move a control on the device for {target}");
+        midi.learn(target);
+        Ok(vec![line])
+    }
+
+    /// Takes the binding of `target` off, typed at the input line.
+    fn forget(&mut self, target: &str) -> Result<Vec<String>, String> {
+        let Some(midi) = &mut self.midi else {
+            return Err("no MIDI: this run has no control interface".to_owned());
+        };
+        midi.forget(target);
+        Ok(Vec::new())
+    }
+
+    /// What the controller did since the last look, between two ticks.
+    fn midi_notes(&mut self, desk: &mut EngineDesk) -> Vec<String> {
+        let elapsed = self.start.elapsed();
+        let (Some(midi), Some(view)) = (&mut self.midi, &self.view) else {
+            return Vec::new();
+        };
+        midi.poll(desk, view)
+            .into_iter()
+            .map(|line| format!("{} midi: {line}", monitor::clock(elapsed)))
+            .collect()
     }
 
     /// Takes a snapshot, checks the devices, serves the clients, logs when an interval is
@@ -229,13 +287,14 @@ impl Recorder {
             .iter()
             .map(|event| format!("{} {}", monitor::clock(elapsed), event.text))
             .collect();
-        if let Some(pump) = &mut self.pump {
+        if let (Some(pump), Some(midi)) = (&mut self.pump, &mut self.midi) {
             monitor::with_peaks_of(&mut view, &snap);
             notes.extend(
-                pump.pump(desk, &view)
+                pult_midi::serve(pump, midi, desk, &mut view)
                     .into_iter()
                     .map(|line| format!("{} remote: {line}", monitor::clock(elapsed))),
             );
+            self.view = Some(view);
         }
         let merged = self
             .interval

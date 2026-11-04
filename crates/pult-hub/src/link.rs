@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
+use pult_core::midi::check_target;
 use pult_core::protocol::{EventState, Op, State};
 use pult_core::view::{Desk, MixerView};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -28,6 +29,15 @@ pub(crate) struct Asked {
     pub(crate) answer: oneshot::Sender<Result<Vec<String>, String>>,
 }
 
+/// What a client asked of the MIDI controller, for the one who runs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MidiAsk {
+    /// The next movement binds this.
+    Learn(String),
+    /// Take the binding of this away.
+    Forget(String),
+}
+
 /// The hub's end of the way.
 pub struct Link {
     pub(crate) state: watch::Receiver<Option<Arc<str>>>,
@@ -45,6 +55,8 @@ pub struct Pump {
     published_at: Option<Duration>,
     /// A client asked for the route to end.
     stop_asked: bool,
+    /// What clients asked of the MIDI controller.
+    midi_asks: Vec<MidiAsk>,
 }
 
 /// A way between a hub and the owner of a mixer.
@@ -65,6 +77,7 @@ pub fn link() -> (Arc<Link>, Pump) {
             pending: None,
             published_at: None,
             stop_asked: false,
+            midi_asks: Vec::new(),
         },
     )
 }
@@ -102,6 +115,22 @@ impl Pump {
                 done.push("asked to stop".to_owned());
                 continue;
             }
+            match &asked.op {
+                Op::Learn { target } => {
+                    let answer = check_target(target, view).map(|()| {
+                        self.midi_asks.push(MidiAsk::Learn(target.clone()));
+                        vec![format!("move a control on the device for {target}")]
+                    });
+                    let _ = asked.answer.send(answer);
+                    continue;
+                }
+                Op::Unlearn { target } => {
+                    self.midi_asks.push(MidiAsk::Forget(target.clone()));
+                    let _ = asked.answer.send(Ok(Vec::new()));
+                    continue;
+                }
+                _ => {}
+            }
             let answer = asked.op.action(view).and_then(|action| desk.act(action));
             match &answer {
                 Ok(lines) => done.extend(lines.iter().map(|line| printable(line))),
@@ -111,6 +140,11 @@ impl Pump {
             let _ = asked.answer.send(answer);
         }
         done
+    }
+
+    /// What clients asked of the MIDI controller since the last call.
+    pub fn take_midi_asks(&mut self) -> Vec<MidiAsk> {
+        std::mem::take(&mut self.midi_asks)
     }
 
     /// Whether a client asked for the route to end; the owner ends it, as if the person had.
@@ -256,6 +290,39 @@ mod tests {
         assert!(good_answer.try_recv().expect("an answer").is_ok());
         assert!(bad_answer.try_recv().expect("an answer").is_err());
         assert!((desk.view().inputs[0].gain_db + 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn midi_is_for_the_owner_and_a_target_is_checked_first() {
+        let (link, mut pump) = link();
+        let mut desk = FakeDesk::new();
+        let ask = |op| {
+            let (asked, answer) = oneshot::channel();
+            assert!(link.ops.try_send(Asked { op, answer: asked }).is_ok());
+            answer
+        };
+        let mut good = ask(Op::Learn {
+            target: "input/1/gain".to_owned(),
+        });
+        let mut bad = ask(Op::Learn {
+            target: "input/9/gain".to_owned(),
+        });
+        let mut free = ask(Op::Unlearn {
+            target: "input/9/gain".to_owned(),
+        });
+        let view = desk.view();
+        pump.pump(&mut desk, &view);
+        assert!(good.try_recv().expect("an answer").is_ok());
+        assert!(bad.try_recv().expect("an answer").is_err());
+        assert!(free.try_recv().expect("an answer").is_ok());
+        assert_eq!(
+            pump.take_midi_asks(),
+            [
+                MidiAsk::Learn("input/1/gain".to_owned()),
+                MidiAsk::Forget("input/9/gain".to_owned())
+            ]
+        );
+        assert_eq!(pump.take_midi_asks(), []);
     }
 
     #[test]

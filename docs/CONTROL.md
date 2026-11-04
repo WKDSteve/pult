@@ -88,6 +88,7 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
   `back`, `refused` oder `slow`.
 - `gain_db`, `pan`, `muted` und `buses` nennen das Ziel. Läuft eine Rampe, folgt der Ton noch.
 - `scenes` sind die Szenen des Profils in dessen Reihenfolge.
+- `midi` nennt `device`, `connected`, `learning` und `bindings` des Controllers, wo einer läuft, sonst `null`.
 - `profile` ist nur der Dateiname, ohne Ordner.
 
 ### `GET /api/pult/stream`
@@ -109,6 +110,8 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `{"op": "meter_point", "value": "pre"}` | Eingangs-Meter vor (`pre`) oder hinter (`post`) den Fader legen |
 | `{"op": "save"}` | den Stand in das Profil speichern, aus dem die Route kam |
 | `{"op": "stop"}` | die Route beenden; wer sie betreibt, macht das in der nächsten Runde selbst und räumt auf |
+| `{"op": "learn", "target": "input/1/gain"}` | die nächste Bewegung am MIDI-Controller bindet die Adresse oder `scene/<name>` |
+| `{"op": "unlearn", "target": "input/1/gain"}` | die Bindung lösen |
 
 | Adresse | Wert |
 |---|---|

@@ -23,9 +23,9 @@ mod pages;
 mod routes;
 
 pub use appkit_hub::env::Env;
-pub use client::{Client, ClientError, start_window};
+pub use client::{Client, ClientError, config_folder, start_window};
 pub use control::Control;
-pub use link::{Link, Pump, link};
+pub use link::{Link, MidiAsk, Pump, link};
 
 /// The names of pult as a hub. The port is listed in `appkit-testkit::ports`.
 pub const IDENTITY: AppIdentity = AppIdentity {

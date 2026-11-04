@@ -114,6 +114,7 @@ fn showcase(t: f64) -> MixerView {
         events: Vec::new(),
         profile: Some(PathBuf::from(r"C:\Users\me\pult\studio.toml")),
         scenes: Vec::new(),
+        midi: None,
     }
 }
 

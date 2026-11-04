@@ -315,6 +315,38 @@ In `hub-desktop` ist pult eine Kachel: Sie startet das Fenster mit dem zuletzt g
 zeigt, ob eine Route läuft, und beendet sie. Dafür müssen `pult.exe` und `pult-app.exe` nebeneinander liegen, wie
 `scripts\build-install.ps1` sie ablegt.
 
+### Ein MIDI-Controller
+
+Regler und Tasten eines Controllers steuern pult, gelernt auf dieselben Adressen wie überall:
+
+```
+pult learn input/1/gain
+pult learn bus/A1/mute
+pult learn scene/abend
+```
+
+Nach `pult learn` wartet pult bis zu 30 Sekunden auf die nächste Bewegung am Gerät und bindet sie; das geht auch als `learn …` in
+der Eingabezeile von `pult run`. Eine Taste kann Mute, Solo, Matrix und Szenen schalten, aber keinen Pegel setzen. Solange eine
+Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün, Szenen gelb.
+
+| Befehl | Wirkung |
+|---|---|
+| `pult learn <Adresse>` | die nächste Bewegung bindet sie; ein Regler verlässt dabei seine alte Adresse |
+| `pult unlearn <Adresse>` | die Bindung lösen |
+| `pult midi` | das Gerät und was gebunden ist |
+| `pult midi devices` | die MIDI-Anschlüsse dieses Rechners, auch ohne laufendes pult |
+| `pult midi listen [Sekunden]` | zeigen, was die Anschlüsse senden; dafür darf kein pult sie offen halten |
+
+- **Endlos-Regler und Fader:** Ein Endlos-Regler geht von dort weiter, wo der Wert gerade steht. Ein Fader oder Regler mit Anschlägen
+  wirkt erst, wenn er den aktuellen Wert erreicht hat (`… waits until it reaches the value`): Ohne Motor stünde er nach einer
+  Szene woanders, und die erste Berührung wäre ein Sprung in der Lautstärke. pult erkennt die Art an der ersten Bewegung; irrt es
+  sich, ändert `relative = true` oder `false` in der Datei das.
+- **Belegung:** `%APPDATA%\pult\midi.toml`. pult schreibt sie beim Lernen neu, Kommentare darin bleiben nicht. Eine Datei, die sich
+  nicht lesen lässt, bleibt unberührt, und MIDI bleibt aus, bis sie repariert ist.
+- **Anschluss:** Ohne Belegung öffnet pult keinen MIDI-Anschluss: Unter Windows kann ihn immer nur ein Programm halten. Geräte lassen
+  sich ab- und anstecken, pult findet sie nach wenigen Sekunden wieder und leuchtet neu. MIDI läuft nie in den Audio-Callbacks.
+- **Farben** sind für die APC-Reihe hinterlegt (APC mini, die mk2-Geräte wie der APC Key 25 mk2); andere Geräte bekommen den Wert 127.
+
 ### In Neovim
 
 Mit `my.nvim` gibt es dieselben Wörter als `:My pult` (`:My pult scene abend`), mit Vervollständigung von Befehlen, Szenen,
@@ -334,6 +366,7 @@ Eingängen und Bussen. `pult` muss dafür im `PATH` liegen, oder `vim.g.pult_exe
 | `… feeds bus "…", which is not defined` | im Profil fehlt ein `[[bus]]` mit diesem Namen, oder er ist anders geschrieben |
 | `unknown field …` | Tippfehler im Profil; die Meldung nennt Zeile und erlaubte Schlüssel |
 | `note: another pult run is active…`, `note: the pult window is open…` | beim Start: Ein anderer `pult run` oder das Fenster läuft schon. Der Lauf startet trotzdem; auf denselben Geräten hört man beide doppelt |
+| `… waits until it reaches the value of …` | ein Fader wirkt erst, wenn er den aktuellen Wert erreicht hat, siehe „Ein MIDI-Controller“ |
 | `no pult is running; …` | `pult <Befehl>` ohne laufende Route: erst `pult run` oder das Fenster starten |
 | `note: no control interface: …` | die Steuerschnittstelle läuft nicht, meist weil ein anderer pult sie hat; der Ton läuft trotzdem |
 | `not done: …` | ein Befehl während des Laufs passte nicht (Tippfehler, Wert außerhalb des Bereichs); nichts wurde geändert |

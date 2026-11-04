@@ -36,6 +36,8 @@ pub struct MixerView {
     pub profile: Option<PathBuf>,
     /// The scenes of the route, in profile order.
     pub scenes: Vec<String>,
+    /// The MIDI controller, where someone runs one for this desk.
+    pub midi: Option<crate::midi::MidiStatus>,
 }
 
 /// What an input captures.
@@ -351,6 +353,7 @@ impl FakeDesk {
                 events: Vec::new(),
                 profile: Some(PathBuf::from("pult.toml")),
                 scenes: vec!["Abend".to_owned(), "Laut".to_owned()],
+                midi: None,
             },
             frame: 0,
         }

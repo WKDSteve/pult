@@ -274,6 +274,15 @@ impl Client {
     }
 }
 
+/// The config folder of pult on this machine.
+///
+/// # Errors
+///
+/// A text when there is none.
+pub fn config_folder() -> Result<PathBuf, String> {
+    appkit_hub::instance::config_folder(&Env::from_process(), &IDENTITY)
+}
+
 /// Starts the window of pult, the program `pult-app` beside `program`, on its own: nothing of this
 /// process goes along. It opens the profile it had last, and its hub comes up with the route.
 ///

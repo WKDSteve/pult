@@ -4,7 +4,7 @@ pub mod badge;
 pub mod fader;
 pub mod knob;
 pub mod meter;
-pub mod scale;
+pub use pult_core::scale;
 pub mod strip;
 pub mod toggle;
 

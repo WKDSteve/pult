@@ -205,6 +205,7 @@ impl Desk for EngineDesk {
             events,
             profile: self.profile.clone(),
             scenes: running.spec.scenes.iter().map(|s| s.name.clone()).collect(),
+            midi: None,
         }
     }
 

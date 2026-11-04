@@ -275,6 +275,43 @@ fn start_with_a_route_running_starts_nothing_and_without_a_window_says_so() {
 }
 
 #[test]
+fn midi_says_what_there_is_and_learn_checks_its_target() {
+    let folder = Folder::new("midi");
+    let output = pult(&folder.0, &["midi", "devices"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("inputs:"),
+        "without a running pult"
+    );
+    assert_eq!(pult(&folder.0, &["midi"]).status.code(), Some(1));
+
+    let _hub = Hub::start(&folder.0);
+    // This owner runs no controller.
+    let output = pult(&folder.0, &["midi"]);
+    assert!(stdout(&output).contains("no MIDI"), "{}", stdout(&output));
+    let output = pult(&folder.0, &["learn", "input/9/gain"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("no input 9"),
+        "{}",
+        stderr(&output)
+    );
+    let output = pult(&folder.0, &["learn", "input/1/meter"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("only be read"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(pult(&folder.0, &["learn"]).status.code(), Some(2));
+    assert_eq!(pult(&folder.0, &["midi", "x"]).status.code(), Some(2));
+    assert_eq!(
+        pult(&folder.0, &["midi", "listen", "x"]).status.code(),
+        Some(2)
+    );
+}
+
+#[test]
 fn many_commands_in_a_row_pair_once() {
     // The hub takes 10 pairings a minute: one session has to serve them all.
     let folder = Folder::new("many");
