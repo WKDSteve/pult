@@ -37,7 +37,8 @@ pub struct State {
     pub buses: Vec<BusState>,
     /// The latest events, oldest first; `seq` tells a client which it has seen.
     pub events: Vec<EventState>,
-    /// The scenes it can change to, in profile order.
+    /// The scenes it can change to, in profile order; none from a run older than scenes.
+    #[serde(default)]
     pub scenes: Vec<String>,
 }
 
@@ -500,9 +501,14 @@ mod tests {
     }
 
     #[test]
-    fn a_state_lists_the_scenes() {
+    fn a_state_lists_the_scenes_and_reads_without_them() {
         let state = State::new(&view(), Vec::new());
         assert_eq!(state.scenes, ["Abend", "Laut"]);
+
+        let mut older = serde_json::to_value(&state).expect("to JSON");
+        older.as_object_mut().expect("an object").remove("scenes");
+        let read: State = serde_json::from_value(older).expect("from JSON");
+        assert!(read.scenes.is_empty());
     }
 
     #[test]

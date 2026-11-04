@@ -391,9 +391,7 @@ impl MixerInput {
         while done < frames {
             let n = (frames - done).min(MAX_CHUNK);
             // A priming ring is silent, and the ramps wait: a fade-in starts with the sound.
-            if !self.next_chunk(n) {
-                self.gain.hold();
-            } else {
+            if self.next_chunk(n) {
                 let block = &self.resampled[..n * ch];
                 let rest = &mut out[done * out_channels..];
                 let before = self.gain.ramp.value();
@@ -410,6 +408,8 @@ impl MixerInput {
                     before.max(self.gain.ramp.value())
                 };
                 self.stats.peak.record_scaled(block, metered);
+            } else {
+                self.gain.hold();
             }
             done += n;
         }
