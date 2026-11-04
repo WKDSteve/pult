@@ -349,7 +349,7 @@ impl MixerInput {
         let routed = self.routed.load(Ordering::Acquire);
         if routed && !self.playing {
             self.restart();
-            self.gain.silence();
+            self.gain.silence(self.controls.gain.load());
             self.playing = true;
             self.open.store(true, Ordering::Release);
         } else if !routed && self.playing && self.gain.is_silent() {
@@ -391,7 +391,9 @@ impl MixerInput {
         while done < frames {
             let n = (frames - done).min(MAX_CHUNK);
             // A priming ring is silent, and the ramps wait: a fade-in starts with the sound.
-            if self.next_chunk(n) {
+            if !self.next_chunk(n) {
+                self.gain.hold();
+            } else {
                 let block = &self.resampled[..n * ch];
                 let rest = &mut out[done * out_channels..];
                 let before = self.gain.ramp.value();
@@ -893,6 +895,38 @@ mod tests {
             largest_step(rest)
         );
         assert!((out[out.len() - 1] - 0.5).abs() < 2e-3);
+    }
+
+    #[test]
+    fn a_ring_without_sound_closes_at_once_when_switched_off() {
+        // Nothing arrives: it stays priming, where a ramp would wait for ever.
+        let (mut capture, input, handle) = connect(config(1, 480));
+        let (mut mixer, _) = Mixer::new(vec![input], 1);
+        let mut out = vec![0.0; PERIOD];
+        mixer.process(&mut out);
+        handle.controls.fade_ms.store(1000, Ordering::Relaxed);
+        handle.routed.store(false, Ordering::Release);
+        mixer.process(&mut out);
+        mixer.process(&mut out);
+        // Closed: a flood counts no lost frames.
+        push_dc(&mut capture, 100_000, 0.5);
+        assert_eq!(handle.stats.dropped_at_capture.get(), 0);
+    }
+
+    #[test]
+    fn a_ring_that_was_closed_fades_in_for_the_time_of_the_switch() {
+        let (mut capture, input, handle) = connect(config(1, 480));
+        let (mut mixer, _) = Mixer::new(vec![input.unrouted()], 1);
+        // A long ramp long ago, while the ring was closed.
+        handle.controls.gain.ramp_to(0.5, 60_000);
+        record(&mut mixer, &mut capture, 1.0, 2);
+        handle.routed.store(true, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 1.0, 8);
+        assert!(
+            (out[out.len() - 1] - 0.5).abs() < 2e-3,
+            "{}",
+            out[out.len() - 1]
+        );
     }
 
     #[test]

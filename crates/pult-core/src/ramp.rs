@@ -187,11 +187,21 @@ impl Follower {
         self.sounding = sounding;
     }
 
-    /// Stands at silence, ready to ramp up to the next aim: a ring that starts to play.
-    pub fn silence(&mut self) {
+    /// Stands at silence, ready to ramp up to `aim` when it sounds: a ring that starts to play.
+    /// How the aim got there does not count, it may be long ago.
+    pub fn silence(&mut self, aim: Aim) {
         self.ramp.snap(0.0);
+        self.seen = aim;
         self.sounding = false;
         self.fresh = false;
+    }
+
+    /// Nothing sounds for now: a way down to silence is over at once, since no one would hear
+    /// it. Any other ramp waits for the sound.
+    pub fn hold(&mut self) {
+        if !self.sounding {
+            self.ramp.snap(0.0);
+        }
     }
 
     /// Stands at what it sees next: nothing played for a while, so nothing can click.
@@ -331,10 +341,46 @@ mod tests {
     }
 
     #[test]
+    fn a_follower_starting_from_silence_forgets_how_the_aim_got_there() {
+        let glide = Glide::new(0.5);
+        glide.ramp_to(1.0, MAX_RAMP_MS);
+        let mut follower = Follower::new(1000);
+        follower.silence(glide.load());
+        // The time of the switch counts, not the minute of a ramp from long ago.
+        follower.follow(glide.load(), true, 0);
+        for _ in 0..5 {
+            follower.ramp.next_value();
+        }
+        assert_eq!(follower.ramp.value(), 1.0);
+    }
+
+    #[test]
+    fn holding_ends_only_a_way_down_to_silence() {
+        let glide = Glide::new(1.0);
+        let mut follower = Follower::new(1000);
+        follower.follow(glide.load(), true, 0);
+        glide.ramp_to(0.5, 100);
+        follower.follow(glide.load(), true, 0);
+        follower.hold();
+        assert_eq!(follower.ramp.value(), 1.0);
+        assert!(!follower.ramp.is_steady());
+
+        follower.follow(glide.load(), false, 100);
+        follower.hold();
+        assert!(follower.is_silent());
+
+        // A fade-in waits.
+        follower.follow(glide.load(), true, 100);
+        follower.hold();
+        assert!(!follower.is_silent());
+        assert_eq!(follower.ramp.value(), 0.0);
+    }
+
+    #[test]
     fn a_follower_starting_from_silence_ramps_and_starting_over_stands() {
         let glide = Glide::new(1.0);
         let mut follower = Follower::new(1000);
-        follower.silence();
+        follower.silence(glide.load());
         follower.follow(glide.load(), true, 0);
         assert_eq!(follower.ramp.value(), 0.0);
         assert!(!follower.ramp.is_steady());
