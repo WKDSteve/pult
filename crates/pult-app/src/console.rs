@@ -79,6 +79,11 @@ impl ConsoleState {
         self.log.refused(elapsed, reason);
     }
 
+    /// Notes what a client of the control interface just did to the mixer.
+    pub fn remote(&mut self, elapsed: Duration, line: &str) {
+        self.log.done(elapsed, &format!("remote: {line}"));
+    }
+
     /// Notes a problem with the settings of the window at `elapsed`, as the status line shows.
     pub fn settings_problem(&mut self, elapsed: Duration, problem: &str) {
         self.log.settings(elapsed, problem);

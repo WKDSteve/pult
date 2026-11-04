@@ -21,6 +21,7 @@ path = "src/main.rs"
 pult-core.workspace = true
 # The engine behind the window (EngineDesk); the window still sees it only as a pult_core Desk.
 pult-engine.workspace = true
+pult-hub.workspace = true
 # Debug builds use its checking allocator, as the command line does.
 assert_no_alloc.workspace = true
 # The same UI stack as takt (egui over eframe, wgpu); glow, x11 and wayland stay out.

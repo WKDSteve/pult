@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 pult-core.workspace = true
 pult-engine.workspace = true
+pult-hub.workspace = true
 assert_no_alloc.workspace = true
 # The console of `pult run`: raw mode for the input line, cursor moves, terminal width.
 crossterm.workspace = true

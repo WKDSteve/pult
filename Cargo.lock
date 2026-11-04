@@ -2791,6 +2791,7 @@ dependencies = [
  "egui_kittest",
  "pult-core",
  "pult-engine",
+ "pult-hub",
  "serde",
  "toml",
  "tray-icon",
@@ -2805,6 +2806,7 @@ dependencies = [
  "crossterm",
  "pult-core",
  "pult-engine",
+ "pult-hub",
 ]
 
 [[package]]

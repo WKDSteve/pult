@@ -39,6 +39,8 @@ struct App {
     /// The profile from the command line, opened again on "Try again".
     profile: Option<PathBuf>,
     desk: Option<Box<dyn Desk>>,
+    /// The control interface, once a real route plays; never for the demo.
+    hub: Option<(pult_hub::Control, pult_hub::Pump)>,
     /// The profile while it opens in the background.
     opening: Option<Opening<EngineDesk>>,
     /// Why the profile did not open; shown on the start screen.
@@ -78,6 +80,7 @@ impl App {
         let mut app = Self {
             profile: None,
             desk: None,
+            hub: None,
             opening: None,
             problem: None,
             state: ConsoleState::default(),
@@ -126,6 +129,12 @@ impl App {
         match result {
             Ok(desk) => {
                 self.use_desk(Box::new(desk));
+                if self.hub.is_none() {
+                    match pult_hub::Control::start() {
+                        Ok(hub) => self.hub = Some(hub),
+                        Err(why) => self.notes.push(format!("no control interface: {why}")),
+                    }
+                }
                 let profile = self.profile.clone();
                 self.change_settings(|s| s.last_profile = profile);
             }
@@ -242,6 +251,11 @@ impl eframe::App for App {
             if let Some(desk) = &mut self.desk {
                 let view = desk.view();
                 self.state.take(&view);
+                if let Some((_, pump)) = &mut self.hub {
+                    for line in pump.pump(desk.as_mut(), &view) {
+                        self.state.remote(view.elapsed, &line);
+                    }
+                }
                 for note in self.notes.drain(..) {
                     self.state.settings_problem(view.elapsed, &note);
                 }
@@ -261,6 +275,11 @@ impl eframe::App for App {
             let view = desk.view();
             for note in self.notes.drain(..) {
                 self.state.settings_problem(view.elapsed, &note);
+            }
+            if let Some((_, pump)) = &mut self.hub {
+                for line in pump.pump(desk.as_mut(), &view) {
+                    self.state.remote(view.elapsed, &line);
+                }
             }
             for action in console::show(ui, &view, &mut self.state, now) {
                 self.state.act(desk.as_mut(), view.elapsed, action);

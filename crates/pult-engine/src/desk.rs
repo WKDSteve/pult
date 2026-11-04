@@ -60,6 +60,11 @@ impl EngineDesk {
         &self.running
     }
 
+    /// The route behind the desk, for what a console does with it directly.
+    pub fn running_mut(&mut self) -> &mut Running {
+        &mut self.running
+    }
+
     /// Silences every input that is not soloed while any is.
     fn apply_solo(&self) {
         let soloing = self.solo.contains(&true);

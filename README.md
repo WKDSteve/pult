@@ -38,6 +38,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 |---|---|
 | `crates/pult-core` | Mischen, Kanal-Zuordnung, Pegel, Drift-Regelung mit Resampler, Geräteauswahl, Testton; ohne Geräte-I/O, komplett testbar. Diese Typen kann takt später für die Anbindung nutzen. |
 | `crates/pult-engine` | Geräte über `cpal` (WASAPI): auflisten, Streams öffnen, Callbacks an den Kern binden; Profile lesen (`profile`); Ton einzelner Programme (`process`, Windows-Aufrufe in `ffi`) |
+| `crates/pult-hub` | die lokale Steuerschnittstelle auf `appkit-hub` ([`docs/CONTROL.md`](docs/CONTROL.md)); hält `axum` und `tokio` von den Audio-Crates fern |
 | `crates/pult-cli` | das Programm `pult` |
 
 Echtzeit-Regel wie in takt: In den Audio-Callbacks wird nichts allokiert, nichts gesperrt und nichts geloggt. Ein Debug-Build bricht mit `assert_no_alloc` ab, sobald ein Callback doch allokiert.

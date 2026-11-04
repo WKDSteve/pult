@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 use args::{Command, Routing, RunSpec, ToneSpec, USAGE};
 use console::{Console, Input};
 use monitor::{LOG_INTERVAL, Log, Snapshot};
-use pult_core::{Dropouts, control};
-use pult_engine::{Devices, Running, Tone};
+use pult_core::{Desk, Dropouts, control};
+use pult_engine::{Devices, EngineDesk, Running, Tone};
+use pult_hub::{Control, Pump};
 
 // Debug builds abort on any allocation inside an audio callback (see pult-engine).
 #[cfg(debug_assertions)]
@@ -103,19 +104,37 @@ fn start_run(spec: &RunSpec) -> Result<(), String> {
         ),
         None => None,
     };
-    let mut running = pult_engine::start(&route).map_err(|e| e.to_string())?;
+    let running = pult_engine::start(&route).map_err(|e| e.to_string())?;
     let presence = pult_engine::Presence::announce();
     if let Some(note) = presence.note() {
         println!("{note}");
     }
-    run(&mut running, log, bus_names);
+    let profile = match &spec.routing {
+        Routing::Inline(_) => None,
+        Routing::Profile(path) => Some(path.clone()),
+    };
+    let mut desk = EngineDesk::new(running, profile);
+    // The route plays with or without it.
+    let hub = match Control::start() {
+        Ok((control, pump)) => {
+            println!("Control interface on port {}.", control.port());
+            Some((control, pump))
+        }
+        Err(why) => {
+            println!("note: no control interface: {why}");
+            None
+        }
+    };
+    let (_control, pump) = hub.unzip();
+    run(&mut desk, log, bus_names, pump);
     Ok(())
 }
 
 /// Shows levels and takes commands until an empty line, `quit` or Ctrl+C. A device that
 /// disappears is reported and taken back when it returns; the run goes on.
-fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
+fn run(desk: &mut EngineDesk, log: Option<Log>, bus_names: Vec<String>, pump: Option<Pump>) {
     println!("Routing; type help for commands, Enter on an empty line stops.");
+    let running = desk.running();
     for bus in &running.buses {
         println!("  {} -> {} at {} Hz", bus.name, bus.device, bus.sample_rate);
     }
@@ -134,7 +153,7 @@ fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
             buses.join(", ")
         );
     }
-    let mut recorder = Recorder::new(log, bus_names);
+    let mut recorder = Recorder::new(log, bus_names, pump);
     let mut console = Console::open();
     let mut next = Instant::now();
     // Nothing but the user ends a run: lost devices are the supervisor's business.
@@ -142,6 +161,7 @@ fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
         match console.wait(next) {
             Some(Input::Interrupt) => break,
             Some(Input::Line(line)) => {
+                let running = desk.running_mut();
                 let parsed = control::parse(&line, &running.input_names(), &running.bus_names());
                 let answer = match parsed {
                     Ok(control::Command::Stop) => break,
@@ -155,7 +175,7 @@ fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
                 console.notes(&lines);
             }
             None => {
-                let tick = recorder.tick(running);
+                let tick = recorder.tick(desk);
                 console.notes(&tick.notes);
                 console.status(tick.line);
                 next = Instant::now() + STATUS_INTERVAL;
@@ -163,7 +183,7 @@ fn run(running: &mut Running, log: Option<Log>, bus_names: Vec<String>) {
         }
     }
     console.close();
-    recorder.finish(running);
+    recorder.finish(desk.running());
 }
 
 /// Takes the snapshots of a run and writes every [`LOG_INTERVAL`] a log row with the
@@ -175,10 +195,12 @@ struct Recorder {
     interval: Option<Snapshot>,
     next_row: Duration,
     dropouts: Dropouts,
+    /// The way to the clients of the control interface, if it runs.
+    pump: Option<Pump>,
 }
 
 impl Recorder {
-    fn new(log: Option<Log>, bus_names: Vec<String>) -> Self {
+    fn new(log: Option<Log>, bus_names: Vec<String>, pump: Option<Pump>) -> Self {
         Self {
             start: Instant::now(),
             log,
@@ -186,19 +208,30 @@ impl Recorder {
             interval: None,
             next_row: LOG_INTERVAL,
             dropouts: Dropouts::default(),
+            pump,
         }
     }
 
-    /// Checks the devices, takes a snapshot, logs when an interval is full, and returns
-    /// what changed (one line each) and the status line.
-    fn tick(&mut self, running: &mut Running) -> Tick {
+    /// Takes a snapshot, checks the devices, serves the clients, logs when an interval is
+    /// full, and returns what changed (one line each) and the status line.
+    fn tick(&mut self, desk: &mut EngineDesk) -> Tick {
         let elapsed = self.start.elapsed();
-        let mut notes: Vec<String> = running
-            .supervise()
+        let snap = Snapshot::take(desk.running(), elapsed, &mut self.dropouts);
+        // The view looks for lost devices; its peaks are what the snapshot left.
+        let mut view = desk.view();
+        let mut notes: Vec<String> = view
+            .events
             .iter()
-            .map(|change| format!("{} {change}", monitor::clock(elapsed)))
+            .map(|event| format!("{} {}", monitor::clock(elapsed), event.text))
             .collect();
-        let snap = Snapshot::take(running, elapsed, &mut self.dropouts);
+        if let Some(pump) = &mut self.pump {
+            monitor::with_peaks_of(&mut view, &snap);
+            notes.extend(
+                pump.pump(desk, &view)
+                    .into_iter()
+                    .map(|line| format!("{} remote: {line}", monitor::clock(elapsed))),
+            );
+        }
         let merged = self
             .interval
             .as_ref()

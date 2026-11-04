@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use pult_core::{Dropouts, dropouts, linear_to_db};
+use pult_core::{Dropouts, MeterPoint, MixerView, dropouts, linear_to_db};
 use pult_engine::Running;
 
 /// How often `--log` writes a row.
@@ -301,6 +301,20 @@ pub fn csv_row(snap: &Snapshot) -> String {
     line
 }
 
+/// Gives `view` the peaks of `snap`, which took them from the same meters just before: reading
+/// empties a meter, and the view of a run comes second. Before the fader nobody else reads.
+pub fn with_peaks_of(view: &mut MixerView, snap: &Snapshot) {
+    let db = |peak: f32| (peak > 0.0).then(|| linear_to_db(peak));
+    if view.meter_point == MeterPoint::PostFader {
+        for (input, taken) in view.inputs.iter_mut().zip(&snap.inputs) {
+            input.peak_db = db(taken.peak);
+        }
+    }
+    for (bus, taken) in view.buses.iter_mut().zip(&snap.buses) {
+        bus.peak_db = db(taken.peak);
+    }
+}
+
 /// The `--log` file: a fresh CSV, flushed after every row so a closed window loses nothing.
 pub struct Log {
     out: BufWriter<File>,
@@ -482,6 +496,29 @@ mod tests {
         assert_eq!(merged.inputs[0].drift_ppm, 5.0);
         assert_eq!(merged.buses[0].peak, 0.8);
         assert_eq!(merged.elapsed, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_view_gets_the_peaks_the_snapshot_took() {
+        let mut view = pult_core::view::Desk::view(&mut pult_core::FakeDesk::new());
+        let mut taken = snap(0, 0.5, 0.0);
+        taken
+            .inputs
+            .resize(view.inputs.len(), InputSnapshot::default());
+        taken.buses.resize(view.buses.len(), BusSnapshot::default());
+        taken.buses[0].peak = 0.25;
+
+        with_peaks_of(&mut view, &taken);
+        let close = |a: Option<f32>, b: f32| (a.expect("a peak") - b).abs() < 0.05;
+        assert!(close(view.inputs[0].peak_db, -6.0), "{view:?}");
+        assert_eq!(view.inputs[1].peak_db, None, "silence");
+        assert!(close(view.buses[0].peak_db, -12.0), "{view:?}");
+
+        // Before the fader the view has measured for itself.
+        view.meter_point = MeterPoint::PreFader;
+        view.inputs[1].peak_db = Some(-3.0);
+        with_peaks_of(&mut view, &taken);
+        assert_eq!(view.inputs[1].peak_db, Some(-3.0));
     }
 
     #[test]

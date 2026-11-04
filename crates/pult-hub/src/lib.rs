@@ -18,9 +18,11 @@ use appkit_hub::{
     GuardRules, HubStatus, Limits, Page, Pages, RunningServer, Runtime, ServeParts, serve,
 };
 
+mod control;
 mod link;
 mod routes;
 
+pub use control::Control;
 pub use link::{Link, Pump, link};
 
 /// The names of pult as a hub. The port is listed in `appkit-testkit::ports`.
