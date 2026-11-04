@@ -323,7 +323,8 @@ impl Palette {
             Self {
                 red: 5,
                 green: 21,
-                yellow: 13,
+                // Measured on the APC Key 25 mk2, against all 127 values: 13 looks green there.
+                yellow: 96,
                 channel: Some(6),
             }
         } else if name.contains("apc") {
@@ -1191,7 +1192,7 @@ mod tests {
         let view = view();
         let mut map = map(&[(button(4), "scene/abend")]);
         let palette = Palette::for_device("APC mini mk2");
-        assert_eq!(map.lights(&view, palette, 16), [[0x96, 4, 13]]);
+        assert_eq!(map.lights(&view, palette, 16), [[0x96, 4, 96]]);
     }
 
     #[test]

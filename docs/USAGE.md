@@ -327,7 +327,7 @@ pult learn scene/abend
 
 Nach `pult learn` wartet pult bis zu 30 Sekunden auf die nächste Bewegung am Gerät und bindet sie; das geht auch als `learn …` in
 der Eingabezeile von `pult run`. Eine Taste kann Mute, Solo, Matrix und Szenen schalten, aber keinen Pegel setzen. Solange eine
-Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün, Szenen gelb (auf dem APC Key 25 mk2 sieht dieses Gelb grün aus). Beim Beenden gehen sie aus.
+Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün, Szenen gelb. Beim Beenden gehen sie aus.
 
 | Befehl | Wirkung |
 |---|---|
