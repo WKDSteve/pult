@@ -16,9 +16,13 @@
 //! callback: a route has a ring for every input and bus, and [`InputHandle::routed`] switches
 //! one on or off. An unrouted ring is closed and skipped (no resampling); when it is routed
 //! again, the mixer empties it, primes it afresh and opens it, all inside its own callback.
+//!
+//! Nothing that changes the sound jumps: gain, pan, mute, solo and the matrix all glide (see
+//! [`crate::ramp`]). A ring that is switched off fades out before it closes, one that is
+//! switched on fades in once it is primed.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
@@ -31,8 +35,9 @@ use rubato::Adjustable as _;
 
 use crate::drift::{DriftControl, Event};
 use crate::level::{AtomicF32, Counter, PeakMeter};
+use crate::ramp::{Follower, Glide};
 use crate::rate::RateControl;
-use crate::remix::remix_add;
+use crate::remix::{remix_add, remix_add_ramped};
 
 /// Output frames one resampler call produces at most; longer callbacks take several.
 const MAX_CHUNK: usize = 1024;
@@ -53,26 +58,30 @@ const MAX_CORRECTION: f64 = 0.005;
 #[derive(Debug)]
 pub struct InputControls {
     /// Linear gain factor.
-    pub gain: AtomicF32,
+    pub gain: Glide,
     /// Muted inputs keep draining their ring but add nothing.
     pub muted: AtomicBool,
+    /// Milliseconds a change of `muted`, `soloed_out` or a ring's `routed` takes. Set it before
+    /// the switch, and switch with `Release`.
+    pub fade_ms: AtomicU32,
     /// Silent because other inputs are soloed; the control thread sets it for every input
     /// that is not soloed while any is. Acts like `muted` without touching it.
     pub soloed_out: AtomicBool,
     /// The peak meter measures before gain and mute (true) or after them (false).
     pub meter_pre_fader: AtomicBool,
     /// -1 (left) to 1 (right); see [`remix_add`].
-    pub pan: AtomicF32,
+    pub pan: Glide,
 }
 
 impl Default for InputControls {
     fn default() -> Self {
         Self {
-            gain: AtomicF32::new(1.0),
+            gain: Glide::new(1.0),
             muted: AtomicBool::new(false),
+            fade_ms: AtomicU32::new(0),
             soloed_out: AtomicBool::new(false),
             meter_pre_fader: AtomicBool::new(false),
-            pan: AtomicF32::new(0.0),
+            pan: Glide::new(0.0),
         }
     }
 }
@@ -99,16 +108,20 @@ pub struct InputStats {
 #[derive(Debug)]
 pub struct BusControls {
     /// Linear gain factor applied to the sum.
-    pub gain: AtomicF32,
+    pub gain: Glide,
     /// A muted bus plays silence; its inputs keep draining.
     pub muted: AtomicBool,
+    /// Milliseconds a change of `muted` takes. Set it before the switch, and switch with
+    /// `Release`.
+    pub fade_ms: AtomicU32,
 }
 
 impl Default for BusControls {
     fn default() -> Self {
         Self {
-            gain: AtomicF32::new(1.0),
+            gain: Glide::new(1.0),
             muted: AtomicBool::new(false),
+            fade_ms: AtomicU32::new(0),
         }
     }
 }
@@ -227,7 +240,9 @@ pub fn connect_with(
         controls: Arc::clone(&handle.controls),
         stats: Arc::clone(&handle.stats),
         routed: Arc::clone(&handle.routed),
-        was_routed: true,
+        playing: true,
+        gain: Follower::new(config.output_rate),
+        pan: Follower::new(config.output_rate),
     };
     (capture, input, handle)
 }
@@ -308,8 +323,12 @@ pub struct MixerInput {
     controls: Arc<InputControls>,
     stats: Arc<InputStats>,
     routed: Arc<AtomicBool>,
-    /// What `routed` was in the previous callback.
-    was_routed: bool,
+    /// Whether the ring plays: routed, or fading out after it no longer is.
+    playing: bool,
+    /// Where the gain stands, silence and the fades of the matrix included.
+    gain: Follower,
+    /// Where the pan stands.
+    pan: Follower,
 }
 
 impl MixerInput {
@@ -318,25 +337,27 @@ impl MixerInput {
     #[must_use]
     pub fn unrouted(mut self) -> Self {
         self.routed.store(false, Ordering::Release);
-        self.was_routed = false;
+        self.playing = false;
         self.open.store(false, Ordering::Release);
         self
     }
 
-    /// Follows the matrix button: closes the ring when it was switched off, empties, primes
-    /// and opens it when it was switched on. Returns whether the ring plays.
-    fn follow_routing(&mut self) -> bool {
+    /// Follows the matrix button: closes the ring when it was switched off and has faded out,
+    /// empties, primes and opens it when it was switched on. Returns whether it is routed, or
+    /// `None` when it does not play.
+    fn follow_routing(&mut self) -> Option<bool> {
         let routed = self.routed.load(Ordering::Acquire);
-        if routed != self.was_routed {
-            self.was_routed = routed;
-            if routed {
-                self.restart();
-            } else {
-                self.stats.correction_ppm.store(0.0);
-            }
-            self.open.store(routed, Ordering::Release);
+        if routed && !self.playing {
+            self.restart();
+            self.gain.silence();
+            self.playing = true;
+            self.open.store(true, Ordering::Release);
+        } else if !routed && self.playing && self.gain.is_silent() {
+            self.playing = false;
+            self.stats.correction_ppm.store(0.0);
+            self.open.store(false, Ordering::Release);
         }
-        routed
+        self.playing.then_some(routed)
     }
 
     /// Empties the ring and lets the drift control prime again, with a fresh resampler and
@@ -355,38 +376,47 @@ impl MixerInput {
     /// Resamples `frames` output frames from the ring, chunk by chunk, and adds them into
     /// `out`.
     fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize) {
-        if !self.follow_routing() {
+        let Some(routed) = self.follow_routing() else {
             return;
-        }
-        let silent = self.controls.muted.load(Ordering::Relaxed)
-            || self.controls.soloed_out.load(Ordering::Relaxed);
-        let gain = if silent {
-            0.0
-        } else {
-            self.controls.gain.load()
         };
-        let metered = if self.controls.meter_pre_fader.load(Ordering::Relaxed) {
-            1.0
-        } else {
-            gain
-        };
-        let position = self.controls.pan.load();
+        let silent = self.controls.muted.load(Ordering::Acquire)
+            || self.controls.soloed_out.load(Ordering::Acquire);
+        let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
+        self.gain
+            .follow(self.controls.gain.load(), routed && !silent, fade_ms);
+        self.pan.follow(self.controls.pan.load(), true, 0);
+        let pre_fader = self.controls.meter_pre_fader.load(Ordering::Relaxed);
         let ch = self.channels;
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(MAX_CHUNK);
-            self.next_chunk(n);
-            let block = &self.resampled[..n * ch];
-            self.stats.peak.record_scaled(block, metered);
-            let rest = &mut out[done * out_channels..];
-            remix_add(block, ch, rest, out_channels, gain, position);
+            // A priming ring is silent, and the ramps wait: a fade-in starts with the sound.
+            if self.next_chunk(n) {
+                let block = &self.resampled[..n * ch];
+                let rest = &mut out[done * out_channels..];
+                let before = self.gain.ramp.value();
+                if self.gain.ramp.is_steady() && self.pan.ramp.is_steady() {
+                    let position = self.pan.ramp.value();
+                    remix_add(block, ch, rest, out_channels, before, position);
+                } else {
+                    let (gain, pan) = (&mut self.gain.ramp, &mut self.pan.ramp);
+                    remix_add_ramped(block, ch, rest, out_channels, gain, pan);
+                }
+                let metered = if pre_fader {
+                    1.0
+                } else {
+                    before.max(self.gain.ramp.value())
+                };
+                self.stats.peak.record_scaled(block, metered);
+            }
             done += n;
         }
     }
 
     /// Fills `resampled` with `frames` output frames (at most [`MAX_CHUNK`]): reads what the
     /// resampler needs per the drift plan, resamples it and steers the ratio by the level.
-    fn next_chunk(&mut self, frames: usize) {
+    /// False, with nothing in `resampled`, while the ring primes.
+    fn next_chunk(&mut self, frames: usize) -> bool {
         let ch = self.channels;
         let end = frames * ch;
         // Fails only for zero or more than MAX_CHUNK frames, which never reach here.
@@ -401,8 +431,7 @@ impl MixerInput {
             Event::None | Event::Priming => {}
         }
         if event == Event::Priming {
-            self.resampled[..end].fill(0.0);
-            return;
+            return false;
         }
         if let Ok(chunk) = self.consumer.read_chunk(plan.skip * ch) {
             chunk.commit_all();
@@ -431,7 +460,7 @@ impl MixerInput {
         if event == Event::Underrun {
             // The silence after an underrun starts the next priming from a clean filter.
             self.resampler.reset();
-            return;
+            return true;
         }
         if let Some(error) = self.drift.steady_error() {
             let correction = self
@@ -445,6 +474,7 @@ impl MixerInput {
             #[allow(clippy::cast_possible_truncation)]
             self.stats.correction_ppm.store((correction * 1e6) as f32);
         }
+        true
     }
 }
 
@@ -456,17 +486,25 @@ pub struct Mixer {
     out_channels: usize,
     controls: Arc<BusControls>,
     stats: Arc<BusStats>,
+    /// Where the bus gain stands, silence included.
+    gain: Follower,
 }
 
 impl Mixer {
-    /// A mixer for an output with `out_channels` channels.
+    /// A mixer for an output with `out_channels` channels, at the output rate of its inputs.
     #[must_use]
     pub fn new(inputs: Vec<MixerInput>, out_channels: usize) -> (Self, BusHandle) {
         let handle = BusHandle {
             controls: Arc::new(BusControls::default()),
             stats: Arc::new(BusStats::default()),
         };
+        // Only how long a ramp of the bus takes hangs on it; without inputs nothing sounds.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let rate = inputs
+            .first()
+            .map_or(48_000, |input| input.output_rate as u32);
         let mixer = Self {
+            gain: Follower::new(rate),
             inputs,
             out_channels,
             controls: Arc::clone(&handle.controls),
@@ -487,10 +525,13 @@ impl Mixer {
     /// output with `out_channels` channels (a device may come back with another layout).
     pub fn resume(&mut self, out_channels: usize) {
         self.out_channels = out_channels;
+        self.gain.start_over();
         for input in &mut self.inputs {
             input.restart();
+            input.gain.start_over();
+            input.pan.start_over();
             let routed = input.routed.load(Ordering::Acquire);
-            input.was_routed = routed;
+            input.playing = routed;
             input.open.store(routed, Ordering::Release);
         }
     }
@@ -507,28 +548,45 @@ impl Mixer {
         for input in &mut self.inputs {
             input.mix_into(out, self.out_channels, frames);
         }
-        let gain = if self.controls.muted.load(Ordering::Relaxed) {
-            0.0
-        } else {
-            self.controls.gain.load()
-        };
+        let sounding = !self.controls.muted.load(Ordering::Acquire);
+        let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
+        self.gain
+            .follow(self.controls.gain.load(), sounding, fade_ms);
         let mut clipped = 0;
-        for sample in out.iter_mut() {
-            let value = *sample * gain;
-            if value.is_nan() {
-                clipped += 1;
-                *sample = 0.0;
-            } else if value.abs() > 1.0 {
-                clipped += 1;
-                *sample = value.clamp(-1.0, 1.0);
-            } else {
-                *sample = value;
+        if self.gain.ramp.is_steady() {
+            let gain = self.gain.ramp.value();
+            for sample in out.iter_mut() {
+                clipped += limited(sample, gain);
+            }
+        } else {
+            for frame in out.chunks_exact_mut(self.out_channels) {
+                let gain = self.gain.ramp.next_value();
+                for sample in frame {
+                    clipped += limited(sample, gain);
+                }
             }
         }
         if clipped > 0 {
             self.stats.clipped.add(clipped);
         }
         self.stats.peak.record_scaled(out, 1.0);
+    }
+}
+
+/// `sample` times `gain`, limited to full scale; a NaN becomes silence. Returns how many samples
+/// that had to change: 1 or 0.
+#[inline]
+fn limited(sample: &mut f32, gain: f32) -> u64 {
+    let value = *sample * gain;
+    if value.is_nan() {
+        *sample = 0.0;
+        1
+    } else if value.abs() > 1.0 {
+        *sample = value.clamp(-1.0, 1.0);
+        1
+    } else {
+        *sample = value;
+        0
     }
 }
 
@@ -612,8 +670,9 @@ mod tests {
         assert!(all_near(&out, &[0.3, 0.3]), "{:?}", &out[..2]);
         assert!((handle_a.stats.peak.take() - 0.1).abs() < 2e-3);
 
-        handle_b.controls.muted.store(true, Ordering::Relaxed);
-        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 2, 0.2, 1);
+        // One callback for the mute's short fade, then it is gone.
+        handle_b.controls.muted.store(true, Ordering::Release);
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 2, 0.2, 2);
         assert!(all_near(&out, &[0.1, 0.1]), "{:?}", &out[..2]);
     }
 
@@ -639,6 +698,214 @@ mod tests {
         assert!(out.iter().all(|&o| o == 0.0), "priming: {:?}", &out[..1]);
         let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 6);
         assert!(all_near(&out, &[0.2]), "{:?}", &out[..1]);
+    }
+
+    /// Runs `callbacks` callbacks of `value` on one mono ring into a mono bus and returns all
+    /// of the output.
+    fn record(mixer: &mut Mixer, capture: &mut Capture, value: f32, callbacks: usize) -> Vec<f32> {
+        let mut all = Vec::with_capacity(callbacks * PERIOD);
+        let mut out = vec![0.0; PERIOD];
+        for _ in 0..callbacks {
+            push_dc(capture, PERIOD, value);
+            mixer.process(&mut out);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+
+    /// The largest step between neighbouring frames.
+    fn largest_step(out: &[f32]) -> f32 {
+        out.windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max)
+    }
+
+    /// A playing ring of `value` on a mono bus, past the ringing of the filter at its start.
+    fn playing(value: f32) -> (Mixer, Capture, InputHandle, BusHandle) {
+        let (mut capture, input, handle) = connect(config(1, 480));
+        let (mut mixer, bus) = Mixer::new(vec![input], 1);
+        record(&mut mixer, &mut capture, value, 10);
+        (mixer, capture, handle, bus)
+    }
+
+    #[test]
+    fn a_gain_ramp_takes_its_time_and_has_no_step() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        // 100 ms at 48 kHz: 4800 frames, ten callbacks.
+        handle.controls.gain.ramp_to(0.0, 100);
+        let out = record(&mut mixer, &mut capture, 0.5, 12);
+        assert!(
+            largest_step(&out) < 0.5 / 4800.0 * 1.5,
+            "{}",
+            largest_step(&out)
+        );
+        assert!(
+            (out[0] - 0.5).abs() < 2e-3,
+            "it starts where it stood: {}",
+            out[0]
+        );
+        assert!((out[2400] - 0.25).abs() < 2e-3, "halfway: {}", out[2400]);
+        assert!(out[4800..].iter().all(|&o| o == 0.0));
+    }
+
+    #[test]
+    fn a_change_without_a_time_is_still_free_of_steps() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.controls.gain.store(0.25);
+        let out = record(&mut mixer, &mut capture, 0.5, 2);
+        // 5 ms: 240 frames from 0.5 to 0.125.
+        assert!(
+            largest_step(&out) < 0.375 / 240.0 * 1.5,
+            "{}",
+            largest_step(&out)
+        );
+        assert!((out[out.len() - 1] - 0.125).abs() < 2e-3);
+    }
+
+    #[test]
+    fn a_mute_fades_for_as_long_as_it_is_told_and_back() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.controls.muted.store(true, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 2);
+        assert!(
+            largest_step(&out) < 0.5 / 240.0 * 1.5,
+            "{}",
+            largest_step(&out)
+        );
+        assert_eq!(out[out.len() - 1], 0.0);
+
+        handle.controls.fade_ms.store(50, Ordering::Relaxed);
+        handle.controls.muted.store(false, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 6);
+        assert!(
+            largest_step(&out) < 0.5 / 2400.0 * 1.5,
+            "{}",
+            largest_step(&out)
+        );
+        assert!((out[1200] - 0.25).abs() < 2e-3, "halfway: {}", out[1200]);
+        assert!((out[out.len() - 1] - 0.5).abs() < 2e-3);
+    }
+
+    #[test]
+    fn a_pan_ramp_moves_the_sides_without_a_step() {
+        let (mut capture, input, handle) = connect(config(1, 480));
+        let (mut mixer, _) = Mixer::new(vec![input], 2);
+        let mut out = vec![0.0; PERIOD * 2];
+        let mut left = Vec::new();
+        for callback in 0..16 {
+            if callback == 10 {
+                handle.controls.pan.ramp_to(1.0, 40);
+            }
+            push_dc(&mut capture, PERIOD, 0.5);
+            mixer.process(&mut out);
+            if callback >= 10 {
+                left.extend(out.as_chunks::<2>().0.iter().map(|frame| frame[0]));
+            }
+        }
+        // 40 ms: 1920 frames from the left at full level to silence.
+        assert!(
+            largest_step(&left) < 0.5 / 1920.0 * 1.5,
+            "{}",
+            largest_step(&left)
+        );
+        assert!((left[0] - 0.5).abs() < 2e-3);
+        assert_eq!(left[left.len() - 1], 0.0);
+    }
+
+    #[test]
+    fn a_bus_gain_ramps_and_a_bus_mute_fades() {
+        let (mut mixer, mut capture, _, bus) = playing(0.5);
+        bus.controls.gain.ramp_to(0.5, 50);
+        let out = record(&mut mixer, &mut capture, 0.5, 6);
+        // 50 ms: 2400 frames for a change of 0.25.
+        assert!(
+            largest_step(&out) < 0.25 / 2400.0 * 1.5,
+            "{}",
+            largest_step(&out)
+        );
+        assert!((out[out.len() - 1] - 0.25).abs() < 2e-3);
+
+        bus.controls.muted.store(true, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 2);
+        assert!(
+            largest_step(&out) < 0.25 / 240.0 * 1.5,
+            "{}",
+            largest_step(&out)
+        );
+        assert_eq!(out[out.len() - 1], 0.0);
+    }
+
+    #[test]
+    fn a_matrix_button_off_fades_out_before_the_ring_closes() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.controls.fade_ms.store(50, Ordering::Relaxed);
+        handle.routed.store(false, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 8);
+        assert!(
+            largest_step(&out) < 0.5 / 2400.0 * 1.5,
+            "{}",
+            largest_step(&out)
+        );
+        assert!((out[1200] - 0.25).abs() < 2e-3, "halfway: {}", out[1200]);
+        assert_eq!(out[out.len() - 1], 0.0);
+        // Closed now: a full ring would count as lost frames if it were still open.
+        let before = handle.stats.dropped_at_capture.get();
+        push_dc(&mut capture, 100_000, 0.5);
+        assert_eq!(handle.stats.dropped_at_capture.get(), before);
+    }
+
+    #[test]
+    fn a_matrix_button_back_on_during_the_fade_turns_it_around() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.controls.fade_ms.store(50, Ordering::Relaxed);
+        handle.routed.store(false, Ordering::Release);
+        let down = record(&mut mixer, &mut capture, 0.5, 2);
+        handle.routed.store(true, Ordering::Release);
+        let up = record(&mut mixer, &mut capture, 0.5, 8);
+        let all: Vec<f32> = down.into_iter().chain(up).collect();
+        // No priming on the way: the ring never closed, so no gap and no step.
+        assert!(
+            largest_step(&all) < 0.5 / 2400.0 * 1.5,
+            "{}",
+            largest_step(&all)
+        );
+        assert!((all[all.len() - 1] - 0.5).abs() < 2e-3);
+        assert_eq!(handle.stats.underruns.get(), 0);
+    }
+
+    #[test]
+    fn a_matrix_button_on_fades_in_after_priming() {
+        let (mut capture, input, handle) = connect(config(1, 480));
+        let (mut mixer, _) = Mixer::new(vec![input.unrouted()], 1);
+        record(&mut mixer, &mut capture, 0.5, 2);
+        handle.controls.fade_ms.store(50, Ordering::Relaxed);
+        handle.routed.store(true, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 12);
+        let first = out.iter().position(|&o| o != 0.0).expect("it plays");
+        assert!(first > 0, "it primes first");
+        // Constant level starting from nothing rings through the filter (a real signal rings
+        // far less); near the start of the fade that is what the fade is there to quieten.
+        let (ringing, rest) = out[first..].split_at(256);
+        assert!(largest_step(ringing) < 0.02, "{}", largest_step(ringing));
+        assert!(
+            largest_step(rest) < 0.5 / 2400.0 * 1.5,
+            "{}",
+            largest_step(rest)
+        );
+        assert!((out[out.len() - 1] - 0.5).abs() < 2e-3);
+    }
+
+    #[test]
+    fn a_meter_reads_the_ramp_and_the_level_before_it() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.stats.peak.take();
+        handle.controls.gain.ramp_to(0.0, 100);
+        record(&mut mixer, &mut capture, 0.5, 1);
+        assert!((handle.stats.peak.take() - 0.5).abs() < 2e-3);
+        record(&mut mixer, &mut capture, 0.5, 11);
+        handle.stats.peak.take();
+        record(&mut mixer, &mut capture, 0.5, 1);
+        assert_eq!(handle.stats.peak.take(), 0.0);
     }
 
     #[test]
@@ -675,8 +942,8 @@ mod tests {
             .store(true, Ordering::Relaxed);
         run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 1);
         assert!((handle_a.stats.peak.take() - 0.2).abs() < 2e-3);
-        handle_a.controls.soloed_out.store(false, Ordering::Relaxed);
-        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 1);
+        handle_a.controls.soloed_out.store(false, Ordering::Release);
+        let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 2);
         assert!(all_near(&out, &[0.3]), "{:?}", &out[..1]);
         assert!((handle_a.stats.peak.take() - 0.2).abs() < 2e-3);
     }
@@ -890,7 +1157,7 @@ mod tests {
             settle: 4800,
             ..config(2, 480)
         });
-        let (mut mixer, _) = Mixer::new(vec![input], 2);
+        let (mut mixer, bus) = Mixer::new(vec![input], 2);
         let data = vec![0.2; PERIOD * 2];
         let flood = vec![0.2; 8000 * 2];
         let mut out = vec![0.0; PERIOD * 2];
@@ -918,9 +1185,18 @@ mod tests {
             // A matrix button off and on again.
             handle.routed.store(false, Ordering::Release);
             mixer.process(&mut out);
+            mixer.process(&mut out);
             handle.routed.store(true, Ordering::Release);
             capture.push(&flood);
             mixer.process(&mut out);
+            // Ramps of gain, pan and the bus, past their end.
+            handle.controls.gain.ramp_to(0.5, 20);
+            handle.controls.pan.ramp_to(-1.0, 20);
+            bus.controls.gain.ramp_to(0.5, 20);
+            for _ in 0..5 {
+                capture.push(&data);
+                mixer.process(&mut out);
+            }
         });
         // Every path was taken (the long callback may resync or run dry once more).
         assert!(handle.stats.resyncs.get() >= 1);

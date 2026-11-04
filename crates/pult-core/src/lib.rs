@@ -19,6 +19,7 @@ pub mod dropouts;
 pub mod level;
 pub mod mixer;
 pub mod protocol;
+pub mod ramp;
 pub mod rate;
 pub mod remix;
 pub mod select;
@@ -32,8 +33,9 @@ pub use mixer::{
     BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,
     Mixer, MixerInput, connect, connect_with,
 };
+pub use ramp::{Follower, Glide, MAX_RAMP_MS, MIN_RAMP_MS, Ramp};
 pub use rate::RateControl;
-pub use remix::remix_add;
+pub use remix::{remix_add, remix_add_ramped};
 pub use select::{SelectError, select};
 pub use tone::Sine;
 pub use view::{
