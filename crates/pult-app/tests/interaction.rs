@@ -22,6 +22,8 @@ struct App {
     rename: Option<(usize, String)>,
     /// An input to show with a label: (index, label).
     label: Option<(usize, String)>,
+    /// Hides the scenes of the desk.
+    no_scenes: bool,
 }
 
 fn harness() -> Harness<'static, App> {
@@ -30,6 +32,7 @@ fn harness() -> Harness<'static, App> {
         state: ConsoleState::default(),
         rename: None,
         label: None,
+        no_scenes: false,
     };
     HarnessBuilder::default()
         .with_size(vec2(1280.0, 760.0))
@@ -39,6 +42,9 @@ fn harness() -> Harness<'static, App> {
             |ui, app: &mut App| {
                 Theme::current().apply(ui.ctx());
                 let mut view = app.desk.view();
+                if app.no_scenes {
+                    view.scenes.clear();
+                }
                 if let Some((input, name)) = &app.rename {
                     view.inputs[*input].name.clone_from(name);
                 }
@@ -242,6 +248,29 @@ fn escape_cancels_the_hint() {
     harness.key_press(Key::Escape);
     harness.run_steps(2);
     assert_eq!(harness.state().first(), Some(&Answer::Cancel));
+}
+
+#[test]
+fn a_scene_is_chosen_from_the_menu_and_the_status_says_so() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("Scene").click();
+    harness.run_steps(2);
+    harness.get_by_label("Abend").click();
+    let view = desk_view(&mut harness);
+    assert_eq!(view.inputs[0].gain_db, -12.0);
+    assert!(!view.inputs[1].muted);
+    let entry = harness.state().state.log().last().cloned().unwrap();
+    assert_eq!(entry.source, Source::Done);
+    assert_eq!(entry.text, "scene Abend");
+}
+
+#[test]
+fn a_route_without_scenes_offers_none() {
+    let mut harness = harness();
+    harness.state_mut().no_scenes = true;
+    harness.run_steps(2);
+    assert!(harness.query_by_label("Scene").is_none());
 }
 
 #[test]

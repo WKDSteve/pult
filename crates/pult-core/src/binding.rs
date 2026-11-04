@@ -219,6 +219,7 @@ impl Binding {
             (Self::Input(input, InputParam::Gain), Value::Gain(db)) => Action::InputGain {
                 input,
                 db: action_gain(db),
+                ramp_ms: 0,
             },
             (Self::Input(input, InputParam::Mute), Value::Switch(muted)) => {
                 Action::InputMute { input, muted }
@@ -226,12 +227,15 @@ impl Binding {
             (Self::Input(input, InputParam::Solo), Value::Switch(solo)) => {
                 Action::InputSolo { input, solo }
             }
-            (Self::Input(input, InputParam::Pan), Value::Pan(pan)) => {
-                Action::InputPan { input, pan }
-            }
+            (Self::Input(input, InputParam::Pan), Value::Pan(pan)) => Action::InputPan {
+                input,
+                pan,
+                ramp_ms: 0,
+            },
             (Self::Bus(bus, BusParam::Gain), Value::Gain(db)) => Action::BusGain {
                 bus,
                 db: action_gain(db),
+                ramp_ms: 0,
             },
             (Self::Bus(bus, BusParam::Mute), Value::Switch(muted)) => {
                 Action::BusMute { bus, muted }
@@ -367,7 +371,11 @@ mod tests {
         let write = |binding: Binding, value| binding.write(value);
         assert_eq!(
             write(Binding::Input(1, InputParam::Gain), Value::Gain(-3.0)),
-            Some(Action::InputGain { input: 1, db: -3.0 })
+            Some(Action::InputGain {
+                input: 1,
+                db: -3.0,
+                ramp_ms: 0
+            })
         );
         assert_eq!(
             write(Binding::Input(1, InputParam::Mute), Value::Switch(true)),
@@ -387,7 +395,8 @@ mod tests {
             write(Binding::Input(1, InputParam::Pan), Value::Pan(-0.5)),
             Some(Action::InputPan {
                 input: 1,
-                pan: -0.5
+                pan: -0.5,
+                ramp_ms: 0
             })
         );
         assert_eq!(
@@ -397,7 +406,8 @@ mod tests {
             ),
             Some(Action::BusGain {
                 bus: 0,
-                db: GAIN_RANGE_DB.0
+                db: GAIN_RANGE_DB.0,
+                ramp_ms: 0
             })
         );
         assert_eq!(

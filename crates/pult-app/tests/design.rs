@@ -113,6 +113,7 @@ fn showcase(t: f64) -> MixerView {
         buses,
         events: Vec::new(),
         profile: Some(PathBuf::from(r"C:\Users\me\pult\studio.toml")),
+        scenes: Vec::new(),
     }
 }
 

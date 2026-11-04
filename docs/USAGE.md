@@ -172,10 +172,34 @@ pult run --profile meinprofil.toml --log abend.csv
   Seite hin wird die andere leiser. Wirkt nur auf Ausgänge mit mindestens zwei Kanälen.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
   ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
+- **Szenen:** `[[scene]]` benennt einen Zustand des Mischpults, siehe unten.
 - **Tippfehler:** Unbekannte Schlüssel, Werte außerhalb der Bereiche und Busse, die es nicht gibt, sind Fehler mit
   Zeilenangabe; pult startet dann nicht.
 
 `--profile` lässt sich nicht mit `--from`, `--to` oder `--latency-ms` kombinieren.
+
+### Szenen
+
+Eine Szene ändert nur Werte und öffnet kein Gerät neu, also gibt es beim Wechsel keinen Aussetzer. Sie nennt nur, was
+abweicht; alles andere bleibt, wie es gerade ist.
+
+```toml
+[[scene]]
+name = "abend"
+blend_ms = 500               # optional, wie lange der Wechsel dauert, höchstens 60000
+
+[[scene.input]]
+input = 2                    # der zweite [[input]], wie in input/2/gain
+gain_db = -12                # außerdem pan, mute und buses = ["A1", "A2"]
+
+[[scene.bus]]
+bus = "A1"
+mute = false                 # außerdem gain_db
+```
+
+Gewechselt wird mit `scene abend` (Groß- und Kleinschreibung zählen nicht), im Fenster über das Menü **Scene** oder von
+außen ([`CONTROL.md`](CONTROL.md)). Wer danach speichert, speichert die Werte der Szene als Stand des Profils; die Szenen
+selbst und ihre Kommentare bleiben unberührt. Solo gehört nicht dazu.
 
 ## 6. Ton einzelner Programme
 
@@ -216,16 +240,21 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
   A1: gain -6.0 dB
 > mute 2
   [2] Analogue 1 + 2 (2- Focusrite USB Audio): muted
+> gain 1 -12 over 2000
+  [1] CABLE Output (VB-Audio Virtual Cable): gain -12.0 dB over 2000 ms
+> scene abend
+  scene abend over 500 ms
 > save abend.toml
   saved the current state to abend.toml
 ```
 
 | Befehl | Wirkung |
 |---|---|
-| `gain <Ziel> <dB>` | Gain eines Eingangs oder Busses setzen, -96 bis 24 dB |
+| `gain <Ziel> <dB> [over <ms>]` | Gain eines Eingangs oder Busses setzen, -96 bis 24 dB, auf Wunsch in so vielen Millisekunden (höchstens 60000) |
 | `mute <Ziel>`, `unmute <Ziel>` | stumm schalten, wieder einschalten; die Statuszeile zeigt dann `muted` |
-| `pan <Eingang> <-1..1>` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
+| `pan <Eingang> <-1..1> [over <ms>]` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
 | `route <Eingang> <Bus>`, `unroute <Eingang> <Bus>` | einen Eingang zusätzlich auf einen Bus legen, von ihm nehmen; der letzte Bus eines Eingangs bleibt (dafür `mute`) |
+| `scene <Name>`, `scenes` | zu einer Szene des Profils wechseln (siehe 5.), die Szenen auflisten |
 | `show` | alle Eingänge und Busse mit Gain, Pan und Mute |
 | `save <Datei>` | den aktuellen Stand als Profil schreiben, später mit `--profile` laden. Ein Profil mit denselben Bussen und Eingängen behält seine Kommentare und Reihenfolge, nur geänderte Werte werden ersetzt; jede andere Datei wird überschrieben |
 | `help` | die Befehle |
@@ -234,12 +263,15 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 - **Ziel:** ein Eingang über seine Nummer (`1`) oder einen eindeutigen Teil seines Namens (`cable`), ein Bus über seinen
   Namen (`A1`). Groß- und Kleinschreibung zählen nicht.
 - **Bedienen:** Pfeil hoch und runter holen frühere Befehle zurück, Esc leert die Zeile.
+- **Ohne Knacken:** Keine Änderung springt. Gain, Pan, Mute und Solo gleiten mindestens 5 ms, ein Eingang blendet beim
+  Ein- und Ausrouten aus bzw. ein. Anzeigen und `show` nennen schon das Ziel, der Ton folgt in der angegebenen Zeit. Geht
+  ein Eingang neu auf einen Bus, setzt er nach dem Füllen seines Puffers ein; rund 2 s später gleicht pult einmalig seinen
+  Versatz aus, was bei einem größeren Versatz leise zu hören sein kann.
 - **Von außen:** Andere Programme auf diesem Rechner können eine laufende Route lesen und steuern, siehe
   [`CONTROL.md`](CONTROL.md). Was sie ändern, steht als `remote: …` über der Eingabezeile.
 - **Gespeichert** wird nur mit `save`; beim nächsten Start gilt wieder das Profil bzw. die Kommandozeile. Ein mit
   `--from`/`--to` gestarteter Lauf lässt sich so in ein Profil verwandeln.
 - Läuft pult nicht in einer Konsole (Eingabe aus einer Datei oder Pipe), ist jede Zeile ein Befehl, eine leere beendet.
-- Welcher Eingang auf welchen Bus geht, lässt sich während des Laufs noch nicht ändern: dafür Profil ändern und neu starten.
 
 ## Fehlermeldungen
 

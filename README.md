@@ -23,7 +23,8 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Verschiedene Abtastraten: jeder Eingang wird auf die Rate seines Busses umgerechnet (44,1 / 48 / 96 kHz gemischt) | fertig (Stufe 2) |
 | Geräte ab- und anstecken während des Laufs (Hot-Plug): der Rest spielt weiter, das Gerät kommt von selbst zurück | fertig, am echten Aufbau geprüft |
 | Ton einzelner Programme als Eingang (Prozess-Loopback, `--from app:Spotify`, `pult programs`); beendet sich das Programm, wird es beim Neustart wieder aufgenommen | fertig |
-| Oberfläche (Tauri), Szenen, Hub, EQ/Kompressor | geplant |
+| Szenen im Profil: Gain, Pan, Mute und Matrix wechseln ohne Aussetzer, auf Wunsch weich überblendet; keine Änderung springt mehr (`docs/USAGE.md`) | fertig |
+| Oberfläche (Tauri), Hub, EQ/Kompressor | geplant |
 
 ## Plattformen
 

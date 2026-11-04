@@ -60,7 +60,14 @@ mod tests {
         let mut values = Values::new(&view);
         assert_eq!(values.read(gain), Some(Value::Gain(view.inputs[0].gain_db)));
         let action = values.write(gain, Value::Gain(-7.0));
-        assert_eq!(action, Some(Action::InputGain { input: 0, db: -7.0 }));
+        assert_eq!(
+            action,
+            Some(Action::InputGain {
+                input: 0,
+                db: -7.0,
+                ramp_ms: 0
+            })
+        );
         assert_eq!(values.read(gain), Some(Value::Gain(-7.0)));
         assert_eq!(
             values.read(Binding::Input(1, InputParam::Gain)),

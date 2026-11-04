@@ -58,10 +58,10 @@ impl ConsoleState {
     }
 
     /// Hands `action` to `desk` at `elapsed` and notes the answer: a refusal with its reason,
-    /// and what a save did, so the status line confirms it. Other confirmations stay out of
-    /// the log; a fader drag would fill it.
+    /// and what a save or a scene did, so the status line confirms it. Other confirmations stay
+    /// out of the log; a fader drag would fill it.
     pub fn act(&mut self, desk: &mut dyn Desk, elapsed: Duration, action: Action) {
-        let confirm = matches!(action, Action::SaveProfile { .. });
+        let confirm = matches!(action, Action::SaveProfile { .. } | Action::Scene { .. });
         match desk.act(action) {
             Ok(lines) if confirm => {
                 for line in lines {
@@ -190,6 +190,7 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
             }
             ui.label(RichText::new("METER").size(9.5).color(p.text_faint));
             ui.add_space(14.0);
+            scene_menu(ui, view, actions);
             for (tab, name) in [
                 (Tab::Events, "Events"),
                 (Tab::Matrix, "Matrix"),
@@ -199,6 +200,22 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
             }
         });
     });
+}
+
+/// Offers the scenes of the route, if it has any.
+fn scene_menu(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
+    if view.scenes.is_empty() {
+        return;
+    }
+    ui.menu_button("Scene", |ui| {
+        for name in &view.scenes {
+            if ui.button(name).clicked() {
+                actions.push(Action::Scene { name: name.clone() });
+                ui.close();
+            }
+        }
+    });
+    ui.add_space(14.0);
 }
 
 fn stat(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {

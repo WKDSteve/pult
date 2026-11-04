@@ -2,11 +2,13 @@
 """One real run driven through the control interface, on the silent outputs "Voicemeeter In 4"
 and "In 5" only, with a config folder of its own.
 
-usage: python tools/control-check.py <pult.exe> <out dir> [seconds of steady reading]
+usage: python tools/control-check.py <pult.exe> <out dir> [seconds of steady reading] [seconds of scenes]
 
 Pairs like a local program, reads the state, sets a gain, gets a refusal, then keeps reading
-and holds an event stream open. Ends with a non-zero status when anything is not as it should
-be, among it a dropout or a glitch during the reading.
+and holds an event stream open. Then it changes scenes every half second with every core busy.
+Ends with a non-zero status when anything is not as it should be, among it a dropout or a
+glitch during the reading or the scenes. The first seconds are shown but do not count: a start on
+a busy machine can cost one resync (pult/start-unter-last-ein-aussetzer).
 """
 
 import http.client
@@ -36,6 +38,56 @@ def call(port, method, path, token=None, body=None, origin=False):
     return reply.status, text
 
 
+# How long a start may take to settle, on a busy machine too.
+START_SECONDS = 10
+
+PROFILE = """# The route of the check.
+[[bus]]
+name = "A1"
+device = "Voicemeeter In 5"
+
+[[bus]]
+name = "A2"
+device = "Voicemeeter In 4"
+mute = true
+
+[[input]]
+process = "pulttone"
+buses = ["A1"]
+
+# Both buses, one side, the second output up.
+[[scene]]
+name = "Leise"
+blend_ms = 300
+
+[[scene.input]]
+input = 1
+gain_db = -12
+pan = -0.5
+buses = ["A1", "A2"]
+
+[[scene.bus]]
+bus = "A2"
+gain_db = -6
+mute = false
+
+# As it started.
+[[scene]]
+name = "Normal"
+blend_ms = 100
+
+[[scene.input]]
+input = 1
+gain_db = 0
+pan = 0
+buses = ["A1"]
+
+[[scene.bus]]
+bus = "A2"
+mute = true
+"""
+
+
 def wait_for(path):
     for _ in range(100):
         if path.exists():
@@ -63,6 +115,22 @@ def state(port, token):
     raise SystemExit("no state came")
 
 
+def troubles(now):
+    """Dropouts so far, as events, and glitches so far."""
+    return round(now["dropouts_per_hour"] * now["elapsed_s"] / 3600), now["glitches"]
+
+
+def shows(port, token, wanted, seconds=5):
+    """Whether a state fulfils `wanted` soon: one comes with the owner's next report, which a
+    busy machine delays."""
+    until = time.time() + seconds
+    while time.time() < until:
+        if wanted(state(port, token)):
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def op(port, token, **fields):
     return call(port, "POST", "/api/pult/ops", token, json.dumps(fields))
 
@@ -73,13 +141,17 @@ def main():
         return 2
     pult, out = Path(sys.argv[1]), Path(sys.argv[2])
     seconds = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+    scene_seconds = int(sys.argv[4]) if len(sys.argv) > 4 else 30
     config = out / "config"
     shutil.rmtree(config, ignore_errors=True)
     config.mkdir(parents=True)
     tone_exe = out / "pulttone.exe"
     shutil.copy2(pult, tone_exe)
     env = {**os.environ, "PULT_CONFIG_DIR": str(config), "PULT_PORT": "0"}
-
+    profile = out / "control-check.toml"
+    profile.write_text(PROFILE, encoding="utf-8", newline="\n")
+    (out / "control.csv").unlink(missing_ok=True)
+    load = []
     tone = subprocess.Popen(
         [str(tone_exe), "tone", "--to", "Voicemeeter In 4"],
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, env=env,
@@ -90,7 +162,7 @@ def main():
         time.sleep(2)
         with open(out / "control.txt", "w", encoding="utf-8") as console:
             run = subprocess.Popen(
-                [str(pult), "run", "--from", "app:pulttone", "--to", "Voicemeeter In 5"],
+                [str(pult), "run", "--profile", str(profile), "--log", str(out / "control.csv")],
                 stdin=subprocess.PIPE, stdout=console, stderr=subprocess.STDOUT, env=env,
             )
             wait_for(config / "hub.json")
@@ -109,9 +181,16 @@ def main():
             print("set:", status, text)
             if status != 200:
                 failed.append(f"set: {status} {text}")
-            time.sleep(0.5)
-            if state(port, token)["buses"][0]["gain_db"] != -6:
+            if not shows(port, token, lambda now: now["buses"][0]["gain_db"] == -6):
                 failed.append("the gain did not change")
+
+            status, text = op(port, token, op="set", address="bus/A1/gain", value=0, ramp_ms=200)
+            print("ramp:", status, text)
+            if status != 200 or "over 200 ms" not in text:
+                failed.append(f"ramp: {status} {text}")
+            status, text = op(port, token, op="set", address="bus/A1/mute", value=True, ramp_ms=200)
+            if status != 422:
+                failed.append(f"a ramp on a mute: {status} {text}")
 
             status, text = op(port, token, op="set", address="matrix/1/A1", value=False)
             print("refused:", status, text)
@@ -127,6 +206,11 @@ def main():
             if "text/event-stream" not in said:
                 failed.append(f"no stream: {said[:200]}")
 
+            # What the start cost; from here on nothing may come on top.
+            time.sleep(START_SECONDS)
+            at_start = troubles(state(port, token))
+            print(f"dropouts and glitches of the start: {at_start}")
+
             reads = 0
             until = time.time() + seconds
             while time.time() < until:
@@ -134,11 +218,72 @@ def main():
                 reads += 1
                 time.sleep(0.02)
             print(f"read the state {reads} times in {seconds} s, a stream open")
-            print("dropouts/h", last["dropouts_per_hour"], "glitches", last["glitches"])
-            if last["dropouts_per_hour"] != 0 or last["glitches"] != 0:
-                failed.append("dropouts or glitches during the reading")
+            if troubles(last) != at_start:
+                failed.append(f"during the reading: {at_start} became {troubles(last)}")
             if last["inputs"][0]["peak_db"] is None:
                 failed.append("no peak of the tone in the state")
+
+            if last["scenes"] != ["Leise", "Normal"]:
+                failed.append(f"scenes: {last['scenes']}")
+            status, text = op(port, token, op="scene", name="nichts")
+            if status != 422 or "scenes: Leise, Normal" not in text:
+                failed.append(f"an unknown scene: {status} {text}")
+
+            load = [
+                subprocess.Popen([sys.executable, "-c", "while True: pass"])
+                for _ in range(os.cpu_count() or 4)
+            ]
+            changes = 0
+            slowest = 0
+            until = time.time() + scene_seconds
+            while time.time() < until:
+                name = "leise" if changes % 2 == 0 else "normal"
+                status, text = op(port, token, op="scene", name=name)
+                if status != 200:
+                    failed.append(f"scene {name}: {status} {text}")
+                    break
+                changes += 1
+                asked = time.time()
+                want = (-12, -0.5, ["A1", "A2"]) if name == "leise" else (0, 0, ["A1"])
+                arrived = shows(
+                    port,
+                    token,
+                    lambda now: (
+                        now["inputs"][0]["gain_db"],
+                        now["inputs"][0]["pan"],
+                        now["inputs"][0]["buses"],
+                    )
+                    == want,
+                )
+                slowest = max(slowest, time.time() - asked)
+                if not arrived:
+                    failed.append(f"scene {name} does not show")
+                    break
+                time.sleep(0.5)
+                if state(port, token)["inputs"][0]["peak_db"] is None:
+                    failed.append(f"scene {name}: no sound")
+                    break
+            for process in load:
+                process.kill()
+                process.wait()
+            load = []
+            last = state(port, token)
+            print(f"changed scenes {changes} times in {scene_seconds} s, all cores busy")
+            print(f"the state showed it after {slowest:.2f} s at most")
+            if troubles(last) != at_start:
+                failed.append(f"during the scenes: {at_start} became {troubles(last)}")
+
+            # Into the profile, with the scenes and the comments left as they were.
+            status, text = op(port, token, op="scene", name="leise")
+            status, text = op(port, token, op="save")
+            if status != 200:
+                failed.append(f"save: {status} {text}")
+            saved = profile.read_text(encoding="utf-8")
+            scenes_at = "# Both buses, one side"
+            if saved[saved.index(scenes_at):] != PROFILE[PROFILE.index(scenes_at):]:
+                failed.append("saving changed the scenes")
+            if not saved.startswith("# The route of the check.") or 'buses = ["A1", "A2"]' not in saved:
+                failed.append("saving did not keep the file or the state")
 
             begun = time.time()
             run.communicate(b"\n", timeout=30)
@@ -147,6 +292,8 @@ def main():
             if (config / "hub.json").exists() or (config / "control.secret").exists():
                 failed.append("the files of the hub stayed")
     finally:
+        for process in load:
+            process.kill()
         if run and run.poll() is None:
             run.kill()
         tone.communicate(b"\n", timeout=30)

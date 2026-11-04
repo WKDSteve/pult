@@ -37,6 +37,8 @@ pub struct State {
     pub buses: Vec<BusState>,
     /// The latest events, oldest first; `seq` tells a client which it has seen.
     pub events: Vec<EventState>,
+    /// The scenes it can change to, in profile order.
+    pub scenes: Vec<String>,
 }
 
 /// Where the input meters measure.
@@ -188,6 +190,7 @@ impl State {
                 .collect(),
             buses: view.buses.iter().map(BusState::new).collect(),
             events,
+            scenes: view.scenes.clone(),
         }
     }
 }
@@ -252,6 +255,14 @@ pub enum Op {
         address: String,
         /// The new value.
         value: OpValue,
+        /// Milliseconds to get there, for a gain or a pan.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ramp_ms: Option<u32>,
+    },
+    /// Changes to a scene of the route.
+    Scene {
+        /// Its name, ignoring case.
+        name: String,
     },
     /// Moves the input meters before or after the fader.
     MeterPoint {
@@ -269,17 +280,27 @@ impl Op {
     /// # Errors
     ///
     /// A message when the address names nothing in `view`, its parameter is only read, the
-    /// value is of the wrong kind, or a gain is out of range. Elsewhere a fader's off is sent
-    /// as the lowest gain; a client's number that is too high or too low is a mistake.
+    /// value is of the wrong kind, a gain is out of range, or a ramp is too long or asked of
+    /// what does not ramp. Elsewhere a fader's off is sent as the lowest gain; a client's number
+    /// that is too high or too low is a mistake.
     pub fn action(&self, view: &MixerView) -> Result<Action, String> {
         match self {
-            Self::Set { address, value } => {
+            Self::Set {
+                address,
+                value,
+                ramp_ms,
+            } => {
                 let binding = Binding::parse(address, view).map_err(|e| e.to_string())?;
                 let value = value_for(binding, *value, address)?;
-                binding
+                let action = binding
                     .write(value)
-                    .ok_or_else(|| format!("{address} can only be read"))
+                    .ok_or_else(|| format!("{address} can only be read"))?;
+                match ramp_ms {
+                    Some(ms) => action.over(*ms).map_err(|why| format!("{address}: {why}")),
+                    None => Ok(action),
+                }
             }
+            Self::Scene { name } => Ok(Action::Scene { name: name.clone() }),
             Self::MeterPoint { value } => Ok(Action::SetMeterPoint(match value {
                 MeterPlace::Pre => MeterPoint::PreFader,
                 MeterPlace::Post => MeterPoint::PostFader,
@@ -392,11 +413,19 @@ mod tests {
     fn ops_become_the_actions_of_the_contract() {
         assert_eq!(
             action(r#"{"op":"set","address":"input/2/gain","value":-6}"#),
-            Ok(Action::InputGain { input: 1, db: -6.0 })
+            Ok(Action::InputGain {
+                input: 1,
+                db: -6.0,
+                ramp_ms: 0
+            })
         );
         assert_eq!(
             action(r#"{"op":"set","address":"input/2/pan","value":0.5}"#),
-            Ok(Action::InputPan { input: 1, pan: 0.5 })
+            Ok(Action::InputPan {
+                input: 1,
+                pan: 0.5,
+                ramp_ms: 0
+            })
         );
         assert_eq!(
             action(r#"{"op":"set","address":"bus/A1/mute","value":true}"#),
@@ -421,6 +450,59 @@ mod tests {
             action(r#"{"op":"save"}"#),
             Ok(Action::SaveProfile { path: None })
         );
+    }
+
+    #[test]
+    fn a_gain_or_pan_can_take_its_time_and_a_scene_is_named() {
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/2/gain","value":-6,"ramp_ms":500}"#),
+            Ok(Action::InputGain {
+                input: 1,
+                db: -6.0,
+                ramp_ms: 500
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/gain","value":0,"ramp_ms":60000}"#),
+            Ok(Action::BusGain {
+                bus: 0,
+                db: 0.0,
+                ramp_ms: 60_000
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/pan","value":1,"ramp_ms":20}"#),
+            Ok(Action::InputPan {
+                input: 0,
+                pan: 1.0,
+                ramp_ms: 20
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"scene","name":"Abend"}"#),
+            Ok(Action::Scene {
+                name: "Abend".to_owned()
+            })
+        );
+        let refused = |json| action(json).expect_err(json);
+        assert!(
+            refused(r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":60001}"#)
+                .contains("at most 60000 ms")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"input/1/mute","value":true,"ramp_ms":100}"#)
+                .contains("only a gain or a pan")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"matrix/1/A1","value":true,"ramp_ms":100}"#)
+                .contains("only a gain or a pan")
+        );
+    }
+
+    #[test]
+    fn a_state_lists_the_scenes() {
+        let state = State::new(&view(), Vec::new());
+        assert_eq!(state.scenes, ["Abend", "Laut"]);
     }
 
     #[test]
@@ -456,6 +538,10 @@ mod tests {
             r#"{"op":"set","address":"input/1/gain"}"#,
             r#"{"op":"set","address":"input/1/gain","value":"-6"}"#,
             r#"{"op":"set","address":"input/1/gain","value":0,"extra":1}"#,
+            r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":-1}"#,
+            r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":"soon"}"#,
+            r#"{"op":"scene"}"#,
+            r#"{"op":"scene","name":"Abend","path":"x"}"#,
         ] {
             assert!(serde_json::from_str::<Op>(json).is_err(), "{json}");
         }

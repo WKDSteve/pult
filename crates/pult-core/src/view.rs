@@ -10,6 +10,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::ramp::MAX_RAMP_MS;
+
 pub use crate::binding::{AddressError, Binding, BusParam, InputParam, Value, action_gain};
 
 /// A snapshot of the whole mixer, taken about 30 times a second.
@@ -32,6 +34,8 @@ pub struct MixerView {
     pub events: Vec<EventView>,
     /// The profile the route came from or was last saved to.
     pub profile: Option<PathBuf>,
+    /// The scenes of the route, in profile order.
+    pub scenes: Vec<String>,
 }
 
 /// What an input captures.
@@ -157,6 +161,8 @@ pub enum Action {
         input: usize,
         /// Gain in dB.
         db: f32,
+        /// Milliseconds to get there (0: at once, free of clicks).
+        ramp_ms: u32,
     },
     /// Mutes or unmutes an input.
     InputMute {
@@ -178,6 +184,8 @@ pub enum Action {
         input: usize,
         /// Pan.
         pan: f32,
+        /// Milliseconds to get there (0: at once, free of clicks).
+        ramp_ms: u32,
     },
     /// Sets a bus's gain in dB.
     BusGain {
@@ -185,6 +193,8 @@ pub enum Action {
         bus: usize,
         /// Gain in dB.
         db: f32,
+        /// Milliseconds to get there (0: at once, free of clicks).
+        ramp_ms: u32,
     },
     /// Mutes or unmutes a bus.
     BusMute {
@@ -202,6 +212,11 @@ pub enum Action {
         /// On or off.
         on: bool,
     },
+    /// Changes to a scene of the route.
+    Scene {
+        /// Its name, ignoring case.
+        name: String,
+    },
     /// Saves the current state as a profile; `None` saves to [`MixerView::profile`].
     SaveProfile {
         /// Where to.
@@ -209,6 +224,26 @@ pub enum Action {
     },
     /// Moves the input meters before or after the fader.
     SetMeterPoint(MeterPoint),
+}
+
+impl Action {
+    /// The same action taking `ms` milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// A message when it is no gain or pan, which alone ramp, or `ms` is beyond [`MAX_RAMP_MS`].
+    pub fn over(mut self, ms: u32) -> Result<Self, String> {
+        if ms > MAX_RAMP_MS {
+            return Err(format!("a ramp takes at most {MAX_RAMP_MS} ms, not {ms}"));
+        }
+        match &mut self {
+            Self::InputGain { ramp_ms, .. }
+            | Self::InputPan { ramp_ms, .. }
+            | Self::BusGain { ramp_ms, .. } => *ramp_ms = ms,
+            _ => return Err("only a gain or a pan can ramp".to_owned()),
+        }
+        Ok(self)
+    }
 }
 
 /// What an action did, one line each, or why it was not done.
@@ -315,6 +350,7 @@ impl FakeDesk {
                 ],
                 events: Vec::new(),
                 profile: Some(PathBuf::from("pult.toml")),
+                scenes: vec!["Abend".to_owned(), "Laut".to_owned()],
             },
             frame: 0,
         }
@@ -424,7 +460,7 @@ impl Desk for FakeDesk {
 
     fn act(&mut self, action: Action) -> Reply {
         match action {
-            Action::InputGain { input, db } => {
+            Action::InputGain { input, db, .. } => {
                 let db = check_gain(db)?;
                 self.input_mut(input)?.gain_db = db;
                 Ok(vec![format!("[{}] gain {db:.1} dB", input + 1)])
@@ -445,14 +481,14 @@ impl Desk for FakeDesk {
                     if solo { "solo" } else { "solo off" }
                 )])
             }
-            Action::InputPan { input, pan } => {
+            Action::InputPan { input, pan, .. } => {
                 if !(-1.0..=1.0).contains(&pan) {
                     return Err(format!("pan {pan} is outside -1 to 1"));
                 }
                 self.input_mut(input)?.pan = pan;
                 Ok(vec![format!("[{}] pan {pan:.2}", input + 1)])
             }
-            Action::BusGain { bus, db } => {
+            Action::BusGain { bus, db, .. } => {
                 let db = check_gain(db)?;
                 let bus = self.bus_mut(bus)?;
                 bus.gain_db = db;
@@ -489,6 +525,19 @@ impl Desk for FakeDesk {
                     input + 1,
                     if on { "->" } else { "off" }
                 )])
+            }
+            Action::Scene { name } => {
+                // The demo's scenes: one quieter with the microphone on, one with all up.
+                let (cable, microphone) = if name.eq_ignore_ascii_case("Abend") {
+                    (-12.0, false)
+                } else if name.eq_ignore_ascii_case("Laut") {
+                    (0.0, true)
+                } else {
+                    return Err(format!("no scene \"{name}\"; scenes: Abend, Laut"));
+                };
+                self.input_mut(0)?.gain_db = cable;
+                self.input_mut(1)?.muted = microphone;
+                Ok(vec![format!("scene {name}")])
             }
             Action::SaveProfile { path } => {
                 let path = path
@@ -552,17 +601,27 @@ mod tests {
             mixer
                 .act(Action::InputGain {
                     input: 0,
-                    db: -12.0
+                    db: -12.0,
+                    ramp_ms: 0
                 })
                 .is_ok()
         );
-        assert!(mixer.act(Action::InputGain { input: 0, db: 40.0 }).is_err());
+        assert!(
+            mixer
+                .act(Action::InputGain {
+                    input: 0,
+                    db: 40.0,
+                    ramp_ms: 0
+                })
+                .is_err()
+        );
         // The whole range of profiles and commands, down to -96 dB, is accepted.
         assert!(
             mixer
                 .act(Action::InputGain {
                     input: 1,
-                    db: -90.0
+                    db: -90.0,
+                    ramp_ms: 0
                 })
                 .is_ok()
         );
@@ -570,12 +629,29 @@ mod tests {
             mixer
                 .act(Action::InputGain {
                     input: 1,
-                    db: -97.0
+                    db: -97.0,
+                    ramp_ms: 0
                 })
                 .is_err()
         );
-        assert!(mixer.act(Action::InputGain { input: 9, db: 0.0 }).is_err());
-        assert!(mixer.act(Action::InputPan { input: 0, pan: 2.0 }).is_err());
+        assert!(
+            mixer
+                .act(Action::InputGain {
+                    input: 9,
+                    db: 0.0,
+                    ramp_ms: 0
+                })
+                .is_err()
+        );
+        assert!(
+            mixer
+                .act(Action::InputPan {
+                    input: 0,
+                    pan: 2.0,
+                    ramp_ms: 0
+                })
+                .is_err()
+        );
         assert!(
             mixer
                 .act(Action::BusMute {

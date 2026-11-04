@@ -337,6 +337,46 @@ impl BusSpec {
     }
 }
 
+/// What a scene changes of one input; what it does not name stays as it is.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SceneInput {
+    /// Index into [`RouteSpec::inputs`].
+    pub input: usize,
+    /// Gain in dB.
+    pub gain_db: Option<f32>,
+    /// -1 (left) to 1 (right).
+    pub pan: Option<f32>,
+    /// Muted.
+    pub muted: Option<bool>,
+    /// The buses it feeds from now on, as indices into [`RouteSpec::buses`].
+    pub buses: Option<Vec<usize>>,
+}
+
+/// What a scene changes of one bus; what it does not name stays as it is.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SceneBus {
+    /// Index into [`RouteSpec::buses`].
+    pub bus: usize,
+    /// Gain in dB.
+    pub gain_db: Option<f32>,
+    /// Muted.
+    pub muted: Option<bool>,
+}
+
+/// A named state of the mixer. It changes values only and opens no device, so it never
+/// interrupts the sound.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SceneSpec {
+    /// What it is called; unique in a route, ignoring case.
+    pub name: String,
+    /// Milliseconds the change takes.
+    pub blend_ms: u32,
+    /// What changes on the inputs.
+    pub inputs: Vec<SceneInput>,
+    /// What changes on the buses.
+    pub buses: Vec<SceneBus>,
+}
+
 /// What to route: inputs, buses and which input feeds which bus.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteSpec {
@@ -346,11 +386,13 @@ pub struct RouteSpec {
     pub buses: Vec<BusSpec>,
     /// Buffering per input in milliseconds; more is safer against dropouts, less is faster.
     pub latency_ms: u32,
+    /// The scenes it can change to.
+    pub scenes: Vec<SceneSpec>,
 }
 
 impl RouteSpec {
     /// Checks what does not need a device: at least one input and one bus, every input
-    /// routed to existing buses, each at most once.
+    /// routed to existing buses, each at most once, and scenes that name only what is there.
     ///
     /// # Errors
     ///
@@ -382,6 +424,20 @@ impl RouteSpec {
                         input.device, self.buses[bus].name
                     ));
                 }
+            }
+        }
+        for scene in &self.scenes {
+            let fits = scene.inputs.iter().all(|change| {
+                change.input < self.inputs.len()
+                    && change.buses.as_ref().is_none_or(|buses| {
+                        !buses.is_empty() && buses.iter().all(|&bus| bus < self.buses.len())
+                    })
+            }) && scene
+                .buses
+                .iter()
+                .all(|change| change.bus < self.buses.len());
+            if !fits {
+                return invalid(format!("scene \"{}\" does not fit the route", scene.name));
             }
         }
         Ok(())
@@ -1076,6 +1132,41 @@ mod tests {
                 .map(|i| BusSpec::new(format!("A{i}"), format!("out {i}")))
                 .collect(),
             latency_ms: 40,
+            scenes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_scene_has_to_fit_the_route() {
+        let mut spec = route(vec![InputSpec::new("in", 0.0, vec![0])], 1);
+        spec.validate().expect("no scenes");
+        let scene = |inputs, buses| SceneSpec {
+            name: "abend".into(),
+            blend_ms: 0,
+            inputs,
+            buses,
+        };
+        let input = |input, buses| SceneInput {
+            input,
+            buses,
+            ..SceneInput::default()
+        };
+        spec.scenes = vec![scene(vec![input(0, Some(vec![0]))], Vec::new())];
+        spec.validate().expect("fits");
+        for bad in [
+            scene(vec![input(1, None)], Vec::new()),
+            scene(vec![input(0, Some(vec![1]))], Vec::new()),
+            scene(vec![input(0, Some(Vec::new()))], Vec::new()),
+            scene(
+                Vec::new(),
+                vec![SceneBus {
+                    bus: 1,
+                    ..SceneBus::default()
+                }],
+            ),
+        ] {
+            spec.scenes = vec![bad];
+            assert!(invalid(&spec).contains("scene \"abend\""));
         }
     }
 

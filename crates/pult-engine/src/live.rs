@@ -6,10 +6,10 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use pult_core::control::{Command, HELP, Target};
-use pult_core::db_to_linear;
+use pult_core::{MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
-use crate::{RouteSpec, Running};
+use crate::{RouteSpec, Running, SceneSpec};
 
 impl Running {
     /// The input names a command may name, in route order.
@@ -39,7 +39,7 @@ impl Running {
     /// A message when a value is out of range or the profile cannot be written.
     pub fn apply(&mut self, command: &Command) -> Result<Vec<String>, String> {
         match command {
-            Command::Gain(target, gain_db) => {
+            Command::Gain(target, gain_db, ramp_ms) => {
                 if !GAIN_DB.contains(gain_db) {
                     return Err(format!(
                         "gain must be {} to {} dB, not {gain_db}",
@@ -47,60 +47,152 @@ impl Running {
                         GAIN_DB.end()
                     ));
                 }
-                let linear = db_to_linear(*gain_db);
-                match *target {
-                    Target::Input(index) => {
-                        self.inputs[index].controls.gain.store(linear);
-                        self.spec.inputs[index].gain_db = *gain_db;
-                    }
-                    Target::Bus(index) => {
-                        self.buses[index].handle.controls.gain.store(linear);
-                        self.spec.buses[index].gain_db = *gain_db;
-                    }
-                }
+                check_ramp(*ramp_ms)?;
+                self.set_gain(*target, *gain_db, *ramp_ms);
                 Ok(vec![format!(
-                    "{}: gain {gain_db:.1} dB",
-                    self.target_label(*target)
+                    "{}: gain {gain_db:.1} dB{}",
+                    self.target_label(*target),
+                    over(*ramp_ms)
                 )])
             }
             Command::Mute(target, muted) => {
-                match *target {
-                    Target::Input(index) => {
-                        self.inputs[index]
-                            .controls
-                            .muted
-                            .store(*muted, Ordering::Relaxed);
-                        self.spec.inputs[index].muted = *muted;
-                    }
-                    Target::Bus(index) => {
-                        self.buses[index]
-                            .handle
-                            .controls
-                            .muted
-                            .store(*muted, Ordering::Relaxed);
-                        self.spec.buses[index].muted = *muted;
-                    }
-                }
+                self.set_mute(*target, *muted, 0);
                 let state = if *muted { "muted" } else { "unmuted" };
                 Ok(vec![format!("{}: {state}", self.target_label(*target))])
             }
-            Command::Pan(index, pan) => {
+            Command::Pan(index, pan, ramp_ms) => {
                 if !(-1.0..=1.0).contains(pan) {
                     return Err(format!("pan must be -1 to 1, not {pan}"));
                 }
-                self.inputs[*index].controls.pan.store(*pan);
-                self.spec.inputs[*index].pan = *pan;
+                check_ramp(*ramp_ms)?;
+                self.set_pan(*index, *pan, *ramp_ms);
                 Ok(vec![format!(
-                    "{}: pan {pan:.2}",
-                    self.target_label(Target::Input(*index))
+                    "{}: pan {pan:.2}{}",
+                    self.target_label(Target::Input(*index)),
+                    over(*ramp_ms)
                 )])
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
+            Command::Scene(name) => self.scene(name),
+            Command::Scenes => Ok(vec![self.scene_names()]),
             Command::Show => Ok(self.show()),
             Command::Save(path) => self.save_profile(Path::new(path)),
             Command::Help => Ok(HELP.lines().map(str::to_owned).collect()),
             Command::Stop => Ok(Vec::new()),
         }
+    }
+
+    /// Sets a gain in dB, reached in `ramp_ms`; the range is the caller's to check.
+    fn set_gain(&mut self, target: Target, gain_db: f32, ramp_ms: u32) {
+        let linear = db_to_linear(gain_db);
+        match target {
+            Target::Input(index) => {
+                self.inputs[index].controls.gain.ramp_to(linear, ramp_ms);
+                self.spec.inputs[index].gain_db = gain_db;
+            }
+            Target::Bus(index) => {
+                self.buses[index]
+                    .handle
+                    .controls
+                    .gain
+                    .ramp_to(linear, ramp_ms);
+                self.spec.buses[index].gain_db = gain_db;
+            }
+        }
+    }
+
+    /// Mutes or unmutes, fading for `fade_ms`.
+    fn set_mute(&mut self, target: Target, muted: bool, fade_ms: u32) {
+        match target {
+            Target::Input(index) => {
+                let controls = &self.inputs[index].controls;
+                controls.fade_ms.store(fade_ms, Ordering::Relaxed);
+                controls.muted.store(muted, Ordering::Release);
+                self.spec.inputs[index].muted = muted;
+            }
+            Target::Bus(index) => {
+                let controls = &self.buses[index].handle.controls;
+                controls.fade_ms.store(fade_ms, Ordering::Relaxed);
+                controls.muted.store(muted, Ordering::Release);
+                self.spec.buses[index].muted = muted;
+            }
+        }
+    }
+
+    /// Sets a pan, reached in `ramp_ms`; the range is the caller's to check.
+    fn set_pan(&mut self, input: usize, pan: f32, ramp_ms: u32) {
+        self.inputs[input].controls.pan.ramp_to(pan, ramp_ms);
+        self.spec.inputs[input].pan = pan;
+    }
+
+    /// Changes to the scene called `name`, ignoring case: all its values together, over its
+    /// blend time. Only values change, so nothing interrupts the sound. Saving afterwards saves
+    /// them as the state of the route, as with any other change.
+    ///
+    /// # Errors
+    ///
+    /// A message listing the scenes when there is none of that name.
+    pub fn scene(&mut self, name: &str) -> Result<Vec<String>, String> {
+        let Some(scene) = self
+            .spec
+            .scenes
+            .iter()
+            .find(|scene| scene.name.eq_ignore_ascii_case(name))
+            .cloned()
+        else {
+            return Err(format!("no scene \"{name}\"; {}", self.scene_names()));
+        };
+        self.apply_scene(&scene);
+        Ok(vec![format!(
+            "scene {}{}",
+            scene.name,
+            over(scene.blend_ms)
+        )])
+    }
+
+    /// Sets all values of `scene`, which the profile checked against this route.
+    fn apply_scene(&mut self, scene: &SceneSpec) {
+        let blend = scene.blend_ms;
+        for change in &scene.inputs {
+            let target = Target::Input(change.input);
+            if let Some(gain_db) = change.gain_db {
+                self.set_gain(target, gain_db, blend);
+            }
+            if let Some(pan) = change.pan {
+                self.set_pan(change.input, pan, blend);
+            }
+            if let Some(muted) = change.muted {
+                self.set_mute(target, muted, blend);
+            }
+            if let Some(buses) = &change.buses {
+                let input = &self.inputs[change.input];
+                input.controls.fade_ms.store(blend, Ordering::Relaxed);
+                for route in &input.routes {
+                    route
+                        .routed
+                        .store(buses.contains(&route.bus), Ordering::Release);
+                }
+                self.spec.inputs[change.input].buses.clone_from(buses);
+            }
+        }
+        for change in &scene.buses {
+            let target = Target::Bus(change.bus);
+            if let Some(gain_db) = change.gain_db {
+                self.set_gain(target, gain_db, blend);
+            }
+            if let Some(muted) = change.muted {
+                self.set_mute(target, muted, blend);
+            }
+        }
+    }
+
+    /// The names of the scenes, in profile order, as a line.
+    fn scene_names(&self) -> String {
+        if self.spec.scenes.is_empty() {
+            return "this route has no scenes".to_owned();
+        }
+        let names: Vec<&str> = self.spec.scenes.iter().map(|s| s.name.as_str()).collect();
+        format!("scenes: {}", names.join(", "))
     }
 
     /// Routes input `input` to bus `bus` or takes it off (a matrix button); the mixer of the
@@ -122,6 +214,7 @@ impl Running {
         {
             return Err(format!("{label} would feed no bus; mute it instead"));
         }
+        running.controls.fade_ms.store(0, Ordering::Relaxed);
         route.routed.store(on, Ordering::Release);
         let buses = &mut self.spec.inputs[input].buses;
         buses.retain(|&b| b != bus);
@@ -182,6 +275,25 @@ impl Running {
             lines.push(line);
         }
         lines
+    }
+}
+
+/// Refuses a ramp longer than the mixer takes.
+fn check_ramp(ramp_ms: u32) -> Result<(), String> {
+    if ramp_ms > MAX_RAMP_MS {
+        return Err(format!(
+            "a ramp takes at most {MAX_RAMP_MS} ms, not {ramp_ms}"
+        ));
+    }
+    Ok(())
+}
+
+/// How a confirmation says the time a change takes; nothing for the shortest.
+fn over(ramp_ms: u32) -> String {
+    if ramp_ms == 0 {
+        String::new()
+    } else {
+        format!(" over {ramp_ms} ms")
     }
 }
 

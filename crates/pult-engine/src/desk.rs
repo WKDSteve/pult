@@ -69,10 +69,11 @@ impl EngineDesk {
     fn apply_solo(&self) {
         let soloing = self.solo.contains(&true);
         for (input, &solo) in self.running.inputs.iter().zip(&self.solo) {
+            input.controls.fade_ms.store(0, Ordering::Relaxed);
             input
                 .controls
                 .soloed_out
-                .store(soloing && !solo, Ordering::Relaxed);
+                .store(soloing && !solo, Ordering::Release);
         }
     }
 
@@ -203,26 +204,31 @@ impl Desk for EngineDesk {
             buses,
             events,
             profile: self.profile.clone(),
+            scenes: running.spec.scenes.iter().map(|s| s.name.clone()).collect(),
         }
     }
 
     fn act(&mut self, action: Action) -> Reply {
         match action {
-            Action::InputGain { input, db } => {
+            Action::InputGain { input, db, ramp_ms } => {
                 let target = Target::Input(self.input_index(input)?);
-                self.running.apply(&Command::Gain(target, db))
+                self.running.apply(&Command::Gain(target, db, ramp_ms))
             }
             Action::InputMute { input, muted } => {
                 let target = Target::Input(self.input_index(input)?);
                 self.running.apply(&Command::Mute(target, muted))
             }
-            Action::InputPan { input, pan } => {
+            Action::InputPan {
+                input,
+                pan,
+                ramp_ms,
+            } => {
                 let index = self.input_index(input)?;
-                self.running.apply(&Command::Pan(index, pan))
+                self.running.apply(&Command::Pan(index, pan, ramp_ms))
             }
-            Action::BusGain { bus, db } => {
+            Action::BusGain { bus, db, ramp_ms } => {
                 let target = Target::Bus(self.bus_index(bus)?);
-                self.running.apply(&Command::Gain(target, db))
+                self.running.apply(&Command::Gain(target, db, ramp_ms))
             }
             Action::BusMute { bus, muted } => {
                 let target = Target::Bus(self.bus_index(bus)?);
@@ -259,6 +265,7 @@ impl Desk for EngineDesk {
                 Ok(lines)
             }
             Action::Route { input, bus, on } => self.running.route(input, bus, on),
+            Action::Scene { name } => self.running.scene(&name),
         }
     }
 }

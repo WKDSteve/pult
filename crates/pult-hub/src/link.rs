@@ -66,6 +66,18 @@ pub fn link() -> (Arc<Link>, Pump) {
     )
 }
 
+/// The most of a line a client can get shown.
+const LONGEST_LINE: usize = 300;
+
+/// A line that holds a client's words, fit for a terminal: no control characters, which could
+/// move the cursor or rewrite what the console shows, and no novel.
+fn printable(line: &str) -> String {
+    line.chars()
+        .take(LONGEST_LINE)
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 impl Pump {
     /// Hands on `view`, the owner's newest of `desk`, and carries out what clients asked for.
     /// Returns what those operations did, one line each, for the owner to show: someone else
@@ -82,8 +94,8 @@ impl Pump {
         while let Ok(asked) = self.ops.try_recv() {
             let answer = asked.op.action(view).and_then(|action| desk.act(action));
             match &answer {
-                Ok(lines) => done.extend(lines.iter().cloned()),
-                Err(why) => done.push(format!("refused: {why}")),
+                Ok(lines) => done.extend(lines.iter().map(|line| printable(line))),
+                Err(why) => done.push(format!("refused: {}", printable(why))),
             }
             // A client that stopped waiting does not need the answer.
             let _ = asked.answer.send(answer);
@@ -206,6 +218,7 @@ mod tests {
             op: Op::Set {
                 address: "input/1/gain".to_owned(),
                 value: OpValue::Number(-12.0),
+                ramp_ms: None,
             },
             answer: good,
         });
@@ -215,6 +228,7 @@ mod tests {
             op: Op::Set {
                 address: "input/9/gain".to_owned(),
                 value: OpValue::Number(0.0),
+                ramp_ms: None,
             },
             answer: bad,
         });
@@ -226,5 +240,24 @@ mod tests {
         assert!(good_answer.try_recv().expect("an answer").is_ok());
         assert!(bad_answer.try_recv().expect("an answer").is_err());
         assert!((desk.view().inputs[0].gain_db + 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn what_a_client_said_reaches_the_owner_without_control_characters() {
+        let (link, mut pump) = link();
+        let mut desk = FakeDesk::new();
+        let name = format!("\u{1b}[2J\nnothing{}", "x".repeat(10_000));
+        let (asked, _answer) = oneshot::channel();
+        let sent = link.ops.try_send(Asked {
+            op: Op::Scene { name },
+            answer: asked,
+        });
+        assert!(sent.is_ok());
+        let view = desk.view();
+        let done = pump.pump(&mut desk, &view);
+        assert_eq!(done.len(), 1, "{done:?}");
+        assert!(done[0].contains("?[2J?nothing"), "{done:?}");
+        assert!(!done[0].chars().any(char::is_control), "{done:?}");
+        assert!(done[0].chars().count() < LONGEST_LINE + 20);
     }
 }

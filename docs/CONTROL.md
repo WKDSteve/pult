@@ -74,7 +74,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
   ],
   "events": [
     { "seq": 1, "elapsed_s": 5, "type": "lost", "text": "A1 Focusrite is gone (…)" }
-  ]
+  ],
+  "scenes": ["abend", "laut"]
 }
 ```
 
@@ -82,6 +83,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
   zehnmal pro Sekunde; `pult run` berichtet alle 200 ms.
 - `events` sind die letzten 32 Ereignisse; `seq` zählt hoch und zeigt, welche ein Client schon kennt. `type` ist `lost`,
   `back`, `refused` oder `slow`.
+- `gain_db`, `pan`, `muted` und `buses` nennen das Ziel. Läuft eine Rampe, folgt der Ton noch.
+- `scenes` sind die Szenen des Profils in dessen Reihenfolge.
 - `profile` ist nur der Dateiname, ohne Ordner.
 
 ### `GET /api/pult/stream`
@@ -98,6 +101,8 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | Operation | Wirkung |
 |---|---|
 | `{"op": "set", "address": "input/2/gain", "value": -6}` | einen Parameter setzen |
+| `{"op": "set", "address": "input/2/gain", "value": -6, "ramp_ms": 500}` | Gain oder Pan in so vielen Millisekunden erreichen, höchstens 60000; bei anderen Adressen abgelehnt |
+| `{"op": "scene", "name": "abend"}` | zu einer Szene wechseln, Groß- und Kleinschreibung zählen nicht |
 | `{"op": "meter_point", "value": "pre"}` | Eingangs-Meter vor (`pre`) oder hinter (`post`) den Fader legen |
 | `{"op": "save"}` | den Stand in das Profil speichern, aus dem die Route kam |
 
@@ -112,6 +117,9 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 `<n>` zählt ab 1 wie `[1]` in der Eingabezeile. Eine Datei lässt sich nicht benennen: `save` schreibt nur in das Profil der
 Route.
 
+Ein Client liefert Ziel und Dauer, keine laufenden Einzelwerte: Die Rampe läuft im Mischer, Bild für Bild und auch dann
+sauber, wenn der Client gerade nichts tut. Ohne `ramp_ms` dauert eine Änderung 5 ms, damit sie nicht knackt.
+
 | Antwort | Bedeutung |
 |---|---|
 | `200 {"lines": ["A1: gain -6.0 dB"]}` | ausgeführt; dieselbe Zeile steht als `remote: …` in der Konsole bzw. im Fenster |
@@ -125,5 +133,5 @@ Fehler haben die Form `{"error": {"code": "…", "message": "…"}}`. Operatione
 ## Zum Ausprobieren
 
 `tools/control-check.py` fährt das alles einmal gegen einen echten Lauf durch (nur auf den stummen Ausgängen „Voicemeeter
-In 4/5“, mit eigenem Konfigurationsordner) und zeigt in Python, wie ein Client aussieht. Für Rust-Clients liegen die
+In 4/5“, mit eigenem Konfigurationsordner), wechselt auch Szenen unter Last und zeigt in Python, wie ein Client aussieht. Für Rust-Clients liegen die
 Nachrichten als Typen in `pult_core::protocol`, ohne Geräte-Code.

@@ -21,6 +21,18 @@
 //! [[input]]
 //! process = "Spotify"          # instead of device: the sound of a program
 //! buses = ["A1"]
+//!
+//! [[scene]]
+//! name = "abend"               # `scene abend` changes to it
+//! blend_ms = 500               # optional, how long the change takes
+//!
+//! [[scene.input]]
+//! input = 2                    # its place in the route, as in input/2/gain
+//! gain_db = -12                # only what differs; also pan, mute, buses
+//!
+//! [[scene.bus]]
+//! bus = "A1"
+//! mute = false                 # also gain_db
 //! ```
 //!
 //! Unknown keys are errors, so a typo does not silently fall back to a default.
@@ -33,10 +45,11 @@ use serde::Deserialize;
 
 use std::fmt::Write as _;
 
+use pult_core::MAX_RAMP_MS;
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
 use crate::live::quoted;
-use crate::{BusSpec, Error, InputKind, InputSpec, RouteSpec};
+use crate::{BusSpec, Error, InputKind, InputSpec, RouteSpec, SceneBus, SceneInput, SceneSpec};
 
 /// Buffering per input when a profile or the command line names none.
 pub const DEFAULT_LATENCY_MS: u32 = 40;
@@ -72,6 +85,38 @@ struct File {
     bus: Vec<BusEntry>,
     #[serde(default)]
     input: Vec<InputEntry>,
+    #[serde(default)]
+    scene: Vec<SceneEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SceneEntry {
+    name: String,
+    #[serde(default)]
+    blend_ms: u32,
+    #[serde(default)]
+    input: Vec<SceneInputEntry>,
+    #[serde(default)]
+    bus: Vec<SceneBusEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SceneInputEntry {
+    input: usize,
+    gain_db: Option<f32>,
+    pan: Option<f32>,
+    mute: Option<bool>,
+    buses: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SceneBusEntry {
+    bus: String,
+    gain_db: Option<f32>,
+    mute: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +169,121 @@ fn check_label(what: &str, label: Option<&String>) -> Result<(), ProfileError> {
     Ok(())
 }
 
+fn check_pan(what: &str, pan: f32) -> Result<(), ProfileError> {
+    if (-1.0..=1.0).contains(&pan) {
+        Ok(())
+    } else {
+        fail(format!("{what}: pan must be -1 to 1, not {pan}"))
+    }
+}
+
+/// The index of the bus called `name`, or an error for `what` listing the buses there are.
+fn bus_index(what: &str, name: &str, buses: &[BusSpec]) -> Result<usize, ProfileError> {
+    buses.iter().position(|b| b.name == name).ok_or_else(|| {
+        let known: Vec<&str> = buses.iter().map(|b| b.name.as_str()).collect();
+        ProfileError(format!(
+            "{what} names bus \"{name}\", which is not defined (buses: {})",
+            known.join(", ")
+        ))
+    })
+}
+
+/// The scene `entry` against what the route has; `count` is its number of inputs.
+fn scene(entry: SceneEntry, count: usize, buses: &[BusSpec]) -> Result<SceneSpec, ProfileError> {
+    if entry.name.is_empty() || entry.name != entry.name.trim() {
+        return fail(format!(
+            "scene \"{}\": a name must not be empty or start or end with a space",
+            entry.name
+        ));
+    }
+    let what = format!("scene \"{}\"", entry.name);
+    if entry.blend_ms > MAX_RAMP_MS {
+        return fail(format!(
+            "{what}: blend_ms must be at most {MAX_RAMP_MS}, not {}",
+            entry.blend_ms
+        ));
+    }
+    if entry.input.is_empty() && entry.bus.is_empty() {
+        return fail(format!("{what} changes nothing"));
+    }
+    let mut inputs: Vec<SceneInput> = Vec::with_capacity(entry.input.len());
+    for input in entry.input {
+        let Some(index) = input.input.checked_sub(1).filter(|&index| index < count) else {
+            return fail(format!(
+                "{what} names input {}; inputs are 1 to {count}",
+                input.input
+            ));
+        };
+        if inputs.iter().any(|known| known.input == index) {
+            return fail(format!("{what} names input {} twice", input.input));
+        }
+        let place = format!("{what}, input {}", input.input);
+        if let Some(gain_db) = input.gain_db {
+            check_gain(&place, gain_db)?;
+        }
+        if let Some(pan) = input.pan {
+            check_pan(&place, pan)?;
+        }
+        let routed = match input.buses {
+            Some(names) => {
+                if names.is_empty() {
+                    return fail(format!("{place} would feed no bus; mute it instead"));
+                }
+                let mut routed = Vec::with_capacity(names.len());
+                for name in &names {
+                    let bus = bus_index(&place, name, buses)?;
+                    if routed.contains(&bus) {
+                        return fail(format!("{place} names bus {name} twice"));
+                    }
+                    routed.push(bus);
+                }
+                routed.sort_unstable();
+                Some(routed)
+            }
+            None => None,
+        };
+        if input.gain_db.is_none()
+            && input.pan.is_none()
+            && input.mute.is_none()
+            && routed.is_none()
+        {
+            return fail(format!("{place} changes nothing"));
+        }
+        inputs.push(SceneInput {
+            input: index,
+            gain_db: input.gain_db,
+            pan: input.pan,
+            muted: input.mute,
+            buses: routed,
+        });
+    }
+    let mut scene_buses: Vec<SceneBus> = Vec::with_capacity(entry.bus.len());
+    for bus in entry.bus {
+        let index = bus_index(&what, &bus.bus, buses)?;
+        if scene_buses.iter().any(|known| known.bus == index) {
+            return fail(format!("{what} names bus {} twice", bus.bus));
+        }
+        let place = format!("{what}, bus {}", bus.bus);
+        if let Some(gain_db) = bus.gain_db {
+            check_gain(&place, gain_db)?;
+        }
+        if bus.gain_db.is_none() && bus.mute.is_none() {
+            return fail(format!("{place} changes nothing"));
+        }
+        scene_buses.push(SceneBus {
+            bus: index,
+            gain_db: bus.gain_db,
+            muted: bus.mute,
+        });
+    }
+    Ok(SceneSpec {
+        name: entry.name,
+        blend_ms: entry.blend_ms,
+        inputs,
+        buses: scene_buses,
+    })
+}
+
 fn valid_bus_name(name: &str) -> bool {
     (1..=MAX_BUS_NAME).contains(&name.len())
         && name
@@ -136,8 +296,8 @@ fn valid_bus_name(name: &str) -> bool {
 /// # Errors
 ///
 /// [`ProfileError`] for a syntax error (with line and column), an unknown key, a value out
-/// of range, a bad or repeated bus name, an input feeding an unknown bus, or a route that
-/// [`RouteSpec::validate`] refuses.
+/// of range, a bad or repeated bus name, an input feeding an unknown bus, a scene naming what
+/// the route does not have, or a route that [`RouteSpec::validate`] refuses.
 pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
     let file: File = toml::from_str(text).map_err(|e| ProfileError(e.to_string()))?;
     let latency_ms = file.latency_ms.unwrap_or(DEFAULT_LATENCY_MS);
@@ -189,9 +349,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         let what = format!("input \"{name}\"");
         check_gain(&what, entry.gain_db)?;
         check_label(&what, entry.label.as_ref())?;
-        if !(-1.0..=1.0).contains(&entry.pan) {
-            return fail(format!("{what}: pan must be -1 to 1, not {}", entry.pan));
-        }
+        check_pan(&what, entry.pan)?;
         let mut routed = Vec::with_capacity(entry.buses.len());
         for name in &entry.buses {
             let Some(index) = buses.iter().position(|b| &b.name == name) else {
@@ -214,10 +372,23 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         });
     }
 
+    let mut scenes: Vec<SceneSpec> = Vec::with_capacity(file.scene.len());
+    for entry in file.scene {
+        let scene = scene(entry, inputs.len(), &buses)?;
+        if scenes
+            .iter()
+            .any(|known| known.name.eq_ignore_ascii_case(&scene.name))
+        {
+            return fail(format!("scene \"{}\" is defined twice", scene.name));
+        }
+        scenes.push(scene);
+    }
+
     let spec = RouteSpec {
         inputs,
         buses,
         latency_ms,
+        scenes,
     };
     spec.validate().map_err(|err| match err {
         Error::InvalidRoute(why) => ProfileError(why),
@@ -264,12 +435,47 @@ pub fn render(spec: &RouteSpec) -> String {
             input.muted
         );
     }
+    for scene in &spec.scenes {
+        let _ = write!(text, "\n[[scene]]\nname = {}\n", quoted(&scene.name));
+        if scene.blend_ms > 0 {
+            let _ = writeln!(text, "blend_ms = {}", scene.blend_ms);
+        }
+        for input in &scene.inputs {
+            let _ = write!(text, "\n[[scene.input]]\ninput = {}\n", input.input + 1);
+            render_changes(&mut text, input.gain_db, input.pan, input.muted);
+            if let Some(buses) = &input.buses {
+                let names: Vec<String> = buses
+                    .iter()
+                    .map(|&bus| quoted(&spec.buses[bus].name))
+                    .collect();
+                let _ = writeln!(text, "buses = [{}]", names.join(", "));
+            }
+        }
+        for bus in &scene.buses {
+            let name = quoted(&spec.buses[bus.bus].name);
+            let _ = write!(text, "\n[[scene.bus]]\nbus = {name}\n");
+            render_changes(&mut text, bus.gain_db, None, bus.muted);
+        }
+    }
     text
 }
 
+/// The lines of what a scene changes; what it leaves alone has none.
+fn render_changes(text: &mut String, gain_db: Option<f32>, pan: Option<f32>, muted: Option<bool>) {
+    if let Some(gain_db) = gain_db {
+        let _ = writeln!(text, "gain_db = {gain_db}");
+    }
+    if let Some(pan) = pan {
+        let _ = writeln!(text, "pan = {pan}");
+    }
+    if let Some(muted) = muted {
+        let _ = writeln!(text, "mute = {muted}");
+    }
+}
+
 /// Writes `spec` into `existing`, the text of a profile with the same buses and inputs: only
-/// values that differ change, so comments, order and commented-out examples stay. Any other
-/// text, or one that would not read back to `spec`, gives way to [`render`].
+/// values that differ change, so comments, order, commented-out examples and scenes stay. Any
+/// other text, or one that would not read back to `spec`, gives way to [`render`].
 #[must_use]
 pub fn merge(existing: &str, spec: &RouteSpec) -> String {
     merged(existing, spec)
@@ -589,6 +795,197 @@ mod tests {
         let text = merge(&existing, &spec);
         assert_eq!(parse(&text), Ok(spec));
         assert_eq!(text.matches('\n').count(), text.matches("\r\n").count());
+    }
+
+    const SCENES: &str = r#"
+        [[bus]]
+        name = "A1"
+        device = "Focusrite"
+
+        [[bus]]
+        name = "A2"
+        device = "Headset"
+
+        [[input]]
+        device = "CABLE Output"
+        buses = ["A1"]
+
+        [[input]]
+        device = "Analogue 1 + 2"
+        buses = ["A1"]
+
+        # For the evening.
+        [[scene]]
+        name = "Abend"     # the quiet one
+        blend_ms = 500
+
+        [[scene.input]]
+        input = 2
+        gain_db = -12.5    # just the voice
+        pan = -0.5
+        mute = false
+        buses = ["A2", "A1"]
+
+        [[scene.bus]]
+        bus = "A2"
+        gain_db = -6
+        mute = true
+
+        [[scene]]
+        name = "Laut"
+
+        [[scene.bus]]
+        bus = "A1"
+        gain_db = 3
+    "#;
+
+    /// `SCENES` with `from` replaced, which has to be there.
+    fn scenes_with(from: &str, to: &str) -> String {
+        assert!(SCENES.contains(from), "{from}");
+        SCENES.replacen(from, to, 1)
+    }
+
+    #[test]
+    fn reads_scenes_with_only_what_differs() {
+        let spec = parse(SCENES).expect("valid profile");
+        assert_eq!(
+            spec.scenes,
+            [
+                SceneSpec {
+                    name: "Abend".into(),
+                    blend_ms: 500,
+                    inputs: vec![SceneInput {
+                        input: 1,
+                        gain_db: Some(-12.5),
+                        pan: Some(-0.5),
+                        muted: Some(false),
+                        buses: Some(vec![0, 1]),
+                    }],
+                    buses: vec![SceneBus {
+                        bus: 1,
+                        gain_db: Some(-6.0),
+                        muted: Some(true),
+                    }],
+                },
+                SceneSpec {
+                    name: "Laut".into(),
+                    blend_ms: 0,
+                    inputs: Vec::new(),
+                    buses: vec![SceneBus {
+                        bus: 0,
+                        gain_db: Some(3.0),
+                        muted: None,
+                    }],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn refuses_scenes_that_do_not_fit_the_route() {
+        for (from, to, why) in [
+            ("input = 2", "input = 3", "names input 3; inputs are 1 to 2"),
+            ("input = 2", "input = 0", "names input 0"),
+            ("input = 2", "input = -1", "input"),
+            (
+                "buses = [\"A2\", \"A1\"]",
+                "buses = [\"B9\"]",
+                "bus \"B9\", which is not defined (buses: A1, A2)",
+            ),
+            (
+                "buses = [\"A2\", \"A1\"]",
+                "buses = []",
+                "would feed no bus",
+            ),
+            (
+                "buses = [\"A2\", \"A1\"]",
+                "buses = [\"A1\", \"A1\"]",
+                "names bus A1 twice",
+            ),
+            (
+                "bus = \"A2\"",
+                "bus = \"B9\"",
+                "bus \"B9\", which is not defined",
+            ),
+            (
+                "gain_db = -12.5",
+                "gain_db = 30",
+                "input 2: gain_db must be",
+            ),
+            ("gain_db = -6", "gain_db = -200", "bus A2: gain_db must be"),
+            ("gain_db = -12.5", "gain_db = nan", "gain_db must be"),
+            ("pan = -0.5", "pan = 2", "pan must be -1 to 1"),
+            (
+                "blend_ms = 500",
+                "blend_ms = 60001",
+                "blend_ms must be at most 60000",
+            ),
+            ("blend_ms = 500", "blend_ms = -1", "blend_ms"),
+            ("blend_ms = 500", "blend = 500", "unknown field"),
+            ("mute = false", "muted = false", "unknown field"),
+            (
+                "name = \"Laut\"",
+                "name = \"abend\"",
+                "scene \"abend\" is defined twice",
+            ),
+            ("name = \"Laut\"", "name = \"\"", "must not be empty"),
+            (
+                "name = \"Laut\"",
+                "name = \" Laut\"",
+                "start or end with a space",
+            ),
+            ("name = \"Laut\"", "", "missing field"),
+        ] {
+            let message = error(&scenes_with(from, to));
+            assert!(message.contains(why), "{from} -> {to}: {message}");
+        }
+        let nothing = "[[bus]]\nname = \"A1\"\ndevice = \"x\"\n\
+                       [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\n\
+                       [[scene]]\nname = \"leer\"\n";
+        assert!(error(nothing).contains("scene \"leer\" changes nothing"));
+        assert!(
+            error(&format!("{nothing}[[scene.input]]\ninput = 1\n"))
+                .contains("input 1 changes nothing")
+        );
+        assert!(
+            error(&format!("{nothing}[[scene.bus]]\nbus = \"A1\"\n"))
+                .contains("bus A1 changes nothing")
+        );
+        assert!(
+            error(&format!(
+                "{nothing}[[scene.input]]\ninput = 1\nmute = true\n\
+                 [[scene.input]]\ninput = 1\nmute = false\n"
+            ))
+            .contains("names input 1 twice")
+        );
+        assert!(
+            error(&format!(
+                "{nothing}[[scene.bus]]\nbus = \"A1\"\nmute = true\n\
+                 [[scene.bus]]\nbus = \"A1\"\nmute = false\n"
+            ))
+            .contains("names bus A1 twice")
+        );
+    }
+
+    #[test]
+    fn render_reads_scenes_back() {
+        let mut spec = parse(SCENES).expect("valid profile");
+        spec.scenes[1].name = "La\"ut".into();
+        let text = render(&spec);
+        assert_eq!(parse(&text), Ok(spec), "{text}");
+        assert!(!text.contains("blend_ms = 0"), "{text}");
+    }
+
+    #[test]
+    fn merge_leaves_scenes_and_their_comments_alone() {
+        let mut spec = parse(SCENES).expect("valid profile");
+        assert_eq!(merge(SCENES, &spec), SCENES, "nothing changed");
+        spec.inputs[1].gain_db = -3.0;
+        spec.buses[1].muted = true;
+        let text = merge(SCENES, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        let at = |text: &str| text.find("# For the evening.").expect("the scenes");
+        assert_eq!(text[at(&text)..], SCENES[at(SCENES)..], "{text}");
     }
 
     #[test]
