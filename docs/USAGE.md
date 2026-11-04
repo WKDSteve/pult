@@ -327,7 +327,7 @@ pult learn scene/abend
 
 Nach `pult learn` wartet pult bis zu 30 Sekunden auf die nächste Bewegung am Gerät und bindet sie; das geht auch als `learn …` in
 der Eingabezeile von `pult run`. Eine Taste kann Mute, Solo, Matrix und Szenen schalten, aber keinen Pegel setzen. Solange eine
-Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün, Szenen gelb.
+Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün, Szenen gelb (auf dem APC Key 25 mk2 sieht dieses Gelb grün aus). Beim Beenden gehen sie aus.
 
 | Befehl | Wirkung |
 |---|---|
@@ -337,7 +337,7 @@ Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün,
 | `pult midi devices` | die MIDI-Anschlüsse dieses Rechners, auch ohne laufendes pult |
 | `pult midi listen [Sekunden]` | zeigen, was die Anschlüsse senden; dafür darf kein pult sie offen halten |
 
-- **Endlos-Regler und Fader:** Ein Endlos-Regler geht von dort weiter, wo der Wert gerade steht. Ein Fader oder Regler mit Anschlägen
+- **Endlos-Regler und Fader:** Ein Endlos-Regler geht von dort weiter, wo der Wert gerade steht; auf dem APC Key 25 mk2 ist der ganze Weg gut eine langsame Umdrehung. Ein Fader oder Regler mit Anschlägen
   wirkt erst, wenn er den aktuellen Wert erreicht hat (`… waits until it reaches the value`): Ohne Motor stünde er nach einer
   Szene woanders, und die erste Berührung wäre ein Sprung in der Lautstärke. pult erkennt die Art an der ersten Bewegung; irrt es
   sich, ändert `relative = true` oder `false` in der Datei das.

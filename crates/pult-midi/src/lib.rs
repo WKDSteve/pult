@@ -85,6 +85,9 @@ impl Midi {
                 .map(|why| format!("no MIDI: {why}"))
                 .collect(),
         };
+        if let Some(device) = midi.device.clone() {
+            midi.map.set_device(&device);
+        }
         midi.follow_wanted();
         midi
     }
@@ -142,6 +145,9 @@ impl Midi {
         if wanted == self.wanted {
             return;
         }
+        if wanted == Wanted::Nothing {
+            self.put_out_lights();
+        }
         self.wanted = wanted;
         if self.outbox.is_none() && self.spawns {
             self.start_thread();
@@ -194,6 +200,7 @@ impl Midi {
             let step = self.map.step(message.0, view);
             if step.learned {
                 if self.device.is_none() {
+                    self.map.set_device(&message.1);
                     self.device = Some(message.1);
                 }
                 self.save();
@@ -217,7 +224,8 @@ impl Midi {
     }
 
     /// The messages that came, in order, with only the newest value of each fader of this batch:
-    /// the mixer cannot do anything with the ones it has already passed.
+    /// the mixer cannot do anything with the ones it has already passed. An endless knob keeps all
+    /// of them: each is a step, and they add up.
     fn drain(&mut self) -> Vec<(Message, String)> {
         let Some(inbox) = &self.inbox else {
             return Vec::new();
@@ -230,8 +238,8 @@ impl Midi {
                     let Some(message) = Message::parse(&bytes) else {
                         continue;
                     };
-                    if matches!(message, Message::Cc { .. }) {
-                        let control = message.control();
+                    let control = message.control();
+                    if matches!(message, Message::Cc { .. }) && !self.map.is_relative(control) {
                         messages.retain(|(known, _)| known.control() != control);
                     }
                     messages.push((message, port.to_string()));
@@ -268,10 +276,23 @@ impl Midi {
             self.send(Outgoing::Light(message));
         }
     }
+
+    /// Leaves the device dark: what is lit says something about a mixer that no longer listens.
+    fn put_out_lights(&mut self) {
+        let Some(device) = self.device.as_deref().filter(|_| self.connected) else {
+            return;
+        };
+        let palette = Palette::for_device(device);
+        for message in self.map.lights_out(palette) {
+            self.send(Outgoing::Light(message));
+        }
+    }
 }
 
 impl Drop for Midi {
     fn drop(&mut self) {
+        self.put_out_lights();
+        // What is on its way still reaches the thread: it ends after the last of it.
         self.outbox = None;
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -540,6 +561,73 @@ mod tests {
             [Outgoing::Light([0x90, 2, 5])],
             "it knows nothing of before"
         );
+    }
+
+    fn connected_bench(folder: &Folder, file: &str) -> Bench {
+        std::fs::write(folder.file(), file).expect("a file");
+        let mut bench = Bench::new(folder);
+        bench
+            .to_midi
+            .send(Incoming::Connected("APC MINI".to_owned()))
+            .expect("sent");
+        bench.poll();
+        bench
+    }
+
+    /// Measured on the real device: pads stayed lit after the end of the run.
+    #[test]
+    fn the_lights_go_out_at_the_end_and_with_the_last_binding() {
+        const SCENE: &str =
+            "device = \"APC MINI\"\n[[binding]]\nnote = 2\ntarget = \"scene/abend\"\n";
+        let folder = Folder::new("dark");
+        let mut bench = connected_bench(&folder, SCENE);
+        let view = bench.desk.view();
+        bench.midi.lights(&view);
+        assert_eq!(bench.sent(), [Outgoing::Light([0x90, 2, 5])]);
+        let Bench {
+            midi, from_midi, ..
+        } = bench;
+        drop(midi);
+        assert_eq!(
+            from_midi.try_iter().collect::<Vec<_>>(),
+            [Outgoing::Light([0x90, 2, 0])]
+        );
+
+        let mut bench = connected_bench(&folder, SCENE);
+        let view = bench.desk.view();
+        bench.midi.lights(&view);
+        bench.sent();
+        bench.midi.forget("scene/abend");
+        assert_eq!(
+            bench.sent(),
+            [
+                Outgoing::Light([0x90, 2, 0]),
+                Outgoing::Want(Wanted::Nothing)
+            ],
+            "dark first: the port closes after that"
+        );
+    }
+
+    /// Fast turns come in one batch, and only the last step of them counted.
+    #[test]
+    fn the_steps_of_an_endless_knob_in_one_batch_all_count() {
+        const KNOB: &str = "device = \"APC MINI\"\n[[binding]]\ncc = 48\ntarget = \"input/1/gain\"\nrelative = true\n";
+        let folder = Folder::new("steps");
+        let gain_after = |batches: &[usize]| {
+            let mut bench = connected_bench(&folder, KNOB);
+            for steps in batches {
+                for _ in 0..*steps {
+                    bench.device_says(&[0xB0, 48, 1]);
+                }
+                bench.poll();
+            }
+            bench.desk.view().inputs[0].gain_db
+        };
+        let one = gain_after(&[1]);
+        let apart = gain_after(&[1, 1, 1]);
+        let together = gain_after(&[3]);
+        assert!(apart > one, "{apart} {one}");
+        assert!((together - apart).abs() < 0.001, "{together} {apart}");
     }
 
     #[test]

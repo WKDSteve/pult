@@ -172,6 +172,19 @@ pub fn looks_relative(value: u8) -> bool {
     matches!(value, 1..=3 | 125..=127)
 }
 
+/// How many steps of an endless knob go from the bottom to the top of a value on the device `name`.
+/// Measured on the APC Key 25 mk2: at one step per 1/127, half a slow turn went from +6 dB to silence.
+/// Others stay at the 127 of MIDI until someone measures them: a knob with few steps a turn would
+/// need many turns otherwise.
+#[must_use]
+pub fn knob_steps(name: &str) -> f32 {
+    if name.to_ascii_lowercase().contains("apc key") {
+        400.0
+    } else {
+        127.0
+    }
+}
+
 /// The step in a relative value: 1 to 63 up, 65 to 127 down.
 fn relative_step(value: u8) -> f32 {
     if value < 64 {
@@ -346,6 +359,8 @@ pub struct Map {
     pending_at: Duration,
     /// What each button was last lit with.
     lit: HashMap<Control, u8>,
+    /// How many steps of an endless knob make the whole way, once the device is known.
+    knob_steps: Option<f32>,
 }
 
 impl Map {
@@ -356,6 +371,11 @@ impl Map {
             bindings,
             ..Self::default()
         }
+    }
+
+    /// Tells which device the bindings are on: its knobs may step finer than others.
+    pub fn set_device(&mut self, name: &str) {
+        self.knob_steps = Some(knob_steps(name));
     }
 
     /// What is bound.
@@ -400,6 +420,31 @@ impl Map {
     /// Lights everything anew: the device came back, and knows nothing of what was lit.
     pub fn forget_lights(&mut self) {
         self.lit.clear();
+    }
+
+    /// The messages that put out what is lit, all of them: nobody is left to send the rest later.
+    pub fn lights_out(&mut self, palette: Palette) -> Vec<[u8; 3]> {
+        let mut lit: Vec<Control> = self
+            .lit
+            .drain()
+            .filter(|(_, velocity)| *velocity != 0)
+            .map(|(control, _)| control)
+            .collect();
+        lit.sort_by_key(|control| (control.channel, control.number));
+        lit.into_iter()
+            .map(|control| {
+                let channel = palette.channel.unwrap_or(control.channel) & 0x0F;
+                [0x90 | channel, control.number, 0]
+            })
+            .collect()
+    }
+
+    /// Whether `control` is bound as an endless knob, whose every message is a step of its own.
+    #[must_use]
+    pub fn is_relative(&self, control: Control) -> bool {
+        self.bindings
+            .iter()
+            .any(|bound| bound.control == control && bound.relative)
     }
 
     /// Follows one message in `view`.
@@ -570,7 +615,8 @@ impl Map {
             Some((sent, at)) if at == view.elapsed => sent,
             _ => current,
         };
-        let pos = (from + relative_step(value) / 127.0).clamp(0.0, 1.0);
+        let steps = self.knob_steps.unwrap_or_else(|| knob_steps(""));
+        let pos = (from + relative_step(value) / steps).clamp(0.0, 1.0);
         pick.sent = Some((pos, view.elapsed));
         Step {
             op: Some(Op::Set {
@@ -983,6 +1029,32 @@ mod tests {
         let mut top = later(&scene);
         top.inputs[0].gain_db = 12.0;
         assert_eq!(number(&map.step(cc(48, 63), &top)), 12.0);
+    }
+
+    #[test]
+    fn the_device_decides_how_far_a_step_of_a_knob_goes() {
+        assert_eq!(knob_steps("nanoKONTROL2"), 127.0);
+        assert_eq!(knob_steps("MIDIIN2 (APC Key 25 mk2)"), 400.0);
+        let view = view();
+        let knob = Bound {
+            control: Control {
+                kind: ControlKind::Cc,
+                channel: 0,
+                number: 48,
+            },
+            target: "input/1/gain".to_owned(),
+            relative: true,
+        };
+        let step = |steps: Option<&str>| {
+            let mut map = Map::new(vec![knob.clone()]);
+            if let Some(device) = steps {
+                map.set_device(device);
+            }
+            number(&map.step(cc(48, 1), &view))
+        };
+        let coarse = step(None);
+        let fine = step(Some("APC Key 25 mk2"));
+        assert!(fine > 0.0 && fine < coarse, "{fine} {coarse}");
     }
 
     #[test]
