@@ -2807,6 +2807,7 @@ dependencies = [
  "pult-core",
  "pult-engine",
  "pult-hub",
+ "serde_json",
 ]
 
 [[package]]

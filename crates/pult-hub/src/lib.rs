@@ -18,10 +18,13 @@ use appkit_hub::{
     GuardRules, HubStatus, Limits, Page, Pages, RunningServer, Runtime, ServeParts, serve,
 };
 
+mod client;
 mod control;
 mod link;
 mod routes;
 
+pub use appkit_hub::env::Env;
+pub use client::{Client, ClientError};
 pub use control::Control;
 pub use link::{Link, Pump, link};
 

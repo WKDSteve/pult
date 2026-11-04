@@ -273,6 +273,37 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
   `--from`/`--to` gestarteter Lauf lässt sich so in ein Profil verwandeln.
 - Läuft pult nicht in einer Konsole (Eingabe aus einer Datei oder Pipe), ist jede Zeile ein Befehl, eine leere beendet.
 
+## 8. Von außen steuern: `pult <Befehl>`
+
+Läuft eine Route (`pult run` oder das Fenster), wirken dieselben Wörter wie in der Eingabezeile auch aus jedem anderen
+Terminal, aus Skripten und aus dem Editor:
+
+```
+pult mute mikro
+pult gain A1 -6 over 500
+pult scene abend
+pult show
+```
+
+| Befehl | Wirkung |
+|---|---|
+| `pult gain`, `mute`, `unmute`, `pan`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
+| `pult scenes` | die Szenen, je eine Zeile |
+| `pult show` | Eingänge, Busse und Szenen; `pult show --json` den ganzen Zustand für Programme |
+| `pult save` | in das Profil speichern, aus dem die Route kam; eine andere Datei geht von außen nicht |
+
+- **Eingänge** findet pult über die Nummer, einen eindeutigen Teil des Namens oder des Labels. Anführungszeichen sind
+  nicht nötig: `pult mute Analogue 1` und `pult mute "Analogue 1"` meinen dasselbe.
+- **Ende:** 0 hat geklappt; 1 kein pult läuft oder es hat abgelehnt; 2 die Wörter passen nicht. Der Grund steht auf stderr.
+- **Dauer:** Eine Änderung wirkt mit der nächsten Runde der Route, bei `pult run` nach höchstens 200 ms.
+- **Sitzung:** pult merkt sich die Anmeldung in `%APPDATA%\pult\cli`, nur für deinen Benutzer lesbar, und löscht sie am
+  Ende des Laufs.
+
+### In Neovim
+
+Mit `my.nvim` gibt es dieselben Wörter als `:Pult` (`:Pult scene abend`), mit Vervollständigung von Befehlen, Szenen,
+Eingängen und Bussen. `pult` muss dafür im `PATH` liegen, oder `vim.g.pult_exe` nennt das Programm.
+
 ## Fehlermeldungen
 
 | Meldung | Ursache und Abhilfe |
@@ -287,6 +318,7 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `… feeds bus "…", which is not defined` | im Profil fehlt ein `[[bus]]` mit diesem Namen, oder er ist anders geschrieben |
 | `unknown field …` | Tippfehler im Profil; die Meldung nennt Zeile und erlaubte Schlüssel |
 | `note: another pult run is active…`, `note: the pult window is open…` | beim Start: Ein anderer `pult run` oder das Fenster läuft schon. Der Lauf startet trotzdem; auf denselben Geräten hört man beide doppelt |
+| `no pult is running; …` | `pult <Befehl>` ohne laufende Route: erst `pult run` oder das Fenster starten |
 | `note: no control interface: …` | die Steuerschnittstelle läuft nicht, meist weil ein anderer pult sie hat; der Ton läuft trotzdem |
 | `not done: …` | ein Befehl während des Laufs passte nicht (Tippfehler, Wert außerhalb des Bereichs); nichts wurde geändert |
 | `no running program matches "…"` | das Programm läuft nicht oder heißt anders: `pult programs` |

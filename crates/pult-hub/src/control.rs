@@ -40,7 +40,12 @@ impl Control {
         self.port
     }
 
-    fn start_with(env: Env) -> Result<(Self, Pump), String> {
+    /// [`Self::start`] with these variables instead of the process's.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::start`].
+    pub fn start_with(env: Env) -> Result<(Self, Pump), String> {
         let (started_tx, started_rx) = mpsc::channel();
         let (stop_tx, stop_rx) = oneshot::channel();
         let (hub_link, pump) = link();
@@ -65,6 +70,10 @@ impl Control {
                             let _ = stop_rx.await;
                             registry::remove_record(&dir);
                             registry::remove_secret(&dir);
+                            // The session of the command line dies with the hub.
+                            let session = crate::client::session_dir(&dir);
+                            registry::remove_secret(&session);
+                            let _ = std::fs::remove_dir(&session);
                             running.shutdown().await;
                         }
                         Err(why) => {

@@ -10,6 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::binding::{Binding, BusParam, InputParam, Value};
+use crate::control::{Command, Target};
 use crate::view::{Action, BusView, EventKind, EventView, GAIN_RANGE_DB, InputView, MeterPoint};
 use crate::view::{MixerView, SourceKind};
 
@@ -276,6 +277,42 @@ pub enum Op {
 }
 
 impl Op {
+    /// What `command` asks of a mixer in `state`; `None` for what is no request to it (`show`, a
+    /// file to save to, the end of a run). The indices come from parsing against `state`.
+    #[must_use]
+    pub fn of_command(command: &Command, state: &State) -> Option<Self> {
+        let bus = |index: usize| state.buses.get(index).map(|bus| bus.name.as_str());
+        let target = |target: Target, param: &str| match target {
+            Target::Input(index) => Some(format!("input/{}/{param}", index + 1)),
+            Target::Bus(index) => Some(format!("bus/{}/{param}", bus(index)?)),
+        };
+        let set = |address: String, value: OpValue, ramp_ms: u32| Self::Set {
+            address,
+            value,
+            ramp_ms: (ramp_ms > 0).then_some(ramp_ms),
+        };
+        Some(match command {
+            Command::Gain(to, db, ramp_ms) => {
+                set(target(*to, "gain")?, OpValue::Number(*db), *ramp_ms)
+            }
+            Command::Mute(to, muted) => set(target(*to, "mute")?, OpValue::Switch(*muted), 0),
+            Command::Pan(input, pan, ramp_ms) => set(
+                target(Target::Input(*input), "pan")?,
+                OpValue::Number(*pan),
+                *ramp_ms,
+            ),
+            Command::Route(input, to, on) => set(
+                format!("matrix/{}/{}", input + 1, bus(*to)?),
+                OpValue::Switch(*on),
+                0,
+            ),
+            Command::Scene(name) => Self::Scene { name: name.clone() },
+            Command::Scenes | Command::Show | Command::Save(_) | Command::Help | Command::Stop => {
+                return None;
+            }
+        })
+    }
+
     /// The action this asks for in `view`.
     ///
     /// # Errors
@@ -450,6 +487,89 @@ mod tests {
         assert_eq!(
             action(r#"{"op":"save"}"#),
             Ok(Action::SaveProfile { path: None })
+        );
+    }
+
+    #[test]
+    fn a_command_becomes_the_op_for_its_address() {
+        let view = view();
+        let state = State::new(&view, Vec::new());
+        // Every op goes through its action, so a wrong address would show here.
+        let action = |command: &Command| {
+            Op::of_command(command, &state)
+                .expect("an op")
+                .action(&view)
+        };
+        assert_eq!(
+            action(&Command::Gain(Target::Bus(1), -6.0, 500)),
+            Ok(Action::BusGain {
+                bus: 1,
+                db: -6.0,
+                ramp_ms: 500
+            })
+        );
+        assert_eq!(
+            action(&Command::Gain(Target::Input(1), -3.0, 0)),
+            Ok(Action::InputGain {
+                input: 1,
+                db: -3.0,
+                ramp_ms: 0
+            })
+        );
+        assert_eq!(
+            action(&Command::Mute(Target::Input(2), true)),
+            Ok(Action::InputMute {
+                input: 2,
+                muted: true
+            })
+        );
+        assert_eq!(
+            action(&Command::Mute(Target::Bus(0), false)),
+            Ok(Action::BusMute {
+                bus: 0,
+                muted: false
+            })
+        );
+        assert_eq!(
+            action(&Command::Pan(0, 0.5, 20)),
+            Ok(Action::InputPan {
+                input: 0,
+                pan: 0.5,
+                ramp_ms: 20
+            })
+        );
+        assert_eq!(
+            action(&Command::Route(2, 0, true)),
+            Ok(Action::Route {
+                input: 2,
+                bus: 0,
+                on: true
+            })
+        );
+        assert_eq!(
+            action(&Command::Scene("Abend".to_owned())),
+            Ok(Action::Scene {
+                name: "Abend".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn what_is_no_request_to_a_mixer_becomes_no_op() {
+        let state = State::new(&view(), Vec::new());
+        for command in [
+            Command::Show,
+            Command::Scenes,
+            Command::Help,
+            Command::Stop,
+            Command::Save("x.toml".to_owned()),
+        ] {
+            assert_eq!(Op::of_command(&command, &state), None, "{command:?}");
+        }
+        assert_eq!(
+            Op::of_command(&Command::Route(0, 99, true), &state),
+            None,
+            "a bus past the state"
         );
     }
 

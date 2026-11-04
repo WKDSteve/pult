@@ -20,6 +20,7 @@ pult-hub.workspace = true
 assert_no_alloc.workspace = true
 # The console of `pult run`: raw mode for the input line, cursor moves, terminal width.
 crossterm.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

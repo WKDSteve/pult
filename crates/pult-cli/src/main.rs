@@ -5,6 +5,7 @@
 mod args;
 mod console;
 mod monitor;
+mod remote;
 
 use std::io::{self, BufRead};
 use std::process::ExitCode;
@@ -59,6 +60,7 @@ fn main() -> ExitCode {
             })
             .map_err(|e| e.to_string()),
         Command::Run(spec) => start_run(&spec),
+        Command::Remote(request) => return remote::run(&request),
         Command::Tone(spec) => pult_engine::play_tone(&spec.sink, spec.frequency, spec.gain_db)
             .map_err(|e| e.to_string())
             .and_then(|playing| tone(&playing, &spec)),

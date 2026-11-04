@@ -5,17 +5,21 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use pult_core::control::{Command, HELP, Target};
+use pult_core::control::{Command, HELP, Target, search_name};
 use pult_core::{MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
 use crate::{RouteSpec, Running, SceneSpec};
 
 impl Running {
-    /// The input names a command may name, in route order.
+    /// The input names a command may name, labels included, in route order.
     #[must_use]
     pub fn input_names(&self) -> Vec<String> {
-        self.inputs.iter().map(|input| input.name.clone()).collect()
+        self.inputs
+            .iter()
+            .zip(&self.spec.inputs)
+            .map(|(input, spec)| search_name(&input.name, spec.label.as_deref()))
+            .collect()
     }
 
     /// The bus names, in route order.

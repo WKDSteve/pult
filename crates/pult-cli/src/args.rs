@@ -1,4 +1,4 @@
-//! The command line, parsed by hand: three subcommands do not need a parser crate.
+//! The command line, parsed by hand: a few subcommands do not need a parser crate.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -28,6 +28,19 @@ USAGE:
     pult tone --to <OUTPUT> [--gain-db <DB>] [--freq <HZ>]
     pult help | --help
     pult --version
+
+  To the pult that is running:
+    pult gain <TARGET> <DB> [over <MS>]
+    pult mute <TARGET>      pult unmute <TARGET>
+    pult pan <INPUT> <-1..1> [over <MS>]
+    pult route <INPUT> <BUS>      pult unroute <INPUT> <BUS>
+    pult scene <NAME>       pult scenes
+    pult show [--json]
+    pult save
+
+A target is an input number (1), a unique part of its name or label (cable) or a bus name
+(A1). `save` writes to the profile the route came from. These end with status 1 when no pult
+runs or it refuses, and with 2 when the words are no command for it.
 
 Device names may be a unique part of the name, ignoring case (see `pult devices`).
 --from app:<PROGRAM> captures the sound of a running program instead of a device, for
@@ -73,6 +86,22 @@ pub struct ToneSpec {
     pub frequency: f32,
 }
 
+/// What to ask of the pult that is running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Remote {
+    /// Its state; as JSON for programs.
+    Show {
+        /// As JSON.
+        json: bool,
+    },
+    /// The names of its scenes, one per line.
+    Scenes,
+    /// Saves to the profile the route came from.
+    Save,
+    /// The words of a command of its input line, understood against its inputs and buses.
+    Line(String),
+}
+
 /// What the user asked for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -84,6 +113,8 @@ pub enum Command {
     Run(RunSpec),
     /// Play a test tone until stopped.
     Tone(ToneSpec),
+    /// Ask the pult that is running.
+    Remote(Remote),
     /// Print the usage.
     Help,
     /// Print the version.
@@ -119,6 +150,26 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
         "programs" => no_more(args).map(|()| Command::Programs),
         "run" => parse_run(args).map(Command::Run),
         "tone" => parse_tone(args).map(Command::Tone),
+        "scenes" => no_more(args).map(|()| Command::Remote(Remote::Scenes)),
+        "show" => match args.next().as_deref() {
+            None => Ok(Command::Remote(Remote::Show { json: false })),
+            Some("--json") => no_more(args).map(|()| Command::Remote(Remote::Show { json: true })),
+            Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
+        },
+        "save" => match args.next() {
+            None => Ok(Command::Remote(Remote::Save)),
+            Some(_) => Err(usage(
+                "a running pult saves to the profile it came from; save takes no file here",
+            )),
+        },
+        "gain" | "mute" | "unmute" | "pan" | "route" | "unroute" | "scene" => {
+            // Quoted or not: the input line reads a name of several words either way.
+            let rest: Vec<String> = args.collect();
+            Ok(Command::Remote(Remote::Line(format!(
+                "{sub} {}",
+                rest.join(" ")
+            ))))
+        }
         "help" | "--help" | "-h" => Ok(Command::Help),
         "--version" | "-V" => Ok(Command::Version),
         other => Err(usage(format!("unknown command \"{other}\""))),

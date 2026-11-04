@@ -23,6 +23,9 @@ Ein lokales Programm meldet sich in drei Schritten an:
    gültig und einmal einlösbar.
 3. `POST /auth/exchange` mit `Origin: http://127.0.0.1:<port>` und `{"code": "…"}` liefert `{"token": "…"}`.
 
+Aus Rust nimmt `pult_hub::Client` das alles ab; `pult <Befehl>` nutzt ihn (siehe `USAGE.md`, Abschnitt 8). Eine Sitzung lohnt
+sich aufzuheben: Der Server nimmt nur 10 Kopplungen pro Minute und schließt über 16 Sitzungen die älteste.
+
 Alle Routen unten brauchen `Authorization: Bearer <token>`. Mit dem Ende des Laufs endet auch die Sitzung. Prüfung,
 Limits und Pairing kommen aus [appkit](https://github.com/WKDSteve/appkit), die Sicherheitstests des Kits laufen auch für
 pult.

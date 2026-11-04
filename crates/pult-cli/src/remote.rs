@@ -1,0 +1,113 @@
+//! Commands to a pult that is already running: the words of its input line, from any terminal,
+//! script or editor.
+
+use std::process::ExitCode;
+
+use pult_core::control::{self, Command};
+use pult_core::protocol::{Op, State};
+use pult_hub::{Client, ClientError};
+
+use crate::args::Remote;
+
+/// Exit status for words that are no command.
+const USAGE_STATUS: u8 = 2;
+
+/// Carries out `request`: what it did goes to stdout, what went wrong to stderr, with a status
+/// that is not zero.
+pub fn run(request: &Remote) -> ExitCode {
+    match answer(request) {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(Problem::Words(why)) => {
+            eprintln!("pult: {why}");
+            ExitCode::from(USAGE_STATUS)
+        }
+        Err(Problem::Client(why)) => {
+            eprintln!("pult: {why}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+enum Problem {
+    /// The words are no command for this route.
+    Words(String),
+    /// The running pult is not there or said no.
+    Client(ClientError),
+}
+
+impl From<ClientError> for Problem {
+    fn from(error: ClientError) -> Self {
+        Self::Client(error)
+    }
+}
+
+fn answer(request: &Remote) -> Result<Vec<String>, Problem> {
+    let mut client = Client::find()?;
+    match request {
+        Remote::Show { json: true } => {
+            let state = client.state()?;
+            let text = serde_json::to_string(&state)
+                .map_err(|e| Problem::Client(ClientError::Failed(e.to_string())))?;
+            Ok(vec![text])
+        }
+        Remote::Show { json: false } => Ok(shown(&client.state()?)),
+        Remote::Scenes => Ok(client.state()?.scenes),
+        Remote::Save => Ok(client.op(&Op::Save {})?),
+        Remote::Line(line) => {
+            let state = client.state()?;
+            let names: Vec<String> = state
+                .inputs
+                .iter()
+                .map(|input| control::search_name(&input.name, input.label.as_deref()))
+                .collect();
+            let buses: Vec<String> = state.buses.iter().map(|bus| bus.name.clone()).collect();
+            let command = control::parse(line, &names, &buses)
+                .map_err(|why| Problem::Words(why.to_string()))?;
+            debug_assert!(
+                !matches!(command, Command::Stop),
+                "args lets no stop through"
+            );
+            let op = Op::of_command(&command, &state)
+                .ok_or_else(|| Problem::Words(format!("\"{line}\" is nothing to send")))?;
+            Ok(client.op(&op)?)
+        }
+    }
+}
+
+/// One line per input and bus, as `show` in the input line prints them, and the scenes.
+fn shown(state: &State) -> Vec<String> {
+    let mut lines = Vec::with_capacity(state.inputs.len() + state.buses.len() + 1);
+    for input in &state.inputs {
+        let mut line = format!(
+            "[{}] {}  gain {:.1} dB  pan {:.2}  -> {}",
+            input.number,
+            input.label.as_deref().unwrap_or(&input.name),
+            input.gain_db,
+            input.pan,
+            input.buses.join(", ")
+        );
+        if input.muted {
+            line.push_str("  muted");
+        }
+        if input.solo {
+            line.push_str("  solo");
+        }
+        lines.push(line);
+    }
+    for bus in &state.buses {
+        let mut line = format!("{} {}  gain {:.1} dB", bus.name, bus.device, bus.gain_db);
+        if bus.muted {
+            line.push_str("  muted");
+        }
+        lines.push(line);
+    }
+    if !state.scenes.is_empty() {
+        lines.push(format!("scenes: {}", state.scenes.join(", ")));
+    }
+    lines
+}

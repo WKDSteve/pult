@@ -85,6 +85,16 @@ fn error<T>(message: impl Into<String>) -> Result<T, ParseError> {
     Err(ParseError(message.into()))
 }
 
+/// What a command may call an input: its full name, and the label before it, so that a part of
+/// either finds it.
+#[must_use]
+pub fn search_name(name: &str, label: Option<&str>) -> String {
+    match label {
+        Some(label) => format!("{label} {name}"),
+        None => name.to_owned(),
+    }
+}
+
 /// Parses one line against the route's input names and bus names.
 ///
 /// # Errors
@@ -290,6 +300,23 @@ mod tests {
         assert_eq!(ok("?"), Command::Help);
         assert_eq!(ok("q"), Command::Stop);
         assert_eq!(ok("   "), Command::Stop);
+    }
+
+    #[test]
+    fn an_input_is_found_by_its_label_too() {
+        let inputs = [
+            search_name("CABLE Output", Some("Musik")),
+            search_name("Analogue 1 + 2", Some("Mikro")),
+            search_name("Spotify.exe", None),
+        ];
+        let buses = BUSES.map(str::to_owned);
+        let parsed = |line| parse(line, &inputs, &buses).expect(line);
+        assert_eq!(parsed("mute mik"), Command::Mute(Target::Input(1), true));
+        assert_eq!(parsed("mute cable"), Command::Mute(Target::Input(0), true));
+        assert_eq!(
+            parsed("mute spotify"),
+            Command::Mute(Target::Input(2), true)
+        );
     }
 
     #[test]
