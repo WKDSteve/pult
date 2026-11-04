@@ -119,6 +119,11 @@ fn learn(client: &mut Client, target: &str) -> Result<Vec<String>, Problem> {
                 "this pult has no MIDI".to_owned(),
             )));
         };
+        if let Some(why) = midi.problem {
+            return Err(Problem::Client(ClientError::Failed(format!(
+                "cannot learn: {why}"
+            ))));
+        }
         if midi.learning.as_deref() != Some(target) {
             return match midi.bindings.iter().find(|b| b.target == target) {
                 Some(bound) => Ok(vec![format!("{} -> {target}", bound.control)]),
@@ -139,6 +144,9 @@ fn midi_shown(state: &State) -> Vec<String> {
     let Some(midi) = &state.midi else {
         return vec!["this pult has no MIDI".to_owned()];
     };
+    if let Some(why) = &midi.problem {
+        return vec![format!("MIDI is off: {why}")];
+    }
     let mut lines = vec![match (&midi.device, midi.connected) {
         (Some(device), true) => format!("device: {device}"),
         (Some(device), false) => format!("device: {device} (not there)"),

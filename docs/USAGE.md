@@ -342,7 +342,8 @@ Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün,
   Szene woanders, und die erste Berührung wäre ein Sprung in der Lautstärke. pult erkennt die Art an der ersten Bewegung; irrt es
   sich, ändert `relative = true` oder `false` in der Datei das.
 - **Belegung:** `%APPDATA%\pult\midi.toml`. pult schreibt sie beim Lernen neu, Kommentare darin bleiben nicht. Eine Datei, die sich
-  nicht lesen lässt, bleibt unberührt, und MIDI bleibt aus, bis sie repariert ist.
+  nicht lesen lässt, bleibt unberührt, und MIDI bleibt aus, bis sie repariert ist. `pult learn` und `pult midi` sagen das; was genau
+  nicht stimmt, meldet das laufende pult beim Start.
 - **Anschluss:** Ohne Belegung öffnet pult keinen MIDI-Anschluss. Ob ein anderes Programm ihn zugleich nutzen kann, hängt vom Treiber
   ab; ein zweites Programm, das dieselben Tasten beleuchtet, überschreibt aber die Farben von pult. Geräte lassen
   sich ab- und anstecken, pult findet sie nach wenigen Sekunden wieder und leuchtet neu. MIDI läuft nie in den Audio-Callbacks.

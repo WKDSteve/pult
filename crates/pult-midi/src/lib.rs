@@ -28,15 +28,22 @@ const INBOX: usize = 1024;
 /// How many buttons are lit at one go: a slow device must not choke on a scene.
 const LIGHTS_AT_ONCE: usize = 16;
 
-/// A controller on a route. Its flags have nothing to do with each other: no state machine in them.
-#[allow(clippy::struct_excessive_bools)]
+/// What a client hears about a file that does not read. The details, with its path and its text,
+/// are for the owner's notes only.
+const BROKEN_FILE: &str =
+    "midi.toml does not read; repair or remove it (this pult told why when it started)";
+
+/// What a client hears when there is no folder for the file.
+const NO_FOLDER: &str = "there is no config folder for midi.toml";
+
+/// A controller on a route.
 pub struct Midi {
     path: PathBuf,
     map: Map,
     device: Option<String>,
     connected: bool,
-    /// The file does not read: nothing is learned, so it is not overwritten.
-    broken: bool,
+    /// Why MIDI stays off: nothing is learned, so a file that does not read is not overwritten.
+    problem: Option<&'static str>,
     inbox: Option<Receiver<Incoming>>,
     outbox: Option<Sender<Outgoing>>,
     thread: Option<JoinHandle<()>>,
@@ -56,7 +63,7 @@ impl Midi {
             Ok(dir) => Self::with_file(dir.join("midi.toml"), true),
             Err(why) => {
                 let mut midi = Self::with_file(PathBuf::new(), false);
-                midi.broken = true;
+                midi.problem = Some(NO_FOLDER);
                 midi.notes.push(format!("no MIDI: {why}"));
                 midi
             }
@@ -73,7 +80,7 @@ impl Midi {
             map: Map::new(saved.bindings),
             device: saved.device,
             connected: false,
-            broken: problem.is_some(),
+            problem: problem.is_some().then_some(BROKEN_FILE),
             inbox: None,
             outbox: None,
             thread: None,
@@ -101,14 +108,16 @@ impl Midi {
     /// What a client reads.
     #[must_use]
     pub fn status(&self) -> MidiStatus {
-        self.map.status(self.device.clone(), self.connected)
+        MidiStatus {
+            problem: self.problem.map(str::to_owned),
+            ..self.map.status(self.device.clone(), self.connected)
+        }
     }
 
     /// Lets the next movement bind `target`, which the caller checked.
     pub fn learn(&mut self, target: String) {
-        if self.broken {
-            self.notes
-                .push("cannot learn: repair or remove midi.toml first".to_owned());
+        if let Some(why) = self.problem {
+            self.notes.push(format!("cannot learn: {why}"));
             return;
         }
         self.map.learn(target);
@@ -129,7 +138,7 @@ impl Midi {
 
     /// What the wanted port is by now, for the thread, which starts when there is something to do.
     fn follow_wanted(&mut self) {
-        let wanted = if self.broken {
+        let wanted = if self.problem.is_some() {
             Wanted::Nothing
         } else if let Some(device) = &self.device {
             if self.map.bindings().is_empty() && self.map.learning().is_none() {
@@ -642,6 +651,12 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(folder.file()).expect("a file"),
             "broken ="
+        );
+        let problem = bench.midi.status().problem.expect("a client hears it");
+        assert!(problem.contains("midi.toml"), "{problem}");
+        assert!(
+            !problem.contains(&*folder.0.to_string_lossy()),
+            "a client reads no folders: {problem}"
         );
     }
 

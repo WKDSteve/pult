@@ -88,7 +88,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
   `back`, `refused` oder `slow`.
 - `gain_db`, `pan`, `muted` und `buses` nennen das Ziel. Läuft eine Rampe, folgt der Ton noch.
 - `scenes` sind die Szenen des Profils in dessen Reihenfolge.
-- `midi` nennt `device`, `connected`, `learning` und `bindings` des Controllers, wo einer läuft, sonst `null`.
+- `midi` nennt `device`, `connected`, `learning` und `bindings` des Controllers, wo einer läuft, sonst `null`. `problem` sagt ohne
+  Ordner, warum MIDI aus ist, etwa bei einer `midi.toml`, die sich nicht lesen lässt; sonst `null`.
 - `profile` ist nur der Dateiname, ohne Ordner.
 
 ### `GET /api/pult/stream`

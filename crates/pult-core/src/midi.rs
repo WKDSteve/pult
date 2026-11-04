@@ -207,6 +207,9 @@ pub struct MidiStatus {
     pub learning: Option<String>,
     /// All that is bound.
     pub bindings: Vec<MidiBinding>,
+    /// Why MIDI is off, if something keeps it off. Holds no path: a client reads no folders.
+    #[serde(default)]
+    pub problem: Option<String>,
 }
 
 /// A binding as a client reads it.
@@ -739,6 +742,7 @@ impl Map {
                     target: bound.target.clone(),
                 })
                 .collect(),
+            problem: None,
         }
     }
 }

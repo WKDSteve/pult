@@ -6,8 +6,9 @@ use std::process::{Command, Output};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use pult_core::midi::MidiStatus;
 use pult_core::view::{Desk, FakeDesk};
 use pult_hub::{Control, Env, IDENTITY};
 
@@ -37,6 +38,11 @@ struct Hub {
 
 impl Hub {
     fn start(dir: &Path) -> Self {
+        Self::with_midi(dir, None)
+    }
+
+    /// A hub whose owner reports `midi`, as one with a controller would.
+    fn with_midi(dir: &Path, midi: Option<MidiStatus>) -> Self {
         let env = Env::from_pairs([
             (IDENTITY.var("CONFIG_DIR"), dir.as_os_str().to_owned()),
             (IDENTITY.var("PORT"), "0".into()),
@@ -48,7 +54,8 @@ impl Hub {
             let mut desk = FakeDesk::new();
             // As a route: it ends when asked to, and its hub with it.
             while !stopping.load(Ordering::Relaxed) && !pump.stop_asked() {
-                let view = desk.view();
+                let mut view = desk.view();
+                view.midi.clone_from(&midi);
                 pump.pump(&mut desk, &view);
                 thread::sleep(Duration::from_millis(5));
             }
@@ -309,6 +316,33 @@ fn midi_says_what_there_is_and_learn_checks_its_target() {
         pult(&folder.0, &["midi", "listen", "x"]).status.code(),
         Some(2)
     );
+}
+
+/// It said "nothing moved" after half a minute, for a file that nothing could have helped.
+#[test]
+fn learn_and_midi_name_what_keeps_midi_off() {
+    let folder = Folder::new("midi-off");
+    let _hub = Hub::with_midi(
+        &folder.0,
+        Some(MidiStatus {
+            problem: Some("midi.toml does not read".to_owned()),
+            ..MidiStatus::default()
+        }),
+    );
+    let started = Instant::now();
+    let output = pult(&folder.0, &["learn", "input/1/gain"]);
+    assert_eq!(output.status.code(), Some(1));
+    let said = stderr(&output);
+    assert!(said.contains("midi.toml does not read"), "{said}");
+    assert!(!said.contains("nothing moved"), "{said}");
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "it does not wait"
+    );
+
+    let said = stdout(&pult(&folder.0, &["midi"]));
+    assert!(said.contains("MIDI is off"), "{said}");
+    assert!(!said.contains("no device yet"), "{said}");
 }
 
 #[test]
