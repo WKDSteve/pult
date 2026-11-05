@@ -15,6 +15,7 @@
 //! An input can also be the sound of one program (process loopback, see `process`); the
 //! Windows calls for that live in `ffi`, the only module with `unsafe` code.
 
+mod convert;
 mod desk;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -32,7 +33,7 @@ use std::time::Instant;
 
 use assert_no_alloc::assert_no_alloc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, SupportedStreamConfig};
+use cpal::{Device, SupportedStreamConfig};
 use pult_core::{
     BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
     MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
@@ -42,7 +43,7 @@ pub use desk::EngineDesk;
 pub use presence::{APP_INSTANCE, Presence};
 use process::PROCESS_CHANNELS;
 pub use process::program_names;
-use slot::{Feed, Health, OPEN_TIMEOUT, Slot, Source, fault_recorder};
+use slot::{Feed, Health, Slot, Source, fault_recorder};
 
 /// Weight of one resampler chunk in the drift control's level average: with 10 ms callbacks
 /// the average spans about 1.3 s, long enough to flatten the block jitter of virtual cables.
@@ -93,7 +94,7 @@ pub enum Error {
     /// The route itself is inconsistent (no input, no bus, a route to a missing bus, one
     /// device on two buses).
     InvalidRoute(String),
-    /// The device's shared-mode format is not 32-bit float.
+    /// The device's format is no PCM pult can mix (DSD, say).
     UnsupportedFormat {
         /// The device.
         device: String,
@@ -157,7 +158,7 @@ impl fmt::Display for Error {
             Self::InvalidRoute(why) => f.write_str(why),
             Self::UnsupportedFormat { device, format } => write!(
                 f,
-                "{device} uses the sample format {format}; only 32-bit float is supported yet"
+                "{device} uses the sample format {format}, which pult cannot mix"
             ),
             Self::RateChanged {
                 device,
@@ -521,8 +522,9 @@ pub enum Change {
         /// The input or bus, with the device's name now.
         label: String,
     },
-    /// Windows refused the device's callback thread realtime priority; it plays, but heavy
-    /// load (a build on every core) can make it drop out.
+    /// The device's callback thread has no realtime priority: Windows refused it, and pult
+    /// cannot ask for it elsewhere yet. It plays, but heavy load (a build on every core) can make
+    /// it drop out.
     Slow {
         /// The input or bus.
         label: String,
@@ -542,12 +544,19 @@ impl fmt::Display for Change {
             Self::Back { label } => write!(f, "{label} is back"),
             Self::Slow { label } => write!(
                 f,
-                "{label} plays without realtime priority (Windows refused MMCSS \"Pro Audio\"); \
-                 under heavy load it may drop out"
+                "{label} plays without realtime priority ({NO_REALTIME}); under heavy load it \
+                 may drop out"
             ),
         }
     }
 }
+
+/// Why a callback thread has no realtime priority.
+const NO_REALTIME: &str = if cfg!(windows) {
+    "Windows refused MMCSS \"Pro Audio\""
+} else {
+    "pult cannot ask for it on this system yet"
+};
 
 /// A started route; dropping it stops all streams.
 pub struct Running {
@@ -725,8 +734,8 @@ fn pick(devices: &[Device], wanted: &str, role: Role) -> Result<usize, Error> {
     select(wanted, &names).map_err(|source| Error::Select { role, source })
 }
 
-fn require_f32(device: &str, config: &SupportedStreamConfig) -> Result<(), Error> {
-    if config.sample_format() == SampleFormat::F32 {
+fn require_mixable(device: &str, config: &SupportedStreamConfig) -> Result<(), Error> {
+    if convert::supported(config.sample_format()) {
         Ok(())
     } else {
         Err(Error::UnsupportedFormat {
@@ -759,7 +768,7 @@ fn find_device(
         device.default_input_config()
     }
     .map_err(audio(format!("reading the format of {name}")))?;
-    require_f32(&name, &config)?;
+    require_mixable(&name, &config)?;
     Ok((device, name, config))
 }
 
@@ -805,14 +814,12 @@ pub fn play_tone(sink: &str, frequency: f32, gain_db: f32) -> Result<Tone, Error
     let sample_rate = config.sample_rate();
     let channels = usize::from(config.channels());
     let mut oscillator = Sine::new(frequency, sample_rate, db_to_linear(gain_db));
-    let stream = device
-        .build_output_stream::<f32, _, _>(
-            config.config(),
-            move |data, _| assert_no_alloc(|| oscillator.fill(data, channels)),
-            fault_recorder(&health, &Arc::new(Counter::default())),
-            Some(OPEN_TIMEOUT),
-        )
-        .map_err(audio(format!("opening {name}")))?;
+    let stream = convert::build_output(
+        &device,
+        &config,
+        move |data| assert_no_alloc(|| oscillator.fill(data, channels)),
+        fault_recorder(&health, &Arc::new(Counter::default())),
+    )?;
     stream.play().map_err(audio(format!("starting {name}")))?;
     Ok(Tone {
         _stream: stream,
@@ -1106,6 +1113,11 @@ mod tests {
         assert!(
             slow.to_string()
                 .starts_with("A1 Focusrite plays without realtime priority"),
+            "{slow}"
+        );
+        assert_eq!(
+            slow.to_string().contains("Windows"),
+            cfg!(windows),
             "{slow}"
         );
         let layout = Error::LayoutChanged {

@@ -13,10 +13,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use assert_no_alloc::assert_no_alloc;
-use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::traits::StreamTrait;
 use cpal::{Device, ErrorKind, SupportedStreamConfig};
 use pult_core::{Capture, Counter, Mixer};
 
+use crate::convert;
 use crate::process::{PROCESS_CHANNELS, ProcessStream};
 use crate::{Error, Role, audio};
 
@@ -340,12 +341,13 @@ impl Slot {
         mut returning: Returning<Feed>,
     ) -> Result<cpal::Stream, Error> {
         let name = device.to_string();
-        let built = if role == Role::Output {
+        let stream = if role == Role::Output {
             let beats = Arc::clone(health);
             let mut realtime = Realtime::default();
-            device.build_output_stream::<f32, _, _>(
-                config.config(),
-                move |data, _| {
+            convert::build_output(
+                device,
+                config,
+                move |data| {
                     realtime.raise(&beats);
                     assert_no_alloc(|| {
                         beats.beats.add(1);
@@ -356,18 +358,15 @@ impl Slot {
                     });
                 },
                 fault_recorder(health, xruns),
-                Some(OPEN_TIMEOUT),
-            )
+            )?
         } else {
-            let mut push = input_callback(Arc::clone(health), returning);
-            device.build_input_stream::<f32, _, _>(
-                config.config(),
-                move |data, _| push(data),
+            convert::build_input(
+                device,
+                config,
+                input_callback(Arc::clone(health), returning),
                 fault_recorder(health, xruns),
-                Some(OPEN_TIMEOUT),
-            )
+            )?
         };
-        let stream = built.map_err(audio(format!("opening {name}")))?;
         // A stream that does not start is dropped here, which hands the feed back.
         stream.play().map_err(audio(format!("starting {name}")))?;
         Ok(stream)
