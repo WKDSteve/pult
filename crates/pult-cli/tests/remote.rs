@@ -85,6 +85,21 @@ fn pult(dir: &Path, args: &[&str]) -> Output {
         .expect("pult runs")
 }
 
+/// Runs a program this test has just written. A process another test forks at that moment holds
+/// the file open for writing until its own exec, and Linux refuses to run it meanwhile.
+fn run_just_written(command: &mut Command) -> Output {
+    let mut tries = 0;
+    loop {
+        match command.output() {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 100 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => return result.expect("the program runs"),
+        }
+    }
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -276,11 +291,9 @@ fn start_with_a_route_running_starts_nothing_and_without_a_window_says_so() {
         .0
         .join(format!("pult{}", std::env::consts::EXE_SUFFIX));
     std::fs::copy(env!("CARGO_BIN_EXE_pult"), &alone).expect("a copy");
-    let output = Command::new(&alone)
-        .arg("start")
-        .env("PULT_CONFIG_DIR", &folder.0)
-        .output()
-        .expect("pult runs");
+    let mut start = Command::new(&alone);
+    start.arg("start").env("PULT_CONFIG_DIR", &folder.0);
+    let output = run_just_written(&mut start);
     assert_eq!(output.status.code(), Some(1));
     assert!(
         stderr(&output).contains("no window beside"),
