@@ -59,10 +59,18 @@ pub fn knob(ui: &mut Ui, pan: &mut f32, size: f32, label: &str) -> Response {
             *pan = (*pan + wheel * WHEEL_STEP).clamp(-1.0, 1.0);
         }
     }
+    if let Some(asked) = super::assisted(ui, response.id) {
+        *pan = match asked {
+            #[allow(clippy::cast_possible_truncation)]
+            super::Assist::Set(value) => (value as f32).clamp(-1.0, 1.0),
+            super::Assist::Steps(steps) => (*pan + steps * WHEEL_STEP).clamp(-1.0, 1.0),
+        };
+    }
     if pan.to_bits() != before.to_bits() {
         response.mark_changed();
     }
     response.widget_info(|| WidgetInfo::slider(true, f64::from(*pan), format!("{label} pan")));
+    super::offer_range(ui, response.id, -1.0..=1.0, f64::from(WHEEL_STEP));
 
     if !ui.is_rect_visible(rect) {
         return response;

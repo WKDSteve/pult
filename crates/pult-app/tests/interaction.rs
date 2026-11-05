@@ -3,7 +3,7 @@
 //! by their accessible names (`Spotify.exe mute`, `Spotify.exe to A1`, `Spotify.exe gain dB`).
 
 use eframe::egui::{Key, vec2};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, HarnessBuilder};
 use pult_app::console::{self, ConsoleState, Tab};
 use pult_app::log::Source;
@@ -127,6 +127,67 @@ fn double_click_sets_the_fader_to_unity() {
     harness.get_by_label("Spotify.exe gain dB").click();
     let gain = desk_view(&mut harness).inputs[SPOTIFY].gain_db;
     assert!(gain.abs() < 1e-6, "gain {gain}");
+}
+
+#[test]
+fn a_screen_reader_sets_the_fader() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    let fader = harness.get_by_label("Spotify.exe gain dB");
+    let node = fader.accesskit_node();
+    assert_eq!(
+        node.min_numeric_value(),
+        Some(-60.0),
+        "the floor is the range"
+    );
+    assert_eq!(node.max_numeric_value(), Some(12.0), "the top is the range");
+    fader.set_value_accesskit(-12.0);
+    harness.run_steps(2);
+    let gain = desk_view(&mut harness).inputs[SPOTIFY].gain_db;
+    assert!((gain - -12.0).abs() < 1e-4, "gain {gain}");
+    // Off is below the floor, and nothing goes above the top.
+    harness
+        .get_by_label("Spotify.exe gain dB")
+        .set_value_accesskit(-500.0);
+    harness.run_steps(2);
+    let off = desk_view(&mut harness).inputs[SPOTIFY].gain_db;
+    assert!(off < -60.0, "off is below the floor: {off}");
+    harness
+        .get_by_label("Spotify.exe gain dB")
+        .set_value_accesskit(500.0);
+    harness.run_steps(2);
+    assert_eq!(desk_view(&mut harness).inputs[SPOTIFY].gain_db, 12.0);
+    harness
+        .get_by_label("Spotify.exe gain dB")
+        .set_value_accesskit(f64::NAN);
+    harness.run_steps(2);
+    assert_eq!(
+        desk_view(&mut harness).inputs[SPOTIFY].gain_db,
+        12.0,
+        "not a number is no request"
+    );
+}
+
+#[test]
+fn a_screen_reader_sets_the_pan() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    let knob = harness.get_by_label("Spotify.exe pan");
+    assert_eq!(knob.accesskit_node().min_numeric_value(), Some(-1.0));
+    assert_eq!(knob.accesskit_node().max_numeric_value(), Some(1.0));
+    knob.set_value_accesskit(-0.5);
+    harness.run_steps(2);
+    let pan = desk_view(&mut harness).inputs[SPOTIFY].pan;
+    assert!((pan - -0.5).abs() < 1e-4, "pan {pan}");
+    harness
+        .get_by_label("Spotify.exe pan")
+        .set_value_accesskit(7.0);
+    harness.run_steps(2);
+    assert_eq!(
+        desk_view(&mut harness).inputs[SPOTIFY].pan,
+        1.0,
+        "the pan stays in its range"
+    );
 }
 
 #[test]

@@ -85,12 +85,27 @@ pub fn fader(ui: &mut Ui, gain_db: &mut f32, size: Vec2, label: &str) -> Respons
         });
         *gain_db = ui.input(|i| keys(i, *gain_db));
     }
+    if let Some(asked) = super::assisted(ui, response.id) {
+        *gain_db = match asked {
+            super::Assist::Set(db) if db < f64::from(FADER_FLOOR_DB) => f32::NEG_INFINITY,
+            #[allow(clippy::cast_possible_truncation)]
+            super::Assist::Set(db) => (db as f32).min(FADER_TOP_DB.max(*gain_db)),
+            super::Assist::Steps(steps) => step(*gain_db, steps, STEP_DB),
+        };
+    }
     // Bits, not `!=`: -inf to -inf is no change, and any other difference is one.
     if gain_db.to_bits() != before.to_bits() {
         response.mark_changed();
     }
     response
         .widget_info(|| WidgetInfo::slider(true, f64::from(*gain_db), format!("{label} gain dB")));
+    // What is below the floor is off: a screen reader names the floor as the end of the range.
+    super::offer_range(
+        ui,
+        response.id,
+        f64::from(FADER_FLOOR_DB)..=f64::from(FADER_TOP_DB.max(*gain_db)),
+        f64::from(STEP_DB),
+    );
     if ui.is_rect_visible(rect) {
         paint(ui, rect, *gain_db, &response);
     }
