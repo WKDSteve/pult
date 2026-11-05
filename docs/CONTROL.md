@@ -149,5 +149,8 @@ Seite nimmt ihn als Erstes aus der Adressleiste.
 
 `tools/control-check.py` fährt das alles einmal gegen einen echten Lauf durch (nur auf den stummen Ausgängen „Voicemeeter
 In 4/5“, mit eigenem Konfigurationsordner), wechselt auch Szenen unter Last und zeigt in Python, wie ein Client aussieht. `tools/page-check.mjs` prüft die Seite in einem
-echten Chrome gegen das Demo-Pult (`cargo run -p pult-hub --example demo-hub`). Für Rust-Clients liegen die
+echten Chrome gegen das Demo-Pult (`cargo run -p pult-hub --example demo-hub`), mit axe hell und dunkel, auch mit
+Hover, Fokus und Problem-Hinweis; mit `PULT_PAGE_SHOTS=<Ordner>` legt es je Theme ein Bildschirmfoto dorthin. Die
+Farben der Seite kommen aus `crates/pult-hub/ui/palette.css`, die das Icon-Werkzeug des tasks-vault aus dem Icon
+erzeugt (nie von Hand ändern). Für Rust-Clients liegen die
 Nachrichten als Typen in `pult_core::protocol`, ohne Geräte-Code.

@@ -20,6 +20,13 @@ const require = createRequire(join(modules, "x.js"));
 const { chromium } = require("@playwright/test");
 const { AxeBuilder } = require("@axe-core/playwright");
 
+// PULT_PAGE_SHOTS=<folder>: also a screenshot of each theme there, to look at the colours by hand.
+async function shot(name) {
+  if (process.env.PULT_PAGE_SHOTS) {
+    await page.screenshot({ path: join(process.env.PULT_PAGE_SHOTS, `pult-${name}.png`), fullPage: true });
+  }
+}
+
 const failed = [];
 function check(what, ok, detail = "") {
   console.log(`${ok ? "ok    " : "FAILED"} ${what}${ok ? "" : ` ${detail}`}`);
@@ -165,13 +172,27 @@ try {
   check("a string as markup is refused", blocked);
   problems.length = 0; // The refusal just provoked.
 
+  // axe in both themes: as the page is, with a button under the pointer, and with one focused from the keyboard
+  // (the colours of pult come from palette.css, generated from its icon: the accent, the hover and the focus ring
+  // are all its own).
+  const axe = async (what) => {
+    const { violations } = await new AxeBuilder({ page }).analyze();
+    check(`axe, ${what}`, violations.length === 0,
+      JSON.stringify(violations.map((v) => [v.id, v.nodes.map((n) => n.target)])));
+  };
   for (const colorScheme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme });
     await page.getByRole("button", { name: "Laut", exact: true }).click();
     await page.waitForTimeout(200);
-    const { violations } = await new AxeBuilder({ page }).analyze();
-    check(`axe, ${colorScheme}`, violations.length === 0,
-      JSON.stringify(violations.map((v) => [v.id, v.nodes.map((n) => n.target)])));
+    await axe(colorScheme);
+    await page.locator("#inputs .strip button").first().hover();
+    await axe(`${colorScheme}, hover`);
+    await page.mouse.move(0, 0);
+    await page.locator("#inputs .strip button").first().focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await axe(`${colorScheme}, focus`);
+    await shot(colorScheme);
   }
 
   // The hub goes: the page says so.
@@ -179,6 +200,12 @@ try {
   await page.getByText("pult does not answer").waitFor({ timeout: 10_000 });
   check("an ended route is told", true);
   problems.length = 0; // Connection errors of the retries are what ending looks like.
+  for (const colorScheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme });
+    await axe(`${colorScheme}, problem notice`);
+    await shot(`${colorScheme}-problem`);
+  }
+  problems.length = 0;
 
   check("no error in the page", problems.length === 0, problems.join(" | "));
   check("nothing leaves this origin", away.length === 0, away.join(" | "));

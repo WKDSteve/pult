@@ -1,26 +1,8 @@
+/* Colours: palette.css (loaded first, generated from the icon by the app icons tool of the tasks vault, never edited
+   here) holds every colour token with a light and a dark value; light-dark() picks one by color-scheme, which follows
+   the system. The names are those of appkit-ui. No colour is written in this file (tools/check-color-literals.py). */
 :root {
   color-scheme: light dark;
-  --base: #f4f4f2;
-  --surface: #ffffff;
-  --line: #c9c9c4;
-  --text: #1b1b1a;
-  --dim: #55554f;
-  --accent: #0b5cad;
-  --on-accent: #ffffff;
-  --alert: #a3190f;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --base: #161716;
-    --surface: #212321;
-    --line: #434641;
-    --text: #ecece8;
-    --dim: #b0b1aa;
-    --accent: #7db8f5;
-    --on-accent: #101a24;
-    --alert: #ff9a90;
-  }
 }
 
 * {
@@ -31,7 +13,7 @@ body {
   margin: 0 auto;
   max-width: 44rem;
   padding: 1rem;
-  background: var(--base);
+  background: var(--bg);
   color: var(--text);
   font: 15px/1.4 system-ui, sans-serif;
 }
@@ -44,7 +26,7 @@ h1 {
 h2 {
   margin: 1.25rem 0 0.5rem;
   font-size: 0.85rem;
-  color: var(--dim);
+  color: var(--muted);
 }
 
 p {
@@ -52,7 +34,7 @@ p {
 }
 
 .dim {
-  color: var(--dim);
+  color: var(--muted);
 }
 
 #notice:not(:empty) {
@@ -64,8 +46,14 @@ p {
 }
 
 #notice.problem {
-  border-color: var(--alert);
-  color: var(--alert);
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+/* The accent of pult is an amber close to --warn: a problem says so with a sign as well, not with its colour alone.
+   The sign is not read out; the sentence says what is wrong. */
+#notice.problem::before {
+  content: "⚠ " / "";
 }
 
 .row {
@@ -98,7 +86,7 @@ p {
 
 .strip .detail {
   grid-column: 1 / -1;
-  color: var(--dim);
+  color: var(--muted);
   font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
@@ -108,8 +96,13 @@ p {
   width: 100%;
 }
 
+/* The fader in the colour of pult, not the browser's blue. */
+.strip input[type="range"] {
+  accent-color: var(--accent);
+}
+
 .strip .level {
-  color: var(--dim);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -119,7 +112,7 @@ button {
   padding: 0.2rem 0.7rem;
   border: 1px solid var(--line);
   border-radius: 3px;
-  background: var(--base);
+  background: var(--bg);
   color: var(--text);
   font: inherit;
   cursor: pointer;
@@ -128,10 +121,10 @@ button {
 button[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent);
-  color: var(--on-accent);
+  color: var(--accent-text);
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }

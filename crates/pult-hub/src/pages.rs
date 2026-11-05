@@ -5,7 +5,7 @@ use appkit_hub::{Page, Pages};
 use axum::body::Bytes;
 
 /// The files, by the path a request asks for.
-const FILES: [(&str, &[u8], &str); 5] = [
+const FILES: [(&str, &[u8], &str); 6] = [
     (
         "/",
         include_bytes!("../ui/index.html"),
@@ -30,6 +30,12 @@ const FILES: [(&str, &[u8], &str); 5] = [
         "/assets/favicon.svg",
         include_bytes!("../ui/favicon.svg"),
         "image/svg+xml",
+    ),
+    // The colours, generated from the icon by the app icons tool of the tasks vault; loaded before style.css.
+    (
+        "/assets/palette.css",
+        include_bytes!("../ui/palette.css"),
+        "text/css; charset=utf-8",
     ),
 ];
 
@@ -79,6 +85,41 @@ mod tests {
         ] {
             assert!(Remote.page(path).is_none(), "{path}");
         }
+    }
+
+    #[test]
+    fn the_colours_come_from_the_palette_of_the_icon() {
+        let html = std::str::from_utf8(FILES[0].1).expect("text");
+        let style = std::str::from_utf8(FILES[3].1).expect("text");
+        let palette = std::str::from_utf8(FILES[5].1).expect("text");
+        let palette_at = html.find(r#"href="/assets/palette.css""#).expect("palette");
+        let style_at = html.find(r#"href="/assets/style.css""#).expect("style");
+        assert!(
+            palette_at < style_at,
+            "palette.css before style.css, which uses its tokens"
+        );
+        assert!(
+            palette.contains("GENERATED"),
+            "the generated file, not a hand-made one"
+        );
+        for token in [
+            "--bg:",
+            "--surface:",
+            "--line:",
+            "--text:",
+            "--muted:",
+            "--accent:",
+            "--accent-text:",
+            "--focus:",
+            "--bad:",
+        ] {
+            assert!(palette.contains(token), "{token}");
+        }
+        // The names of appkit-ui; the old ones of pult are gone.
+        for old in ["--base", "--dim", "--on-accent", "--alert"] {
+            assert!(!style.contains(old), "{old}");
+        }
+        // That style.css writes no colour of its own is checked by tools/check-color-literals.py in CI.
     }
 
     #[test]
