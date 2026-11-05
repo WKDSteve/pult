@@ -13,7 +13,7 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
 use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_SZ, RegDeleteKeyValueW, RegSetKeyValueW,
+    HKEY_CURRENT_USER, REG_SZ, RRF_RT_ANY, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
 };
 use windows::Win32::System::Threading::{
     CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent,
@@ -166,10 +166,18 @@ pub fn set_run(key: &str, name: &str, command: Option<&str>) -> Result<(), Strin
     result.ok().map_err(|e| e.message())
 }
 
+/// Whether Windows has something to start under `HKEY_CURRENT_USER\<key>`, value `name`.
+#[must_use]
+pub fn run_exists(key: &str, name: &str) -> bool {
+    let (key, name) = (HSTRING::from(key), HSTRING::from(name));
+    // SAFETY: the strings live across the call; no data is asked for, so no buffer is written.
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, &key, &name, RRF_RT_ANY, None, None, None) }.is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::Registry::{RRF_RT_REG_SZ, RegDeleteTreeW, RegGetValueW};
+    use windows::Win32::System::Registry::{RRF_RT_REG_SZ, RegDeleteTreeW};
 
     /// A name of this test run only, so a running pult-app is not disturbed.
     fn name(what: &str) -> String {
@@ -226,10 +234,14 @@ mod tests {
         // A key of this test run, never the real Run key.
         let key = format!(r"Software\pult-app-test-{}", std::process::id());
         let command = r#""C:\Program Files\pult\pult-app.exe" --tray"#;
+        assert!(!run_exists(&key, "pult"), "no key yet");
         set_run(&key, "pult", Some(command)).unwrap();
         assert_eq!(read_run(&key, "pult").as_deref(), Some(command));
+        assert!(run_exists(&key, "pult"));
+        assert!(!run_exists(&key, "other"));
         set_run(&key, "pult", None).unwrap();
         assert_eq!(read_run(&key, "pult"), None);
+        assert!(!run_exists(&key, "pult"));
         set_run(&key, "pult", None).unwrap();
         // SAFETY: the key belongs to this test.
         let _ = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(key.as_str())) };

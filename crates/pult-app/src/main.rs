@@ -78,7 +78,10 @@ impl App {
     fn new(start: &Start, ctx: &egui::Context, settings: Stored, note: Option<String>) -> Self {
         let (send, commands) = mpsc::channel();
         listen_for_later_starts(ctx, &send);
-        let autostart = settings.settings.autostart;
+        // What Windows will do counts, not what was noted here: an uninstall takes the Run value
+        // away and leaves the settings, and an install after it must not show a check that holds
+        // nothing.
+        let autostart = ffi::run_exists(ffi::RUN_KEY, ffi::RUN_VALUE);
         let mut app = Self {
             profile: None,
             desk: None,
@@ -95,6 +98,9 @@ impl App {
             settings,
             notes: note.into_iter().collect(),
         };
+        if app.settings.settings.autostart != autostart {
+            app.change_settings(|s| s.autostart = autostart);
+        }
         let last = app.settings.settings.last_profile.as_deref();
         if *start == Start::Demo {
             app.use_desk(Box::new(FakeDesk::new()));
