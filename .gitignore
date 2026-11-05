@@ -1,6 +1,9 @@
 # Rust
 target/
 
+# What scripts/package-release.ps1 packs
+/dist/
+
 # Python (tools/)
 __pycache__/
 

@@ -80,3 +80,7 @@ jobs:
       # tool of the tasks vault); a hex colour or a colour function in any other stylesheet is refused. Copy of
       # appkit's tool.
       - run: python tools/check-color-literals.py --root crates/pult-hub/ui --tokens crates/pult-hub/ui/palette.css
+      # The rules the workflows must keep (pins, runner, rights, a release stays a draft).
+      - run: python tools/check-workflows.py
+      # The release zip from stand-ins for the programs, and its install and uninstall into temp places.
+      - run: pwsh -NoProfile -File scripts/test-release.ps1

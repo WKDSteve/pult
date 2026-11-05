@@ -5,11 +5,12 @@ Build pult from this checkout and install it for the current user, from the term
 .DESCRIPTION
 The same entry point the other desktop apps have (scripts/build-install.ps1, scripts/uninstall.ps1),
 for a machine where no setup may be started: `cargo build --release --locked` builds both programs
-(pult.exe, the command line; pult-app.exe, the window), then they are copied to
-%LOCALAPPDATA%\pult\bin (or $env:PULT_INSTALL_DIR) and a Start menu entry "pult" opens the window.
-No administrator rights; a file built on this machine carries no Mark-of-the-Web. Both programs are
-copied first and then swapped in; a swap that fails puts the old ones back. A pult that runs goes
-on with the old program until it is closed. Your profiles are not touched.
+(pult.exe, the command line; pult-app.exe, the window), package-release.ps1 stages them in the shape
+of the release zip and install.ps1 installs that, the one installer for a build and for a release:
+%LOCALAPPDATA%\pult\bin (or $env:PULT_INSTALL_DIR), a Start menu entry "pult" that opens the window
+and an entry in Settings > Apps. No administrator rights; a file built on this machine carries no
+Mark-of-the-Web. A pult that runs goes on with the old program until it is closed. Your profiles are
+not touched.
 
 Run it in a normal terminal: a Claude session (the Claude app redirects AppData and HKCU) may
 build (-BuildOnly), installing there is refused.
@@ -79,45 +80,14 @@ try {
     Write-Output "built $($programs -join ', ') ($built)"
     if ($BuildOnly) { return }
 
-    $dir = if ($env:PULT_INSTALL_DIR) { $env:PULT_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'pult\bin' }
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    Write-Output "==> installing to $dir"
-    # Copy all first, then swap: Windows lets a running exe be renamed, so the old one moves to .old
-    # (a running pult goes on from there) and the new one takes its name. A swap that fails puts the
-    # old ones back, so the install is never a mix of versions.
-    foreach ($name in $programs) {
-        Copy-Item -LiteralPath (Join-Path $built $name) -Destination (Join-Path $dir "$name.new") -Force
-    }
-    $swapped = @()
+    $stage = Join-Path ([IO.Path]::GetTempPath()) ('pult-build-install-' + [Guid]::NewGuid().ToString('N'))
     try {
-        foreach ($name in $programs) {
-            $target = Join-Path $dir $name
-            if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination "$target.old" -Force }
-            $swapped += $name
-            Move-Item -LiteralPath "$target.new" -Destination $target -Force
-        }
+        & (Join-Path $PSScriptRoot 'package-release.ps1') -BuildDir $built -StageDir $stage -NoZip
+        & (Join-Path $PSScriptRoot 'install.ps1') -PayloadDir $stage -AllowElevated:$AllowElevated
     }
-    catch {
-        foreach ($name in $swapped) {
-            $target = Join-Path $dir $name
-            if (Test-Path -LiteralPath "$target.old") { Move-Item -LiteralPath "$target.old" -Destination $target -Force }
-        }
-        foreach ($name in $programs) { Remove-Item -LiteralPath (Join-Path $dir "$name.new") -Force -ErrorAction SilentlyContinue }
-        Exit-Build "cannot swap in the new programs, the old ones are back: $($_.Exception.Message)"
+    finally {
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    foreach ($name in $programs) {
-        # still running from the old file: it stays until the next install or the uninstall
-        Remove-Item -LiteralPath (Join-Path $dir "$name.old") -Force -ErrorAction SilentlyContinue
-    }
-
-    $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'pult.lnk'
-    $shell = New-Object -ComObject WScript.Shell
-    $link = $shell.CreateShortcut($menu)
-    $link.TargetPath = Join-Path $dir 'pult-app.exe'
-    $link.WorkingDirectory = $dir
-    $link.Save()
-    Write-Output "Start menu entry: $menu"
-    Write-Output "installed pult to $dir"
 }
 finally {
     Pop-Location

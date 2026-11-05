@@ -60,9 +60,27 @@ cargo audit --deny warnings
 
 Die Programme liegen danach unter `target\release\pult.exe` (Kommandozeile) und `target\release\pult-app.exe` (Fenster).
 
-Für den eigenen Benutzer installieren, ohne Setup und ohne Adminrechte: `scripts\build-install.ps1` baut beide und kopiert sie nach `%LOCALAPPDATA%\pult\bin`, dazu ein Startmenü-Eintrag „pult“ für das Fenster (`-BuildOnly` baut nur). `scripts\uninstall.ps1` entfernt beides wieder, die Profile bleiben.
+Die Toolchain gibt `rust-toolchain.toml` vor, die CI läuft auf einem Self-hosted-Windows-Runner (`.github/workflows/ci.yml`). `scripts\test-release.ps1` prüft Zip, Installation und Deinstallation ohne Build und ohne echte Installation.
 
-Die Toolchain gibt `rust-toolchain.toml` vor, die CI läuft auf einem Self-hosted-Windows-Runner (`.github/workflows/ci.yml`).
+## Installieren
+
+Alles für den eigenen Benutzer, ohne Setup und ohne Adminrechte: Programme und Skripte nach `%LOCALAPPDATA%\pult\bin`, ein Startmenü-Eintrag „pult“ für das Fenster und ein Eintrag in *Einstellungen > Apps*. Profile und `%APPDATA%\pult` bleiben unberührt. Ein laufendes pult spielt beim Update mit dem alten Programm weiter, bis es geschlossen wird. Nichts ist signiert; nur für private Rechner, nicht für die Tricentis-Workstation.
+
+- **Rolling-Build:** Nach jedem grünen CI-Lauf auf `main` liegt der Stand auf dem Pre-Release [`latest`](https://github.com/WKDSteve/pult/releases/tag/latest) als `pult-windows-x86_64.zip`.
+
+  ```
+  gh release download latest -R WKDSteve/pult -D pult-latest
+  cd pult-latest
+  Unblock-File .\pult-windows-x86_64.zip
+  Expand-Archive .\pult-windows-x86_64.zip -DestinationPath .\entpackt
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\entpackt\install.ps1
+  ```
+
+  Die Prüfsumme steht in `SHA256SUMS` daneben, die Schritte im `README.md` des Zips.
+- **Release:** Ein Tag `vX.Y.Z` macht einen Entwurf mit `pult-X.Y.Z-x86_64-pc-windows-msvc.zip`, den ein Mensch ansieht und veröffentlicht (`.github/workflows/release.yml`).
+- **Aus dem Checkout:** `scripts\build-install.ps1` baut und ruft denselben `install.ps1` (`-BuildOnly` baut nur).
+
+Entfernen: *Einstellungen > Apps > pult* oder `uninstall.ps1` im Installationsordner.
 
 ## Planung
 
