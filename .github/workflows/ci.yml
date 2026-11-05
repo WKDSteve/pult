@@ -99,6 +99,23 @@ jobs:
       - run: pnpm --dir tools/page-check install --frozen-lockfile
       - run: cargo build -p pult-hub --example demo-hub --locked
       - run: node tools/page-check.mjs tools/page-check/node_modules target/debug/examples/demo-hub.exe
+      # The test sheets (TESTS/sheets, .testing.lua) at a fixed version of testing.nvim; --strict: a sheet that could
+      # not run is red here, this job exists to prove it. nvim comes from the PATH.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          repository: WKDSteve/testing.nvim
+          ref: baecaba4260920b43810bc344c3e68968979a947
+          path: .deps/testing.nvim
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          repository: WKDSteve/lib.nvim
+          ref: e2653cad3479a976e610049fe91fde2116810ae3
+          path: .deps/lib.nvim
+          persist-credentials: false
+      - run: nvim -n -i NONE --headless -u NONE -l .deps/testing.nvim/scripts/testing.lua sheets run --all --root . --strict
+        env:
+          LIB_NVIM_DIR: ${{ github.workspace }}/.deps/lib.nvim
 
   # A control or invisible character in a tracked text file is refused; the tool tests itself.
   hygiene:

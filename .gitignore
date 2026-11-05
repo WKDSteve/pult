@@ -24,3 +24,9 @@ Thumbs.db
 
 # Logs of pult run in the repository root
 /*.csv
+
+# testing.nvim and lib.nvim of the page job (.github/workflows/ci.yml)
+.deps/
+
+# What a test sheet leaves to look at
+TESTS/sheets/out/

@@ -152,6 +152,6 @@ In 4/5“, mit eigenem Konfigurationsordner), wechselt auch Szenen unter Last un
 echten Chrome gegen das Demo-Pult (`cargo run -p pult-hub --example demo-hub`), mit axe hell und dunkel, auch mit
 Hover, Fokus und Problem-Hinweis; mit `PULT_PAGE_SHOTS=<Ordner>` legt es je Theme ein Bildschirmfoto dorthin. Es läuft
 in der CI; von Hand steht der Aufruf im Kopf der Datei, Playwright und axe kommen in festen Versionen aus
-`tools/page-check`. Die Farben der Seite kommen aus `crates/pult-hub/ui/palette.css`, die das Icon-Werkzeug des tasks-vault aus dem Icon
+`tools/page-check`. Dasselbe zum Mitschauen ist das Testblatt `TESTS/sheets/remote-control.sheet.lua` (testing.nvim): `testing sheets step remote-control --headed` geht es Schritt für Schritt in einem sichtbaren Chrome durch, die CI lässt es mit `testing sheets run --all` durchlaufen. Die Farben der Seite kommen aus `crates/pult-hub/ui/palette.css`, die das Icon-Werkzeug des tasks-vault aus dem Icon
 erzeugt (nie von Hand ändern). Für Rust-Clients liegen die
 Nachrichten als Typen in `pult_core::protocol`, ohne Geräte-Code.
