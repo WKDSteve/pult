@@ -1,7 +1,11 @@
 // The remote control page in a real Chrome against the demo hub (crates/pult-hub/examples): pairing,
 // the link out of the address, the live state, mute, gain, scenes, refusals, a hostile name, no
-// violation of the policy, and axe in light and dark. pult itself has no Node dependency, so
-// Playwright and axe come from another checkout that has them.
+// violation of the policy, and axe in light and dark. pult itself has no Node dependency: Playwright
+// and axe come at fixed versions from the folder tools/page-check, which nothing else reads.
+//
+//   pnpm --dir tools/page-check install --frozen-lockfile
+//   cargo build -p pult-hub --example demo-hub --locked
+//   node tools/page-check.mjs tools/page-check/node_modules target/debug/examples/demo-hub.exe
 //
 // usage: node tools/page-check.mjs <node_modules with @playwright/test and @axe-core/playwright> <demo-hub.exe>
 
@@ -9,14 +13,14 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const [modules, hubProgram] = process.argv.slice(2);
 if (!modules || !hubProgram) {
   console.error("usage: node tools/page-check.mjs <node_modules> <demo-hub.exe>");
   process.exit(2);
 }
-const require = createRequire(join(modules, "x.js"));
+const require = createRequire(join(resolve(modules), "x.js"));
 const { chromium } = require("@playwright/test");
 const { AxeBuilder } = require("@axe-core/playwright");
 

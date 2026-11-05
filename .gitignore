@@ -4,6 +4,9 @@ target/
 # What scripts/package-release.ps1 packs
 /dist/
 
+# Playwright and axe of tools/page-check
+node_modules/
+
 # Python (tools/)
 __pycache__/
 

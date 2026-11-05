@@ -5,8 +5,8 @@
 # `pull_request` trigger on purpose: a pull request would run its own workflow with the author's
 # rights on this machine.
 #
-# Tools (rustup, cargo-audit, cargo-deny, python) are expected on the PATH and print their
-# versions; the Rust toolchain is the one rust-toolchain.toml names, so local builds and CI use
+# Tools (rustup, cargo-audit, cargo-deny, python, node, pnpm, Chrome) are expected on the PATH and
+# print their versions; the Rust toolchain is the one rust-toolchain.toml names, so local builds and CI use
 # the same. The tests need no audio device: everything device-free lives in pult-core.
 
 name: ci
@@ -65,6 +65,22 @@ jobs:
           cargo audit --deny warnings
           --ignore RUSTSEC-2026-0370 --ignore RUSTSEC-2026-0371 --ignore RUSTSEC-2026-0372
       - run: cargo deny check
+
+  # The remote control page in the Chrome of this machine against the demo hub, which touches no audio device:
+  # pairing, controls, refusals, the policy, and axe in light and dark (any violation is red). Playwright and axe
+  # come at fixed versions from tools/page-check, with node and pnpm from the PATH; pult has no other Node part.
+  page:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: node --version && pnpm --version
+      - run: pnpm --dir tools/page-check install --frozen-lockfile
+      - run: cargo build -p pult-hub --example demo-hub --locked
+      - run: node tools/page-check.mjs tools/page-check/node_modules target/debug/examples/demo-hub.exe
 
   # A control or invisible character in a tracked text file is refused; the tool tests itself.
   hygiene:
