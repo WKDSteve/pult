@@ -13,6 +13,15 @@ return {
         env = { PULT_PORT = "0", PULT_CONFIG_DIR = "${temp}" },
         ready = { stdout = "^http", as = "link" },
       },
+      -- The window with the demo desk: no audio device, its settings in a folder of the run. One instance per session,
+      -- so with a pult already running this start hands over and ends.
+      ["demo-window"] = {
+        build = { "cargo", "build", "-p", "pult-app", "--locked" },
+        run = { "target/debug/pult-app.exe", "--demo" },
+        env = { APPDATA = "${temp}" },
+        window = "pult",
+        ended_early = "a pult is running already on this desktop: close it to run this sheet",
+      },
     },
   },
 }
