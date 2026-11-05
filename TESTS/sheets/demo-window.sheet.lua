@@ -20,6 +20,13 @@ return {
     { click = "Matrix", note = "the other tab" },
     { wait = { name = "Spotify.exe to A1" }, note = "the matrix is there" },
     { shot = "matrix" },
+    -- Only looked at: the app's APPDATA is a folder of the run, but the start with the system is the real one of this
+    -- user, so a sheet never switches these two.
+    { click = "Options", note = "the options" },
+    { wait = { name = "Start in the background" }, note = "both choices are there" },
+    { shot = "options" },
+    { click = "Close", note = "the options go away again" },
+    { wait = { name = "Save profile" }, note = "back at the desk" },
   },
   judge = { "the mute of Spotify.exe is red and its fader stands visibly lower, in the picture desk" },
 }
