@@ -16,7 +16,8 @@ pub fn pill(ui: &mut Ui, text: &str, color: Color32) {
         .painter()
         .layout_no_wrap(text.to_owned(), Theme::label_font(9.5), color);
     let size = galley.size() + vec2(18.0, 6.0);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
     let painter = ui.painter();
     let radius = CornerRadius::same(9);
     painter.rect_filled(

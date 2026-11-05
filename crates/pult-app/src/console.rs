@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use eframe::egui::{
-    self, Align, CornerRadius, Frame, Layout, Margin, Rect, RichText, ScrollArea, Sense, Stroke,
-    Ui, pos2, vec2,
+    self, Align, CornerRadius, Frame, Label, Layout, Margin, Rect, RichText, ScrollArea, Sense,
+    Stroke, Ui, pos2, vec2,
 };
 
 use crate::binding::Values;
@@ -140,8 +140,57 @@ pub fn show(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, now: f64) -
     actions
 }
 
+/// The room the header's right side takes, with the scenes, and its word mark on the left.
+const HEADER_RIGHT: f32 = 530.0;
+const HEADER_MARK: f32 = 75.0;
+/// The room of what else may stand on the left.
+const HEADER_GLITCHES: f32 = 85.0;
+const HEADER_DROPOUTS: f32 = 125.0;
+const HEADER_RUNTIME: f32 = 125.0;
+const HEADER_RUNNING: f32 = 70.0;
+/// The shortest and the longest a profile's name gets; all of it shows on hover.
+const PROFILE_MIN: f32 = 60.0;
+const PROFILE_MAX: f32 = 160.0;
+
+/// What of the header's left side fits beside its right side.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HeaderLeft {
+    /// How many of glitches, dropouts, runtime and "running" fit, in that order: what says least
+    /// goes first, as "running" is all a desk ever is and the problems matter most.
+    stats: u8,
+    /// The room for the name of the profile; none when it would not say anything.
+    profile: Option<f32>,
+}
+
+impl HeaderLeft {
+    fn at(width: f32) -> Self {
+        let mut room = width - HEADER_RIGHT - HEADER_MARK;
+        // The problems come before the name, the name before the rest.
+        let mut stats = 0;
+        if room >= HEADER_GLITCHES {
+            room -= HEADER_GLITCHES;
+            stats = 1;
+        }
+        let profile = (room >= PROFILE_MIN).then(|| room -= PROFILE_MIN).is_some();
+        if profile && stats == 1 {
+            for need in [HEADER_DROPOUTS, HEADER_RUNTIME, HEADER_RUNNING] {
+                if room < need {
+                    break;
+                }
+                room -= need;
+                stats += 1;
+            }
+        }
+        Self {
+            stats,
+            profile: profile.then(|| (PROFILE_MIN + room).min(PROFILE_MAX)),
+        }
+    }
+}
+
 fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: &mut Vec<Action>) {
     let p = &Theme::current().palette;
+    let left = HeaderLeft::at(ui.available_width());
     ui.horizontal_centered(|ui| {
         // Word mark: a small lit square and the name.
         let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
@@ -153,24 +202,37 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
             .as_ref()
             .and_then(|path| path.file_name())
             .map_or_else(|| "no profile".into(), |name| name.to_string_lossy());
-        ui.label(RichText::new(profile).size(11.5).color(p.text_dim));
+        if let Some(room) = left.profile {
+            ui.scope(|ui| {
+                ui.set_max_width(room);
+                ui.add(Label::new(RichText::new(profile).size(11.5).color(p.text_dim)).truncate());
+            });
+        }
         ui.add_space(18.0);
 
-        stat(ui, "RUNTIME", &format_elapsed(view.elapsed), p.text);
-        let dropouts = if view.dropouts_per_hour > 0.0 {
-            p.solo
-        } else {
-            p.text
-        };
-        stat(
-            ui,
-            "DROPOUTS/H",
-            &format!("{:.1}", view.dropouts_per_hour),
-            dropouts,
-        );
-        let glitches = if view.glitches > 0 { p.solo } else { p.text };
-        stat(ui, "GLITCHES", &view.glitches.to_string(), glitches);
-        pill(ui, "RUNNING", p.ok);
+        if left.stats >= 3 {
+            stat(ui, "RUNTIME", &format_elapsed(view.elapsed), p.text);
+        }
+        if left.stats >= 2 {
+            let dropouts = if view.dropouts_per_hour > 0.0 {
+                p.solo
+            } else {
+                p.text
+            };
+            stat(
+                ui,
+                "DROPOUTS/H",
+                &format!("{:.1}", view.dropouts_per_hour),
+                dropouts,
+            );
+        }
+        if left.stats >= 1 {
+            let glitches = if view.glitches > 0 { p.solo } else { p.text };
+            stat(ui, "GLITCHES", &view.glitches.to_string(), glitches);
+        }
+        if left.stats >= 4 {
+            pill(ui, "RUNNING", p.ok);
+        }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;

@@ -189,7 +189,7 @@ pub fn set_run(key: &str, name: &str, start: Option<(&str, StartMode)>) -> Resul
 }
 
 /// How Windows starts what it has under `HKEY_CURRENT_USER\<key>`, value `name`; `None` when it
-/// has nothing. A value that does not read as text counts as what pult writes by default.
+/// has nothing. A value that cannot be read counts as what pult writes by default.
 #[must_use]
 pub fn run_start(key: &str, name: &str) -> Option<StartMode> {
     let (key, name) = (HSTRING::from(key), HSTRING::from(name));

@@ -616,3 +616,94 @@ fn the_options_open_over_the_console_and_every_name_is_unique() {
     assert!(!harness.state().open);
     assert!(harness.state().start.on, "closing keeps the choice");
 }
+
+/// Where the header's left side ends and its right side begins, in a window this wide. The left
+/// side holds what is there of these names; the longest profile name is cut (see `console`).
+fn header_gap(width: f32, profile: Option<&str>) -> f32 {
+    let app = App {
+        desk: FakeDesk::new(),
+        state: ConsoleState::default(),
+        rename: None,
+        label: None,
+        no_scenes: false,
+    };
+    let profile = profile.map(std::path::PathBuf::from);
+    let mut harness = HarnessBuilder::default()
+        .with_size(vec2(width, 760.0))
+        .build_ui_state(
+            move |ui, app: &mut App| {
+                Theme::current().apply(ui.ctx());
+                let mut view = app.desk.view();
+                if let Some(path) = &profile {
+                    view.profile = Some(path.clone());
+                }
+                let _ = console::show(ui, &view, &mut app.state, 0.0);
+            },
+            app,
+        );
+    harness.run_steps(2);
+    let right = harness.get_by_label("Console").rect().left();
+    // The value of a stat stands right of its name, which is what can be found.
+    let left = [
+        ("RUNNING", 0.0),
+        ("GLITCHES", 30.0),
+        ("DROPOUTS/H", 40.0),
+        ("RUNTIME", 70.0),
+        ("pult", 0.0),
+    ]
+    .into_iter()
+    .find_map(|(name, value)| {
+        let node = harness.query_by_label(name)?;
+        Some(node.rect().right() + value)
+    })
+    .expect("the word mark is always there");
+    right - left
+}
+
+#[test]
+fn the_header_never_runs_into_itself() {
+    let long = "a profile with a really long name that goes on and on and on.toml";
+    for width in (640..=1400).step_by(20) {
+        #[expect(clippy::cast_precision_loss, reason = "a window's width")]
+        let width = width as f32;
+        for profile in [None, Some(long)] {
+            let gap = header_gap(width, profile);
+            assert!(gap > 0.0, "{width} wide, {profile:?}: {gap} between them");
+        }
+    }
+}
+
+#[test]
+fn the_header_keeps_what_says_most() {
+    let harness_at = |width: f32| {
+        let app = App {
+            desk: FakeDesk::new(),
+            state: ConsoleState::default(),
+            rename: None,
+            label: None,
+            no_scenes: false,
+        };
+        let mut harness = HarnessBuilder::default()
+            .with_size(vec2(width, 760.0))
+            .build_ui_state(
+                |ui, app: &mut App| {
+                    Theme::current().apply(ui.ctx());
+                    let view = app.desk.view();
+                    let _ = console::show(ui, &view, &mut app.state, 0.0);
+                },
+                app,
+            );
+        harness.run_steps(2);
+        harness
+    };
+    let wide = harness_at(1280.0);
+    for name in ["RUNNING", "RUNTIME", "DROPOUTS/H", "GLITCHES"] {
+        assert!(wide.query_by_label(name).is_some(), "{name}");
+    }
+    let middle = harness_at(1000.0);
+    assert!(middle.query_by_label("RUNNING").is_none());
+    assert!(middle.query_by_label("GLITCHES").is_some());
+    for name in ["Options", "Console", "Matrix", "Events", "Save profile"] {
+        assert!(harness_at(640.0).query_by_label(name).is_some(), "{name}");
+    }
+}
