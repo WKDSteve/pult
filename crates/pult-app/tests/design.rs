@@ -203,16 +203,28 @@ fn console_shot(tab: Tab, name: &str) {
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "the pictures are of Windows: its fonts, its renderer"
+)]
 fn console_overview() {
     console_shot(Tab::Console, "console_overview");
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "the pictures are of Windows: its fonts, its renderer"
+)]
 fn matrix_view() {
     console_shot(Tab::Matrix, "matrix_view");
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "the pictures are of Windows: its fonts, its renderer"
+)]
 fn events_view() {
     console_shot(Tab::Events, "events_view");
 }

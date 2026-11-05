@@ -137,7 +137,15 @@ fn commands_reach_the_running_pult() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output).trim(), "scene Abend");
 
-    let shown = stdout(&pult(&folder.0, &["show"]));
+    // The state shows a change with the owner's next report, which a fast process can overtake.
+    let until = Instant::now() + Duration::from_secs(5);
+    let shown = loop {
+        let shown = stdout(&pult(&folder.0, &["show"]));
+        if shown.contains("gain -12.0 dB") || Instant::now() > until {
+            break shown;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
     assert!(shown.contains("gain -12.0 dB"), "the scene: {shown}");
     assert!(shown.contains("gain -6.0 dB"), "the bus: {shown}");
     assert!(shown.contains("pan 0.50"), "{shown}");
@@ -283,6 +291,10 @@ fn start_with_a_route_running_starts_nothing_and_without_a_window_says_so() {
 
 #[test]
 fn midi_says_what_there_is_and_learn_checks_its_target() {
+    // A Linux kernel without the ALSA sequencer (WSL) has no MIDI to speak of.
+    if cfg!(target_os = "linux") && !Path::new("/dev/snd/seq").exists() {
+        return;
+    }
     let folder = Folder::new("midi");
     let output = pult(&folder.0, &["midi", "devices"]);
     assert!(output.status.success(), "{}", stderr(&output));

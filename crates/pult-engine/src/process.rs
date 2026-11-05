@@ -24,9 +24,23 @@ use crate::{Error, Role};
 pub(crate) const PROCESS_CHANNELS: u16 = 2;
 
 /// How long the capture thread sleeps at most between looks for packets.
+#[cfg_attr(
+    not(windows),
+    expect(
+        dead_code,
+        reason = "for the capture of the other systems, pult/linux-macos-gleichwertig"
+    )
+)]
 const POLL: Duration = Duration::from_millis(10);
 
 /// No packet for this long counts as silence, which is then filled in.
+#[cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "for the capture of the other systems, pult/linux-macos-gleichwertig"
+    )
+)]
 const GAP: Duration = Duration::from_millis(30);
 
 /// How long opening the capture may take.
@@ -112,11 +126,25 @@ fn processes() -> Result<Vec<Process>, Error> {
 
 /// Tracks when a capture last delivered, and how much silence a gap needs.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "for the capture of the other systems, pult/linux-macos-gleichwertig"
+    )
+)]
 struct Gaps {
     since: Instant,
     sample_rate: u32,
 }
 
+#[cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "for the capture of the other systems, pult/linux-macos-gleichwertig"
+    )
+)]
 impl Gaps {
     fn new(now: Instant, sample_rate: u32) -> Self {
         Self {

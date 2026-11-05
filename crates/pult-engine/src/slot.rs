@@ -95,6 +95,10 @@ impl Realtime {
     }
 
     /// Whether the thread runs at realtime priority.
+    #[cfg_attr(
+        not(windows),
+        expect(clippy::unused_self, reason = "no realtime priority there yet")
+    )]
     fn raised(&self) -> bool {
         #[cfg(windows)]
         {
@@ -467,9 +471,12 @@ mod tests {
             assert_eq!(health.slow.load(Ordering::Relaxed), !cfg!(windows));
         }
         // On one thread too: given back, it can be taken again.
-        let mut first = Realtime::default();
-        first.raise(&Health::default());
-        drop(first);
+        #[cfg(windows)]
+        {
+            let mut first = Realtime::default();
+            first.raise(&Health::default());
+            drop(first);
+        }
         let mut second = Realtime::default();
         second.raise(&Health::default());
         assert_eq!(second.raised(), cfg!(windows));

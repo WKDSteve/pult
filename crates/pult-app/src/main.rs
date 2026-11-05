@@ -8,7 +8,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![deny(unsafe_code)]
 
+#[cfg(windows)]
 #[allow(unsafe_code)]
+mod ffi;
+#[cfg(not(windows))]
+#[path = "ffi_elsewhere.rs"]
 mod ffi;
 
 use std::path::{Path, PathBuf};

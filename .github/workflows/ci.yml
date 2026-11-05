@@ -1,7 +1,7 @@
 # CI of pult.
 #
 # Runs on a self-hosted runner (the author's Windows machine), by choice: the repository is
-# private and pult is Windows-only (WASAPI). Without a running runner a push stays "Queued". No
+# private, and Linux is reached through its WSL. Without a running runner a push stays "Queued". No
 # `pull_request` trigger on purpose: a pull request would run its own workflow with the author's
 # rights on this machine.
 #
@@ -59,12 +59,30 @@ jobs:
           if-no-files-found: ignore
       # The supply chain: known advisories, licenses, sources. The three ignored advisories
       # (zvariant, zbus_names, zvariant_derive unmaintained) reach the lock file only through
-      # accesskit_unix, eframe's Linux screen reader bridge, which is never built here; cargo
-      # deny, scoped to the Windows target, does not see them at all.
+      # the Linux build: accesskit_unix (eframe's screen reader bridge) and ksni (the tray).
       - run: >-
           cargo audit --deny warnings
           --ignore RUSTSEC-2026-0370 --ignore RUSTSEC-2026-0371 --ignore RUSTSEC-2026-0372
       - run: cargo deny check
+
+  # pult is meant to work on Linux and macOS as on Windows. Linux runs for real in the WSL of this
+  # machine (its tests need no audio device; the build stays in the home of the WSL, off the slow
+  # way to the Windows disk). macOS is only compiled, since no such machine is here.
+  other-systems:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup target add aarch64-apple-darwin
+      - run: cargo clippy --workspace --all-targets --locked --target aarch64-apple-darwin -- -D warnings
+      - run: >-
+          wsl.exe -d archlinux --cd "$(pwd -W)" -- bash -lc
+          'export CARGO_TARGET_DIR=$HOME/.cache/pult-ci-target;
+          cargo clippy --workspace --all-targets --locked -- -D warnings &&
+          cargo test --workspace --locked'
 
   # The remote control page in the Chrome of this machine against the demo hub, which touches no audio device:
   # pairing, controls, refusals, the policy, and axe in light and dark (any violation is red). Playwright and axe

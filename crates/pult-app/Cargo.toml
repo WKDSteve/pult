@@ -25,7 +25,17 @@ pult-hub.workspace = true
 pult-midi.workspace = true
 # Debug builds use its checking allocator, as the command line does.
 assert_no_alloc.workspace = true
-# The same UI stack as takt (egui over eframe, wgpu); glow, x11 and wayland stay out.
+# The settings of the window (src/settings.rs), read and written; profiles are only read.
+serde.workspace = true
+toml = { workspace = true, features = ["display"] }
+# The icon in the notification area (stage 3 UI): the window hides there and the route keeps
+# playing. Without default features: those only pull in the Linux tray with GTK (libappindicator);
+# Linux takes ksni below.
+tray-icon = { version = "0.26.1", default-features = false }
+# The same UI stack as takt (egui over eframe, wgpu); glow stays out.
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
+
+[target.'cfg(windows)'.dependencies]
 # src/ffi.rs: AttachConsole, so a release build without a console window can still answer
 # --help in the terminal it was started from; a named mutex and event, so a second start shows
 # the running window instead of starting a second route; the Run value of the start with
@@ -35,13 +45,12 @@ windows = { workspace = true, features = [
     "Win32_System_Registry",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# The settings of the window (src/settings.rs), read and written; profiles are only read.
-serde.workspace = true
-toml = { workspace = true, features = ["display"] }
-# The icon in the notification area (stage 3 UI): the window hides there and the route keeps
-# playing. Without default features: those only pull in the Linux tray (libappindicator, GTK).
-tray-icon = { version = "0.26.1", default-features = false }
-eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Without a window system winit has nothing to open a window on.
+eframe = { version = "0.37.0", default-features = false, features = ["wayland", "x11"] }
+# The tray over D-Bus (StatusNotifierItem), without GTK.
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
 
 [dev-dependencies]
 # Renders views offscreen through wgpu and compares them with tests/snapshots/*.png.

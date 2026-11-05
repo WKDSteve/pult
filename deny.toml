@@ -3,15 +3,21 @@
 
 [graph]
 all-features = false
-# pult is built for Windows only for now (WASAPI). The Linux and macOS backends of cpal
-# (ALSA, CoreAudio) are not in this graph; add their targets when a build there is planned.
-targets = ["x86_64-pc-windows-msvc"]
+# Every system pult is built for: Windows, and Linux and macOS, which the CI compiles too.
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-apple-darwin"]
 
 [advisories]
 # Known vulnerabilities and unmaintained crates are errors.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+    # zvariant, zvariant_derive, zbus_names: unmaintained (2026-10-16). Linux only: eframe ->
+    # egui-winit -> accesskit_winit -> accesskit_unix (AT-SPI over D-Bus), and tray-icon -> ksni.
+    # No replacement yet; they are named in .cargo/audit.toml and ci.yml too.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+]
 
 [licenses]
 confidence-threshold = 0.9
@@ -34,6 +40,8 @@ allow = [
     # allow embedding and redistribution; the font may not be sold on its own.
     "OFL-1.1",
     "Ubuntu-font-1.0",
+    # pult-app on Linux: ksni (the tray over D-Bus), a public domain dedication like CC0.
+    "Unlicense",
 ]
 
 [bans]

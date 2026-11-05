@@ -31,8 +31,9 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 
 | Plattform | Stand |
 |---|---|
-| Windows 10/11 (WASAPI, Shared Mode) | Hauptentwicklung, getestet |
-| Linux, macOS | nicht vorgesehen |
+| Windows 10/11 (WASAPI, Shared Mode) | Hauptentwicklung, getestet, voller Umfang |
+| Linux (ALSA) | soll genauso funktionieren. Baut und besteht die Tests (CI in WSL), ist aber noch nie mit echtem Ton gelaufen. Fehlt noch: Ton einzelner Programme, eine Instanz je Sitzung, Start beim Anmelden, Echtzeit-Priorität, Installer |
+| macOS (CoreAudio, Apple Silicon) | soll genauso funktionieren. Wird von der CI nur kompiliert, ist also noch nie gelaufen. Es fehlt dasselbe wie unter Linux |
 
 ## Aufbau
 
