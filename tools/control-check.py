@@ -8,8 +8,7 @@ Pairs like a local program, reads the state, sets a gain, gets a refusal, then k
 and holds an event stream open. Then it changes scenes every half second with every core busy,
 and drives the route with `pult <command>` as a person would.
 Ends with a non-zero status when anything is not as it should be, among it a dropout or a
-glitch during the reading or the scenes. The first seconds are shown but do not count: a start on
-a busy machine can cost one resync (pult/start-unter-last-ein-aussetzer).
+glitch at any time from the start on.
 """
 
 import http.client
@@ -38,9 +37,6 @@ def call(port, method, path, token=None, body=None, origin=False):
     connection.close()
     return reply.status, text
 
-
-# How long a start may take to settle, on a busy machine too.
-START_SECONDS = 10
 
 PROFILE = """# The route of the check.
 [[bus]]
@@ -207,11 +203,6 @@ def main():
             if "text/event-stream" not in said:
                 failed.append(f"no stream: {said[:200]}")
 
-            # What the start cost; from here on nothing may come on top.
-            time.sleep(START_SECONDS)
-            at_start = troubles(state(port, token))
-            print(f"dropouts and glitches of the start: {at_start}")
-
             reads = 0
             until = time.time() + seconds
             while time.time() < until:
@@ -219,8 +210,8 @@ def main():
                 reads += 1
                 time.sleep(0.02)
             print(f"read the state {reads} times in {seconds} s, a stream open")
-            if troubles(last) != at_start:
-                failed.append(f"during the reading: {at_start} became {troubles(last)}")
+            if troubles(last) != (0, 0):
+                failed.append(f"dropouts and glitches up to the end of the reading: {troubles(last)}")
             if last["inputs"][0]["peak_db"] is None:
                 failed.append("no peak of the tone in the state")
 
@@ -271,8 +262,8 @@ def main():
             last = state(port, token)
             print(f"changed scenes {changes} times in {scene_seconds} s, all cores busy")
             print(f"the state showed it after {slowest:.2f} s at most")
-            if troubles(last) != at_start:
-                failed.append(f"during the scenes: {at_start} became {troubles(last)}")
+            if troubles(last) != (0, 0):
+                failed.append(f"dropouts and glitches up to the end of the scenes: {troubles(last)}")
 
             # The same through the program itself: status, output, and how long it takes.
             def command(*words):

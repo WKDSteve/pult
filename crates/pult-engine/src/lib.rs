@@ -1004,7 +1004,9 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     }
     let mut buses = Vec::with_capacity(spec.buses.len());
     for ((bus, found), mixer_inputs) in spec.buses.iter().zip(found_buses).zip(bus_inputs) {
-        let (mixer, handle) = Mixer::new(mixer_inputs, usize::from(found.config.channels()));
+        let (mut mixer, handle) = Mixer::new(mixer_inputs, usize::from(found.config.channels()));
+        // The input streams open first; nothing may pile up until this bus's stream calls back.
+        mixer.suspend();
         let sample_rate = found.config.sample_rate();
         handle.controls.gain.store(db_to_linear(bus.gain_db));
         handle.controls.muted.store(bus.muted, Ordering::Relaxed);
@@ -1028,7 +1030,8 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         xruns: Arc::new(Counter::default()),
         spec: spec.clone(),
     };
-    // Inputs first, so the outputs find their rings filling.
+    // Inputs first: a ring opens with the first callback of its output, and primes faster
+    // when its input already delivers.
     for (index, opening) in opening.iter().enumerate() {
         let source = match opening {
             Opening::Device(device, config) => Source::Device { device, config },

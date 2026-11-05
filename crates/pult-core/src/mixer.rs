@@ -275,7 +275,8 @@ fn resampler(config: InputConfig) -> Async<f32> {
 pub struct Capture {
     producer: Producer<f32>,
     channels: usize,
-    /// Closed while the ring's bus has no device; then `push` discards.
+    /// Closed while the ring's bus has no device or its stream has not called back yet; then
+    /// `push` discards.
     open: Arc<AtomicBool>,
     stats: Arc<InputStats>,
 }
@@ -490,6 +491,8 @@ pub struct Mixer {
     stats: Arc<BusStats>,
     /// Where the bus gain stands, silence included.
     gain: Follower,
+    /// Resumed, and no callback yet: the next one opens the rings.
+    opening: bool,
 }
 
 impl Mixer {
@@ -511,6 +514,7 @@ impl Mixer {
             out_channels,
             controls: Arc::clone(&handle.controls),
             stats: Arc::clone(&handle.stats),
+            opening: false,
         };
         (mixer, handle)
     }
@@ -518,23 +522,25 @@ impl Mixer {
     /// Closes the rings of all inputs: their captures discard until [`Self::resume`]. For
     /// a bus whose output device is gone and whose mixer therefore no longer drains them.
     pub fn suspend(&mut self) {
+        self.opening = false;
         for input in &self.inputs {
             input.open.store(false, Ordering::Release);
         }
     }
 
-    /// Empties the rings, lets every input prime again and reopens the routed ones, for an
-    /// output with `out_channels` channels (a device may come back with another layout).
+    /// Gets ready for an output with `out_channels` channels (a device may come back with
+    /// another layout). The rings stay closed until its first callback, which empties the routed
+    /// ones, lets them prime again and opens them: an output can take seconds to call back on a
+    /// busy machine, and what piles up until then could only be thrown away with a jump.
     pub fn resume(&mut self, out_channels: usize) {
         self.out_channels = out_channels;
         self.gain.start_over();
+        self.opening = true;
         for input in &mut self.inputs {
-            input.restart();
+            input.open.store(false, Ordering::Release);
             input.gain.start_over();
             input.pan.start_over();
-            let routed = input.routed.load(Ordering::Acquire);
-            input.playing = routed;
-            input.open.store(routed, Ordering::Release);
+            input.playing = input.routed.load(Ordering::Acquire);
         }
     }
 
@@ -545,6 +551,12 @@ impl Mixer {
         out.fill(0.0);
         if self.out_channels == 0 {
             return;
+        }
+        if std::mem::take(&mut self.opening) {
+            for input in self.inputs.iter_mut().filter(|input| input.playing) {
+                input.restart();
+                input.open.store(true, Ordering::Release);
+            }
         }
         let frames = out.len() / self.out_channels;
         for input in &mut self.inputs {
@@ -1033,6 +1045,46 @@ mod tests {
         let out = run_dc(&mut mixer, &mut [&mut capture], 2, 0.5, 10);
         assert!(all_near(&out, &[0.5, 0.5]), "{:?}", &out[..2]);
         assert_eq!(capture.channels(), 1);
+    }
+
+    #[test]
+    fn a_ring_stays_closed_until_the_first_callback_of_its_output() {
+        // An output stream can take seconds to call back on a busy machine, while its input
+        // already delivers: more than the ring holds, before anything could have played. The
+        // band is wider than a callback, as the engine's are, so priming alone is no surplus.
+        let (mut capture, input, handle) = connect(InputConfig {
+            band: 480,
+            ..config(1, 960)
+        });
+        let (mut mixer, _) = Mixer::new(vec![input], 1);
+        mixer.suspend();
+        push_dc(&mut capture, 40_000, 0.9);
+        mixer.resume(1);
+        push_dc(&mut capture, 40_000, 0.9);
+
+        // The first callback finds an empty ring and primes it, without a jump.
+        let mut out = vec![9.0; PERIOD];
+        mixer.process(&mut out);
+        assert!(out.iter().all(|&o| o == 0.0));
+        let out = run_dc(&mut mixer, &mut [&mut capture], 1, 0.5, 10);
+        assert!(all_near(&out, &[0.5]), "{:?}", &out[..1]);
+        assert_eq!(handle.stats.dropped_at_capture.get(), 0);
+        assert_eq!(handle.stats.resyncs.get(), 0);
+        assert_eq!(handle.stats.underruns.get(), 0);
+        assert_eq!(handle.stats.aligned.get(), 0);
+    }
+
+    #[test]
+    fn a_bus_resumed_and_suspended_before_it_called_back_stays_closed() {
+        // A stream that failed to start, or stopped before its first callback.
+        let (mut capture, input, handle) = connect(config(1, 0));
+        let (mut mixer, _) = Mixer::new(vec![input], 1);
+        mixer.resume(1);
+        mixer.suspend();
+        let mut out = vec![0.0; PERIOD];
+        mixer.process(&mut out);
+        push_dc(&mut capture, 40_000, 0.9);
+        assert_eq!(handle.stats.dropped_at_capture.get(), 0);
     }
 
     #[test]
