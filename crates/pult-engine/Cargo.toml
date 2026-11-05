@@ -1,6 +1,6 @@
 [package]
 name = "pult-engine"
-description = "Audio devices of pult (cpal/WASAPI): capture, mix and play"
+description = "Audio devices of pult (cpal): capture, mix and play"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
