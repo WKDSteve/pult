@@ -12,6 +12,8 @@ const RUN_MARK: &str = r"Local\pult-run.active";
 pub struct Presence {
     #[cfg(windows)]
     _mark: Option<crate::ffi::SessionMark>,
+    #[cfg(not(windows))]
+    _mark: Option<crate::session::Mark>,
     other_run: bool,
     window: bool,
 }
@@ -35,10 +37,12 @@ impl Presence {
     }
 
     #[cfg(not(windows))]
-    fn announce_as(_run: &str, _window: &str) -> Self {
+    fn announce_as(run: &str, window: &str) -> Self {
+        let (mark, other_run) = crate::session::Mark::join(run);
         Self {
-            other_run: false,
-            window: false,
+            _mark: mark,
+            other_run,
+            window: crate::session::claimed(window),
         }
     }
 
@@ -57,9 +61,23 @@ impl Presence {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Holds the name of the window, as a window does.
+    #[cfg(windows)]
+    fn open_a_window(name: &str) -> impl Drop {
+        crate::ffi::SessionMark::join(name).0.expect("a mark")
+    }
+
+    #[cfg(not(windows))]
+    fn open_a_window(name: &str) -> std::fs::File {
+        let path = crate::session::file(name, "lock").expect("a path");
+        let file = std::fs::File::create(path).expect("a file");
+        file.try_lock().expect("the lock");
+        file
+    }
 
     #[test]
     fn a_run_sees_the_runs_before_it_and_the_window() {
@@ -76,11 +94,15 @@ mod tests {
         // The mark goes with the runs that hold it.
         drop(first);
         drop(second);
-        let (open_window, _) = crate::ffi::SessionMark::join(&window);
+        let open_window = open_a_window(&window);
         let alone = Presence::announce_as(&run, &window);
         assert!(alone.note().expect("a note").contains("window is open"));
         drop(open_window);
         drop(alone);
         assert_eq!(Presence::announce_as(&run, &window).note(), None);
+        #[cfg(not(windows))]
+        for name in [&run, &window] {
+            let _ = std::fs::remove_file(crate::session::file(name, "lock").expect("a path"));
+        }
     }
 }

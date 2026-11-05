@@ -1,12 +1,17 @@
 //! What `ffi` does on Windows, on Linux and macOS. The start on signing in is a file: an autostart
 //! entry on Linux (`~/.config/autostart`), a launch agent on macOS (`~/Library/LaunchAgents`),
-//! which the system reads when the user signs in next. The one instance per session is still
-//! missing, so a second start opens a second window (pult/linux-macos-gleichwertig).
+//! which the system reads when the user signs in next. The one instance per session is a locked
+//! file (`pult_engine::session`), and a later start asks it to show its window through a socket
+//! beside that file.
 
 use std::fs;
 use std::io;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use pult_engine::session::{self, Mark};
 
 use pult_app::settings::StartMode;
 
@@ -27,24 +32,64 @@ const MACOS: bool = cfg!(target_os = "macos");
 /// A program started from a terminal has that terminal already.
 pub fn attach_parent_console() {}
 
-/// The claim of this process on being the one instance; nobody else can be seen yet.
+/// The claim of this process on being the one instance, held while it lives.
 #[derive(Debug)]
-pub struct Instance;
-
-/// Always succeeds: nothing keeps a second instance out yet.
-#[expect(clippy::unnecessary_wraps, reason = "what `ffi` has on Windows")]
-pub fn claim(_name: &str) -> Option<Instance> {
-    Some(Instance)
+pub struct Instance {
+    _mark: Option<Mark>,
 }
 
-/// Nobody can be asked yet.
-pub fn ask_to_show(_name: &str, _patience: Duration) -> bool {
-    false
+/// Claims the instance `name`; `None` when another process holds it already. When the claim
+/// cannot be made at all, this process runs anyway, as before there was a claim.
+pub fn claim(name: &str) -> Option<Instance> {
+    match Mark::claim(name) {
+        Ok(Some(mark)) => Some(Instance { _mark: Some(mark) }),
+        Ok(None) => None,
+        Err(_) => Some(Instance { _mark: None }),
+    }
 }
 
-/// Nobody can ask yet.
-pub fn listen_for_show(_name: &str, _show: impl FnMut() + Send + 'static) -> bool {
-    false
+/// Asks the instance listening on `name` to show its window; false when none answered within
+/// `patience` (it may still be starting).
+pub fn ask_to_show(name: &str, patience: Duration) -> bool {
+    let Ok(path) = session::file(name, "sock") else {
+        return false;
+    };
+    let start = Instant::now();
+    loop {
+        // Being reached is the question; there is nothing else to say.
+        if UnixStream::connect(&path).is_ok() {
+            return true;
+        }
+        if start.elapsed() >= patience {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Calls `show` on a thread of its own each time another start asks this instance to show its
+/// window (through `name`). False when the socket cannot be made; then nobody can ask.
+pub fn listen_for_show(name: &str, mut show: impl FnMut() + Send + 'static) -> bool {
+    let Ok(path) = session::file(name, "sock") else {
+        return false;
+    };
+    // Only the holder of the instance listens, so a socket that is there is one a process before
+    // this one left behind.
+    let _ = fs::remove_file(&path);
+    let Ok(listener) = UnixListener::bind(&path) else {
+        return false;
+    };
+    thread::Builder::new()
+        .name("pult-show".to_owned())
+        .spawn(move || {
+            // The thread ends with the process.
+            for asked in listener.incoming() {
+                if asked.is_ok() {
+                    show();
+                }
+            }
+        })
+        .is_ok()
 }
 
 /// Where the system looks for what to start on signing in, from what the environment says.
@@ -237,11 +282,78 @@ impl Drop for TestPlace {
 mod tests {
     use super::*;
 
+    /// A name of this test run only, so a running pult-app is not disturbed; its files go at
+    /// the end.
+    struct Name(String);
+
+    impl Name {
+        fn new(what: &str) -> Self {
+            Self(format!(
+                r"Local\pult-app.test.{what}.{}",
+                std::process::id()
+            ))
+        }
+    }
+
+    impl Drop for Name {
+        fn drop(&mut self) {
+            for extension in ["lock", "sock"] {
+                if let Ok(path) = session::file(&self.0, extension) {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+    }
+
     #[test]
-    fn what_is_missing_says_so_instead_of_pretending() {
-        assert!(claim(INSTANCE).is_some());
-        assert!(!ask_to_show(SHOW, Duration::ZERO));
-        assert!(!listen_for_show(SHOW, || {}));
+    fn only_the_first_claim_holds() {
+        let name = Name::new("claim");
+        let first = claim(&name.0);
+        assert!(first.is_some());
+        assert!(claim(&name.0).is_none());
+        drop(first);
+        // A process started just now holds a copy of the lock until it runs its program.
+        let until = Instant::now() + Duration::from_secs(5);
+        while claim(&name.0).is_none() {
+            assert!(Instant::now() < until, "the claim ends with its holder");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_second_start_reaches_the_first() {
+        let name = Name::new("show");
+        let (send, shown) = std::sync::mpsc::channel();
+        assert!(listen_for_show(&name.0, move || {
+            let _ = send.send(());
+        }));
+        assert!(ask_to_show(&name.0, Duration::from_secs(2)));
+        assert!(shown.recv_timeout(Duration::from_secs(5)).is_ok());
+        assert!(ask_to_show(&name.0, Duration::from_secs(2)));
+        assert!(shown.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn nobody_listening_is_no_answer() {
+        assert!(!ask_to_show(
+            &Name::new("nobody").0,
+            Duration::from_millis(100)
+        ));
+    }
+
+    #[test]
+    fn a_socket_left_behind_is_no_answer_and_does_not_keep_the_next_one_out() {
+        let name = Name::new("stale");
+        let path = session::file(&name.0, "sock").expect("a path");
+        drop(UnixListener::bind(&path).expect("a socket"));
+        assert!(path.exists(), "it stays when its process goes");
+        assert!(!ask_to_show(&name.0, Duration::from_millis(100)));
+        let (send, shown) = std::sync::mpsc::channel();
+        assert!(listen_for_show(&name.0, move || {
+            let _ = send.send(());
+        }));
+        assert!(ask_to_show(&name.0, Duration::from_secs(2)));
+        assert!(shown.recv_timeout(Duration::from_secs(5)).is_ok());
     }
 
     #[test]

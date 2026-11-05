@@ -24,6 +24,8 @@ mod live;
 mod presence;
 mod process;
 pub mod profile;
+#[cfg(not(windows))]
+pub mod session;
 mod slot;
 
 use std::fmt;
