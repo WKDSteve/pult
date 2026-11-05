@@ -278,6 +278,9 @@ try {
     if ($r.Code -ne 0) { Write-Output $r.Text }
     Write-Check ((Get-Sha (Join-Path $install 'pult.exe')) -eq (Get-Sha (Join-Path $standIns 'pult.exe'))) 'the new program is in place'
     Write-Check (Test-Path -LiteralPath (Join-Path $install 'pult.exe.old')) 'the old one stays while it runs'
+    $r = Invoke-Child $installer $places
+    Write-Check ($r.Code -ne 0 -and $r.Text -match 'close it and run this again' -and (Get-Sha (Join-Path $install 'pult.exe')) -eq (Get-Sha (Join-Path $standIns 'pult.exe'))) 'a second install while it still runs says to close it and changes nothing'
+    if ($r.Code -eq 0 -or $r.Text -notmatch 'close it and run this again') { Write-Output $r.Text }
     $r = Invoke-Child (Join-Path $install 'uninstall.ps1') $places
     Write-Check ($r.Code -ne 0 -and $r.Text -match 'running from' -and (Test-Path -LiteralPath (Join-Path $install 'pult.exe'))) 'an uninstall while pult runs is refused before anything goes'
     if ($r.Code -eq 0) { Write-Output $r.Text }

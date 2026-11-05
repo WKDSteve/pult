@@ -197,6 +197,8 @@ catch {
     foreach ($name in $files) {
         Remove-Item -LiteralPath (Join-Path $InstallDir "$name.new") -Force -ErrorAction SilentlyContinue
     }
+    # A pult that kept running through an earlier install holds its .old, which this install needs.
+    if ($stillRunning) { Exit-Install "pult runs (PID $(($stillRunning | ForEach-Object { $_.Id }) -join ', ')) from a program an earlier install left: close it and run this again; the installed files were put back: $why" }
     Exit-Install "replacing the files failed, the installed ones were put back: $why"
 }
 # An .old file still held by a running pult stays; the next install or uninstall.ps1 takes it away.
