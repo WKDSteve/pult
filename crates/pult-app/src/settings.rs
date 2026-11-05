@@ -1,5 +1,5 @@
 //! What the window remembers between runs, apart from any profile: the profile opened last,
-//! whether pult starts with Windows, and whether the user saw the hint on the first close.
+//! whether pult starts on signing in, and whether the user saw the hint on the first close.
 //!
 //! The file is `%APPDATA%\pult\settings.toml`. A missing file is the defaults; an unreadable
 //! one too, but then it is not written over, so nothing the user wrote by hand gets lost.
@@ -17,7 +17,7 @@ pub struct Settings {
     /// The profile opened last; a start without an argument opens it again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_profile: Option<PathBuf>,
-    /// pult starts with Windows, into the tray (off unless the user turns it on).
+    /// pult starts on signing in, into the tray (off unless the user turns it on).
     pub autostart: bool,
     /// The user saw the hint on the first close; later closes hide at once.
     pub told_about_tray: bool,

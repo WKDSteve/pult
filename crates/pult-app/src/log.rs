@@ -24,7 +24,7 @@ pub enum Source {
     Refused,
     /// The console: the desk confirmed an action worth noting (a profile saved).
     Done,
-    /// The window: its settings could not be read or written, or the start with Windows not
+    /// The window: its settings could not be read or written, or the start on signing in not
     /// changed.
     Settings,
 }

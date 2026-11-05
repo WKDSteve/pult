@@ -16,7 +16,7 @@ usage: pult-app [PROFILE | --demo | --tray]
 
   PROFILE   a pult profile (TOML), for example pult.toml; starts its route
   --demo    a desk in memory with moving meters, no audio device touched
-  --tray    the profile opened last, with the window in the tray (the start with Windows)
+  --tray    the profile opened last, with the window in the tray (the start on signing in)
   --help    this text
   --version the version
 
@@ -32,7 +32,7 @@ pub enum Start {
     Demo,
     /// Nothing given: the profile opened last, else the start screen.
     Nothing,
-    /// As `Nothing`, with the window in the tray: the start with Windows.
+    /// As `Nothing`, with the window in the tray: the start on signing in.
     Tray,
     Help,
     Version,

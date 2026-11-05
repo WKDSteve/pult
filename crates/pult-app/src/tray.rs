@@ -1,7 +1,7 @@
 //! The icon in the notification area: the window hides there while the route keeps playing.
 //!
 //! A click on the icon or "Show pult" brings the window back; "Quit pult" ends the route and
-//! the program; "Start with Windows" turns the start into the tray on signing in on or off. Closing the window only hides it while a desk is open, so nothing stops
+//! the program; [`START_LABEL`] turns the start into the tray on signing in on or off. Closing the window only hides it while a desk is open, so nothing stops
 //! playing by accident; with nothing open, closing quits as before.
 
 use std::sync::mpsc::Sender;
@@ -13,6 +13,13 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 
 use crate::theme::Theme;
 
+/// The menu's words for the start into the tray on signing in, as the system calls it.
+pub const START_LABEL: &str = if cfg!(windows) {
+    "Start with Windows"
+} else {
+    "Start on login"
+};
+
 const SHOW: &str = "show";
 const QUIT: &str = "quit";
 const AUTOSTART: &str = "autostart";
@@ -22,7 +29,7 @@ const AUTOSTART: &str = "autostart";
 pub enum Command {
     Show,
     Quit,
-    /// Turn the start with Windows over (from the check in the menu).
+    /// Turn the start on signing in over (from the check in the menu).
     Autostart,
 }
 
@@ -39,7 +46,7 @@ impl std::fmt::Debug for Tray {
 }
 
 impl Tray {
-    /// Puts the icon into the notification area, with the start with Windows checked as
+    /// Puts the icon into the notification area, with the start on signing in checked as
     /// `autostart` says; what it is asked goes to `commands` and repaints `ctx`, also while the
     /// window is hidden. Call it once, on the thread of the window.
     ///
@@ -54,7 +61,7 @@ impl Tray {
     ) -> Result<Self, String> {
         let menu = Menu::new();
         let show = MenuItem::with_id(SHOW, "Show pult", true, None);
-        let start = CheckMenuItem::with_id(AUTOSTART, "Start with Windows", true, autostart, None);
+        let start = CheckMenuItem::with_id(AUTOSTART, START_LABEL, true, autostart, None);
         let quit = MenuItem::with_id(QUIT, "Quit pult", true, None);
         let line = PredefinedMenuItem::separator();
         menu.append_items(&[&show, &start, &line, &quit])
@@ -99,7 +106,7 @@ impl Tray {
         })
     }
 
-    /// Sets the check of "Start with Windows" to what holds now (the menu turns it over on a
+    /// Sets the check of [`START_LABEL`] to what holds now (the menu turns it over on a
     /// click, before pult knows whether that worked).
     pub fn set_autostart(&self, on: bool) {
         self.autostart.set_checked(on);

@@ -1,6 +1,6 @@
 //! `pult-app`: the console window over a running route (`pult-app studio.toml`) or the demo
 //! desk (`pult-app --demo`). Without an argument it opens the profile opened last again
-//! (`settings`); `--tray` does so with the window in the tray, which is how Windows starts it.
+//! (`settings`); `--tray` does so with the window in the tray, which is how the system starts it.
 //!
 //! A release build is a window program: no console window opens with it. Text for the
 //! command line goes to the terminal it was started from (`ffi`).
@@ -59,7 +59,7 @@ struct App {
     /// What the tray and later starts ask for.
     commands: Receiver<Command>,
     window: Window,
-    /// What the window keeps between runs: the profile opened last, the start with Windows,
+    /// What the window keeps between runs: the profile opened last, the start on signing in,
     /// and whether the user saw the hint on the first close.
     settings: Stored,
     /// Problems with the settings, for the log once a desk is open.
@@ -171,7 +171,7 @@ impl App {
         }
     }
 
-    /// Turns the start with Windows over: the Run value first, then the settings, and the
+    /// Turns the start on signing in over: the Run value first, then the settings, and the
     /// check in the tray shows what holds.
     fn turn_autostart(&mut self) {
         let on = !self.settings.settings.autostart;
@@ -348,21 +348,31 @@ impl eframe::App for App {
     }
 }
 
-/// The command Windows runs on signing in: this program, into the tray.
+/// What Windows runs on signing in: this program, into the tray.
+#[cfg(windows)]
 fn autostart_command(exe: &Path) -> String {
     format!("\"{}\" --tray", exe.display())
 }
 
-/// Lets Windows start pult on signing in, or no longer.
+/// What `ffi` writes into the file of the start on signing in: this program, without its words.
+#[cfg(not(windows))]
+fn autostart_command(exe: &Path) -> String {
+    exe.display().to_string()
+}
+
+/// Lets the system start pult on signing in, or no longer.
 fn set_autostart(on: bool) -> Result<(), String> {
     let command = if on {
         let exe = std::env::current_exe().map_err(|e| format!("where is pult-app? {e}"))?;
+        if exe.to_str().is_none() {
+            return Err("the path of pult-app cannot be written down: it is not Unicode".into());
+        }
         Some(autostart_command(&exe))
     } else {
         None
     };
     ffi::set_run(ffi::RUN_KEY, ffi::RUN_VALUE, command.as_deref())
-        .map_err(|e| format!("could not change the start with Windows: {e}"))
+        .map_err(|e| format!("could not change the start on signing in: {e}"))
 }
 
 /// Shows the window when another start of pult-app asks for it (see `main`).
@@ -496,10 +506,20 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn windows_starts_this_program_into_the_tray() {
         assert_eq!(
             autostart_command(Path::new(r"C:\Program Files\pult\pult-app.exe")),
             r#""C:\Program Files\pult\pult-app.exe" --tray"#
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn elsewhere_the_file_of_the_start_gets_this_program_alone() {
+        assert_eq!(
+            autostart_command(Path::new("/opt/my apps/pult-app")),
+            "/opt/my apps/pult-app"
         );
     }
 }
