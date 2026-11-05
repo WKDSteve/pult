@@ -28,6 +28,16 @@ impl Running {
         self.buses.iter().map(|bus| bus.name.clone()).collect()
     }
 
+    /// The bus labels, in route order; empty for a bus without one.
+    #[must_use]
+    pub fn bus_labels(&self) -> Vec<String> {
+        self.spec
+            .buses
+            .iter()
+            .map(|bus| bus.label.clone().unwrap_or_default())
+            .collect()
+    }
+
     /// The route as it is now: the spec it started with, with the gains, mutes and pans
     /// changed since.
     #[must_use]
@@ -79,6 +89,8 @@ impl Running {
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
             Command::Scene(name) => self.scene(name),
             Command::Scenes => Ok(vec![self.scene_names()]),
+            // Who is soloed silences the others, and only the desk knows them all.
+            Command::Solo(..) => Err("solo is not for the route but for its desk".to_owned()),
             Command::Learn(_) | Command::Unlearn(_) => {
                 Err("MIDI is not for the route but for the one who runs it".to_owned())
             }

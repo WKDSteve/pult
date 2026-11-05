@@ -252,6 +252,7 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 |---|---|
 | `gain <Ziel> <dB> [over <ms>]` | Gain eines Eingangs oder Busses setzen, -96 bis 24 dB, auf Wunsch in so vielen Millisekunden (höchstens 60000) |
 | `mute <Ziel>`, `unmute <Ziel>` | stumm schalten, wieder einschalten; die Statuszeile zeigt dann `muted` |
+| `solo <Eingang>`, `unsolo <Eingang>` | nur die Eingänge mit Solo hören, Solo wieder lösen. Es wird nicht gespeichert |
 | `pan <Eingang> <-1..1> [over <ms>]` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
 | `route <Eingang> <Bus>`, `unroute <Eingang> <Bus>` | einen Eingang zusätzlich auf einen Bus legen, von ihm nehmen; der letzte Bus eines Eingangs bleibt (dafür `mute`) |
 | `scene <Name>`, `scenes` | zu einer Szene des Profils wechseln (siehe 5.), die Szenen auflisten |
@@ -260,8 +261,9 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `help` | die Befehle |
 | `quit`, Enter auf leerer Zeile, Strg+C | beenden |
 
-- **Ziel:** ein Eingang über seine Nummer (`1`) oder einen eindeutigen Teil seines Namens (`cable`), ein Bus über seinen
-  Namen (`A1`). Groß- und Kleinschreibung zählen nicht.
+- **Ziel:** ein Eingang über seine Nummer (`1`) oder einen eindeutigen Teil seines Namens oder Labels (`cable`), ein Bus
+  über seinen Namen (`A1`) oder einen eindeutigen Teil seines Labels (`boxen`). Passt etwas auf mehreres, auch auf einen
+  Eingang und einen Bus zugleich, lehnt pult ab und nennt die Treffer. Groß- und Kleinschreibung zählen nicht.
 - **Bedienen:** Pfeil hoch und runter holen frühere Befehle zurück, Esc leert die Zeile.
 - **Ohne Knacken:** Keine Änderung springt. Gain, Pan, Mute und Solo gleiten mindestens 5 ms, ein Eingang blendet beim
   Ein- und Ausrouten aus bzw. ein. Anzeigen und `show` nennen schon das Ziel, der Ton folgt in der angegebenen Zeit. Geht
@@ -287,7 +289,7 @@ pult show
 
 | Befehl | Wirkung |
 |---|---|
-| `pult gain`, `mute`, `unmute`, `pan`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
+| `pult gain`, `mute`, `unmute`, `solo`, `unsolo`, `pan`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
 | `pult scenes` | die Szenen, je eine Zeile |
 | `pult show` | Eingänge, Busse und Szenen; `pult show --json` den ganzen Zustand für Programme |
 | `pult save` | in das Profil speichern, aus dem die Route kam; eine andere Datei geht von außen nicht |
@@ -352,7 +354,7 @@ Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün,
 ### In Neovim
 
 Mit `my.nvim` gibt es dieselben Wörter als `:My pult` (`:My pult scene abend`), mit Vervollständigung von Befehlen, Szenen,
-Eingängen und Bussen. `pult` muss dafür im `PATH` liegen, oder `vim.g.pult_exe` nennt das Programm.
+Eingängen und Bussen; einen Namen aus mehreren Wörtern vervollständigt es Wort für Wort. `pult` muss dafür im `PATH` liegen, oder `vim.g.pult_exe` nennt das Programm.
 
 ## Fehlermeldungen
 

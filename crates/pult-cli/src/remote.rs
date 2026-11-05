@@ -226,7 +226,12 @@ fn answer(request: &Remote) -> Result<Vec<String>, Problem> {
                 .map(|input| control::search_name(&input.name, input.label.as_deref()))
                 .collect();
             let buses: Vec<String> = state.buses.iter().map(|bus| bus.name.clone()).collect();
-            let command = control::parse(line, &names, &buses)
+            let labels: Vec<String> = state
+                .buses
+                .iter()
+                .map(|bus| bus.label.clone().unwrap_or_default())
+                .collect();
+            let command = control::parse(line, &names, &buses, &labels)
                 .map_err(|why| Problem::Words(why.to_string()))?;
             debug_assert!(
                 !matches!(command, Command::Stop),

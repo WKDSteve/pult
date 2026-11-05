@@ -4,6 +4,7 @@
 //! ```text
 //! gain <target> <dB>     gain of an input or bus, for example `gain A1 -6`
 //! mute <target>          unmute <target>
+//! solo <input>           unsolo <input>
 //! pan <input> <-1..1>    pan (mono) or balance (stereo) of an input
 //! route <input> <bus>    send an input to a bus too; unroute <input> <bus> takes it off
 //! scene <name>           change to a scene of the profile; scenes lists them
@@ -14,8 +15,9 @@
 //! quit                   stop (an empty line too)
 //! ```
 //!
-//! A target is an input by its number (`1`) or a unique part of its name (`cable`), or a bus
-//! by its name (`A1`). Keywords ignore case. Ranges are checked where the command is
+//! A target is an input by its number (`1`) or a unique part of its name or label (`cable`), or
+//! a bus by its name (`A1`) or a unique part of its label (`boxen`). What fits more than one is
+//! refused. Keywords ignore case. Ranges are checked where the command is
 //! applied, since they belong to the route. A gain or pan can take its time:
 //! `gain A1 -6 over 500` gets there in 500 ms.
 
@@ -39,6 +41,8 @@ pub enum Command {
     Gain(Target, f32, u32),
     /// Mutes (true) or unmutes (false).
     Mute(Target, bool),
+    /// Solos (true) or unsolos (false) an input.
+    Solo(usize, bool),
     /// Sets the pan of an input, -1 (left) to 1 (right), reached in so many milliseconds.
     Pan(usize, f32, u32),
     /// Routes an input (first index) to a bus (second index), or takes it off.
@@ -65,6 +69,7 @@ pub enum Command {
 pub const HELP: &str = "\
 gain <target> <dB>   set the gain of an input or bus (gain A1 -6, gain 2 0)
 mute <target>        mute an input or bus; unmute <target> undoes it
+solo <input>         hear only the soloed inputs; unsolo <input> undoes it
 pan <input> <-1..1>  pan a mono input, balance a stereo one
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
 scene <name>         change to a scene of the profile; scenes lists them
@@ -73,7 +78,8 @@ learn <address>      the next movement on the MIDI controller binds it (learn in
 show                 list gains, mutes and pans
 save <file>          write the current state as a profile
 quit                 stop (an empty line too)
-A target is an input number (1), a unique part of its name (cable) or a bus name (A1).
+A target is an input number (1), a unique part of its name or label (cable), a bus name (A1)
+or a unique part of a bus label (boxen).
 A gain or pan can take its time: gain A1 -6 over 500 gets there in 500 ms.";
 
 /// Why a line is not a command.
@@ -102,13 +108,24 @@ pub fn search_name(name: &str, label: Option<&str>) -> String {
     }
 }
 
-/// Parses one line against the route's input names and bus names.
+/// Parses one line against the route's input names, bus names and bus labels. `bus_labels` goes
+/// with `buses`, one entry each, empty for a bus without a label.
 ///
 /// # Errors
 ///
-/// [`ParseError`] naming the problem: an unknown keyword, a missing or unknown target, or a
-/// value that is not a number.
-pub fn parse<S: AsRef<str>>(line: &str, inputs: &[S], buses: &[S]) -> Result<Command, ParseError> {
+/// [`ParseError`] naming the problem: an unknown keyword, a missing, unknown or ambiguous target,
+/// or a value that is not a number.
+pub fn parse<S: AsRef<str>>(
+    line: &str,
+    inputs: &[S],
+    buses: &[S],
+    bus_labels: &[S],
+) -> Result<Command, ParseError> {
+    let names = Names {
+        inputs,
+        buses,
+        bus_labels,
+    };
     let words: Vec<&str> = line.split_whitespace().collect();
     let Some((&keyword, rest)) = words.split_first() else {
         return Ok(Command::Stop);
@@ -147,25 +164,29 @@ pub fn parse<S: AsRef<str>>(line: &str, inputs: &[S], buses: &[S]) -> Result<Com
             Ok(Command::Save(path.to_owned()))
         }
         "mute" | "unmute" => {
-            let target = target(&rest.join(" "), inputs, buses)?;
+            let target = target(&rest.join(" "), names)?;
             Ok(Command::Mute(target, keyword.eq_ignore_ascii_case("mute")))
         }
+        "solo" | "unsolo" => match target(&rest.join(" "), names)? {
+            Target::Input(index) => Ok(Command::Solo(index, keyword.eq_ignore_ascii_case("solo"))),
+            Target::Bus(_) => error("solo works on inputs only"),
+        },
         "gain" => {
             let (rest, ramp_ms) = split_ramp(rest)?;
             let (name, value) = split_value(rest, "gain <target> <dB> [over <ms>]")?;
-            Ok(Command::Gain(target(&name, inputs, buses)?, value, ramp_ms))
+            Ok(Command::Gain(target(&name, names)?, value, ramp_ms))
         }
         "pan" => {
             let (rest, ramp_ms) = split_ramp(rest)?;
             let (name, value) = split_value(rest, "pan <input> <-1..1> [over <ms>]")?;
-            match target(&name, inputs, buses)? {
+            match target(&name, names)? {
                 Target::Input(index) => Ok(Command::Pan(index, value, ramp_ms)),
                 Target::Bus(_) => error("pan works on inputs only"),
             }
         }
         "route" | "unroute" => {
             let on = keyword.eq_ignore_ascii_case("route");
-            let (input, bus) = route(rest, inputs, buses)?;
+            let (input, bus) = route(rest, names)?;
             Ok(Command::Route(input, bus, on))
         }
         other => error(format!("unknown command \"{other}\"; type help")),
@@ -210,58 +231,122 @@ fn split_value(rest: &[&str], usage: &str) -> Result<(String, f32), ParseError> 
     }
 }
 
-/// The input words and the bus name after them; a bus name has no spaces.
-fn route<S: AsRef<str>>(
-    rest: &[&str],
-    inputs: &[S],
-    buses: &[S],
-) -> Result<(usize, usize), ParseError> {
+/// What a line may call the parts of the route.
+struct Names<'a, S> {
+    inputs: &'a [S],
+    buses: &'a [S],
+    bus_labels: &'a [S],
+}
+
+// By hand: a derive would ask for `S: Copy`, and only references are copied.
+impl<S> Clone for Names<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Names<'_, S> {}
+
+/// The bus called `name`, or the only one whose label holds it; `Ok(None)` for none.
+fn bus<S: AsRef<str>>(name: &str, names: Names<'_, S>) -> Result<Option<usize>, ParseError> {
+    if let Some(index) = names
+        .buses
+        .iter()
+        .position(|bus| bus.as_ref().eq_ignore_ascii_case(name))
+    {
+        return Ok(Some(index));
+    }
+    match select(name, names.bus_labels) {
+        Ok(index) => Ok(Some(index)),
+        Err(SelectError::NotFound { .. }) => Ok(None),
+        Err(SelectError::Ambiguous { candidates, .. }) => error(format!(
+            "\"{name}\" matches several buses: {}; use the bus name",
+            candidates.join(", ")
+        )),
+    }
+}
+
+/// The input and the bus of `route`. Both can have several words, so every place to divide them is
+/// tried: exactly one reading must make sense. Without one, the last word is taken for the bus, to
+/// say what is wrong.
+fn route<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<(usize, usize), ParseError> {
     let usage = "usage: route <input> <bus>";
-    let Some((&bus_name, input_words)) = rest.split_last() else {
-        return error(usage);
-    };
-    if input_words.is_empty() {
+    if rest.len() < 2 {
         return error(usage);
     }
-    let Some(bus) = buses
-        .iter()
-        .position(|bus| bus.as_ref().eq_ignore_ascii_case(bus_name))
-    else {
+    let mut readings = Vec::new();
+    for place in 1..rest.len() {
+        let (input_words, bus_words) = rest.split_at(place);
+        if let (Ok(Target::Input(input)), Ok(Some(bus))) = (
+            target(&input_words.join(" "), names),
+            bus(&bus_words.join(" "), names),
+        ) && !readings.contains(&(input, bus))
+        {
+            readings.push((input, bus));
+        }
+    }
+    match readings.as_slice() {
+        [reading] => return Ok(*reading),
+        [] => {}
+        _ => {
+            return error(format!(
+                "\"{}\" can be read several ways; use the input number and the bus name",
+                rest.join(" ")
+            ));
+        }
+    }
+    let (bus_name, input_words) = (rest[rest.len() - 1], &rest[..rest.len() - 1]);
+    let Some(bus) = bus(bus_name, names)? else {
         return error(format!("there is no bus \"{bus_name}\""));
     };
-    match target(&input_words.join(" "), inputs, buses)? {
+    match target(&input_words.join(" "), names)? {
         Target::Input(input) => Ok((input, bus)),
         Target::Bus(_) => error("only an input can be routed to a bus"),
     }
 }
 
-/// An input number, a bus name or a unique part of an input name.
-fn target<S: AsRef<str>>(name: &str, inputs: &[S], buses: &[S]) -> Result<Target, ParseError> {
+/// An input number, a bus name, or a unique part of an input name or a bus label. A part that fits
+/// an input and a bus label too is refused, whichever of them it would have been.
+fn target<S: AsRef<str>>(name: &str, names: Names<'_, S>) -> Result<Target, ParseError> {
     let name = name.trim().trim_start_matches('[').trim_end_matches(']');
     if name.is_empty() {
         return error("which input or bus? (a number, a name part or a bus name)");
     }
     if let Ok(number) = name.parse::<usize>() {
         return match number.checked_sub(1) {
-            Some(index) if index < inputs.len() => Ok(Target::Input(index)),
+            Some(index) if index < names.inputs.len() => Ok(Target::Input(index)),
             _ => error(format!(
                 "there is no input {number}; inputs are 1 to {}",
-                inputs.len()
+                names.inputs.len()
             )),
         };
     }
-    if let Some(index) = buses
-        .iter()
-        .position(|bus| bus.as_ref().eq_ignore_ascii_case(name))
+    let bus = bus(name, names)?;
+    // The name of a bus is exact, nothing else can mean it.
+    if let Some(index) = bus
+        && names.buses[index].as_ref().eq_ignore_ascii_case(name)
     {
         return Ok(Target::Bus(index));
     }
-    match select(name, inputs) {
-        Ok(index) => Ok(Target::Input(index)),
-        Err(SelectError::NotFound { .. }) => error(format!("no input or bus matches \"{name}\"")),
-        Err(SelectError::Ambiguous { candidates, .. }) => error(format!(
+    match (select(name, names.inputs), bus) {
+        (Ok(index), None) => Ok(Target::Input(index)),
+        (Err(SelectError::NotFound { .. }), Some(index)) => Ok(Target::Bus(index)),
+        (Err(SelectError::NotFound { .. }), None) => {
+            error(format!("no input or bus matches \"{name}\""))
+        }
+        (Ok(index), Some(bus)) => error(format!(
+            "\"{name}\" matches input {} and bus {}; use the number or the bus name",
+            index + 1,
+            names.buses[bus].as_ref()
+        )),
+        (Err(SelectError::Ambiguous { candidates, .. }), None) => error(format!(
             "\"{name}\" matches several inputs: {}; use the number",
             candidates.join(", ")
+        )),
+        (Err(SelectError::Ambiguous { candidates, .. }), Some(bus)) => error(format!(
+            "\"{name}\" matches several inputs ({}) and bus {}; use the number or the bus name",
+            candidates.join(", "),
+            names.buses[bus].as_ref()
         )),
     }
 }
@@ -272,13 +357,14 @@ mod tests {
 
     const INPUTS: [&str; 3] = ["CABLE Output", "Analogue 1 + 2", "Spotify.exe"];
     const BUSES: [&str; 2] = ["A1", "B2"];
+    const NO_LABELS: [&str; 2] = ["", ""];
 
     fn ok(line: &str) -> Command {
-        parse(line, &INPUTS, &BUSES).expect(line)
+        parse(line, &INPUTS, &BUSES, &NO_LABELS).expect(line)
     }
 
     fn bad(line: &str) -> String {
-        parse(line, &INPUTS, &BUSES).expect_err(line).0
+        parse(line, &INPUTS, &BUSES, &NO_LABELS).expect_err(line).0
     }
 
     #[test]
@@ -319,6 +405,8 @@ mod tests {
             ok("unmute Analogue 1"),
             Command::Mute(Target::Input(1), false)
         );
+        assert_eq!(ok("solo cable"), Command::Solo(0, true));
+        assert_eq!(ok("UNSOLO Analogue 1"), Command::Solo(1, false));
         assert_eq!(ok("pan spotify -0.5"), Command::Pan(2, -0.5, 0));
         assert_eq!(ok("route 2 B2"), Command::Route(1, 1, true));
         assert_eq!(ok("ROUTE Analogue 1 a1"), Command::Route(1, 0, true));
@@ -340,8 +428,8 @@ mod tests {
             search_name("Analogue 1 + 2", Some("Mikro")),
             search_name("Spotify.exe", None),
         ];
-        let buses = BUSES.map(str::to_owned);
-        let parsed = |line| parse(line, &inputs, &buses).expect(line);
+        let (buses, labels) = (BUSES.map(str::to_owned), NO_LABELS.map(str::to_owned));
+        let parsed = |line| parse(line, &inputs, &buses, &labels).expect(line);
         assert_eq!(parsed("mute mik"), Command::Mute(Target::Input(1), true));
         assert_eq!(parsed("mute cable"), Command::Mute(Target::Input(0), true));
         assert_eq!(
@@ -350,10 +438,63 @@ mod tests {
         );
     }
 
+    const LABELS: [&str; 2] = ["Grosse Boxen", "Kopfhoerer"];
+
+    #[test]
+    fn a_bus_is_found_by_its_label_too() {
+        let parsed = |line| parse(line, &INPUTS, &BUSES, &LABELS).expect(line);
+        assert_eq!(parsed("mute boxen"), Command::Mute(Target::Bus(0), true));
+        assert_eq!(
+            parsed("gain Grosse Boxen -6 over 100"),
+            Command::Gain(Target::Bus(0), -6.0, 100)
+        );
+        assert_eq!(parsed("mute KOPF"), Command::Mute(Target::Bus(1), true));
+        // The name of a bus and what was found before stay what they were.
+        assert_eq!(parsed("mute b2"), Command::Mute(Target::Bus(1), true));
+        assert_eq!(parsed("mute cable"), Command::Mute(Target::Input(0), true));
+        assert_eq!(parsed("route 1 boxen"), Command::Route(0, 0, true));
+        assert_eq!(
+            parsed("unroute 2 Grosse Boxen"),
+            Command::Route(1, 0, false)
+        );
+        assert_eq!(parsed("route Analogue 1 kopf"), Command::Route(1, 1, true));
+    }
+
+    #[test]
+    fn what_fits_more_than_one_is_refused() {
+        let inputs = ["CABLE Output", "Boxen Links", "Boxen Rechts"];
+        let labels = ["Grosse Boxen", "Kleine Boxen"];
+        let wrong = |line, inputs: &[&str], labels: &[&str]| {
+            parse(line, inputs, &BUSES, labels).expect_err(line).0
+        };
+        let both = wrong("mute links", &inputs, &["Links", ""]);
+        assert!(both.contains("input 2 and bus A1"), "{both}");
+        let buses = wrong("mute boxen", &INPUTS, &labels);
+        assert!(
+            buses.contains("several buses: Grosse Boxen, Kleine Boxen"),
+            "{buses}"
+        );
+        let many = wrong("mute boxen", &inputs, &["Boxen", ""]);
+        assert!(
+            many.contains("several inputs (Boxen Links, Boxen Rechts) and bus A1"),
+            "{many}"
+        );
+        let route = wrong("route 1 boxen", &INPUTS, &labels);
+        assert!(route.contains("several buses"), "{route}");
+        // "a b c": input "a" with the bus "b c", or input "a b" with the bus "c".
+        let ways = wrong("route a b c", &["a", "a b"], &["b c", "c"]);
+        assert!(ways.contains("several ways"), "{ways}");
+        // The same input and bus in two readings is one meaning.
+        assert_eq!(
+            parse("route a b c", &["a b"], &BUSES, &["b c", ""]),
+            Ok(Command::Route(0, 0, true))
+        );
+    }
+
     #[test]
     fn the_word_over_can_be_a_name() {
         let inputs = ["over", "game over 2", "Analogue"];
-        let parsed = |line| parse(line, &inputs, &BUSES).expect(line);
+        let parsed = |line| parse(line, &inputs, &BUSES, &NO_LABELS).expect(line);
         assert_eq!(
             parsed("gain over 3"),
             Command::Gain(Target::Input(0), 3.0, 0)
@@ -389,6 +530,8 @@ mod tests {
         assert!(bad("mute a").contains("several inputs"));
         assert!(bad("mute").contains("which input or bus"));
         assert!(bad("pan A1 0").contains("inputs only"));
+        assert!(bad("solo A1").contains("solo works on inputs only"));
+        assert!(bad("unsolo").contains("which input or bus"));
         assert!(bad("route").contains("usage: route"));
         assert!(bad("route 1").contains("usage: route"));
         assert!(bad("route 1 C3").contains("no bus \"C3\""));

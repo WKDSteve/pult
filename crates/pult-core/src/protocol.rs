@@ -312,6 +312,11 @@ impl Op {
                 set(target(*to, "gain")?, OpValue::Number(*db), *ramp_ms)
             }
             Command::Mute(to, muted) => set(target(*to, "mute")?, OpValue::Switch(*muted), 0),
+            Command::Solo(input, solo) => set(
+                target(Target::Input(*input), "solo")?,
+                OpValue::Switch(*solo),
+                0,
+            ),
             Command::Pan(input, pan, ramp_ms) => set(
                 target(Target::Input(*input), "pan")?,
                 OpValue::Number(*pan),
@@ -554,6 +559,13 @@ mod tests {
             Ok(Action::BusMute {
                 bus: 0,
                 muted: false
+            })
+        );
+        assert_eq!(
+            action(&Command::Solo(1, true)),
+            Ok(Action::InputSolo {
+                input: 1,
+                solo: true
             })
         );
         assert_eq!(

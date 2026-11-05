@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use args::{Command, Routing, RunSpec, ToneSpec, USAGE};
 use console::{Console, Input};
 use monitor::{LOG_INTERVAL, Log, Snapshot};
-use pult_core::view::MixerView;
+use pult_core::view::{Action, MixerView};
 use pult_core::{Desk, Dropouts, control};
 use pult_engine::{Devices, EngineDesk, Running, Tone};
 use pult_hub::{Control, Pump};
@@ -174,11 +174,19 @@ fn run(desk: &mut EngineDesk, log: Option<Log>, bus_names: Vec<String>, pump: Op
             Some(Input::Interrupt) => break,
             Some(Input::Line(line)) => {
                 let running = desk.running_mut();
-                let parsed = control::parse(&line, &running.input_names(), &running.bus_names());
+                let parsed = control::parse(
+                    &line,
+                    &running.input_names(),
+                    &running.bus_names(),
+                    &running.bus_labels(),
+                );
                 let answer = match parsed {
                     Ok(control::Command::Stop) => break,
                     Ok(control::Command::Learn(target)) => recorder.learn(target),
                     Ok(control::Command::Unlearn(target)) => recorder.forget(&target),
+                    Ok(control::Command::Solo(input, solo)) => {
+                        desk.act(Action::InputSolo { input, solo })
+                    }
                     Ok(command) => running.apply(&command),
                     Err(err) => Err(err.to_string()),
                 };

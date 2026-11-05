@@ -35,6 +35,7 @@ USAGE:
   To the pult that is running:
     pult gain <TARGET> <DB> [over <MS>]
     pult mute <TARGET>      pult unmute <TARGET>
+    pult solo <INPUT>       pult unsolo <INPUT>
     pult pan <INPUT> <-1..1> [over <MS>]
     pult route <INPUT> <BUS>      pult unroute <INPUT> <BUS>
     pult scene <NAME>       pult scenes
@@ -54,8 +55,8 @@ USAGE:
   The window:
     pult start [--open]     start it unless a route runs; --open shows the page too
 
-A target is an input number (1), a unique part of its name or label (cable) or a bus name
-(A1). `save` writes to the profile the route came from. These end with status 1 when no pult
+A target is an input number (1), a unique part of its name or label (cable), a bus name (A1)
+or a unique part of a bus label (boxen); what fits more than one is refused. `save` writes to the profile the route came from. These end with status 1 when no pult
 runs or it refuses, and with 2 when the words are no command for it.
 
 Device names may be a unique part of the name, ignoring case (see `pult devices`).
@@ -67,7 +68,7 @@ outputs) and which input feeds which bus from a TOML file (see examples/pult.tom
 --log writes a CSV row with the levels and counters every 10 s (the file is overwritten; a
 run on a file that another run has open is refused).
 `tone` plays a sine (default 440 Hz at -30 dB) to check a chain of devices and stops on
-Enter. `run` takes commands while it runs (type help: gain, mute, pan, show, save) and
+Enter. `run` takes commands while it runs (type help: gain, mute, solo, pan, show, save) and
 stops on an empty line, quit or Ctrl+C.
 
 EXAMPLE:
@@ -238,7 +239,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
             Some("--open") => no_more(args).map(|()| Command::Remote(Remote::Start { open: true })),
             Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
         },
-        "gain" | "mute" | "unmute" | "pan" | "route" | "unroute" | "scene" => {
+        "gain" | "mute" | "unmute" | "solo" | "unsolo" | "pan" | "route" | "unroute" | "scene" => {
             // Quoted or not: the input line reads a name of several words either way.
             let rest: Vec<String> = args.collect();
             Ok(Command::Remote(Remote::Line(format!(
@@ -429,6 +430,16 @@ mod tests {
         assert_eq!(parse(["--version".to_owned()]), Ok(Command::Version));
         assert!(parse(["devices".to_owned(), "x".to_owned()]).is_err());
         assert!(parse(["mix".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn solo_goes_to_the_running_pult_in_the_words_of_its_input_line() {
+        for word in ["solo", "unsolo"] {
+            assert_eq!(
+                parse([word.to_owned(), "Analogue".to_owned(), "1".to_owned()]),
+                Ok(Command::Remote(Remote::Line(format!("{word} Analogue 1"))))
+            );
+        }
     }
 
     #[test]

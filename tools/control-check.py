@@ -288,6 +288,8 @@ def main():
                 (("gain", "A1", "-3", "over", "100"), 0, "over 100 ms"),
                 (("mute", "pulttone"), 0, "muted"),
                 (("unmute", "1"), 0, "unmuted"),
+                (("solo", "1"), 0, "solo"),
+                (("unsolo", "1"), 0, "solo off"),
                 (("scenes",), 0, "Leise\nNormal"),
                 (("scene", "nichts"), 1, "no scene"),
                 (("gain", "A1", "60"), 1, "is outside"),
