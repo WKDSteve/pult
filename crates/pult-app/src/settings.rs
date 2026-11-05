@@ -17,10 +17,47 @@ pub struct Settings {
     /// The profile opened last; a start without an argument opens it again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_profile: Option<PathBuf>,
-    /// pult starts on signing in, into the tray (off unless the user turns it on).
+    /// pult starts on signing in (off unless the user turns it on).
     pub autostart: bool,
+    /// How that start comes up; kept while `autostart` is off, so turning it on again keeps it.
+    pub start_mode: StartMode,
     /// The user saw the hint on the first close; later closes hide at once.
     pub told_about_tray: bool,
+}
+
+/// How the start on signing in comes up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StartMode {
+    /// In the background: the route plays, the window stays in the tray (`--tray`).
+    #[default]
+    Tray,
+    /// With the window open.
+    Window,
+}
+
+/// What the user chose for the start on signing in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutoStart {
+    pub on: bool,
+    pub mode: StartMode,
+}
+
+impl Settings {
+    /// The choice for the start on signing in.
+    #[must_use]
+    pub fn auto_start(&self) -> AutoStart {
+        AutoStart {
+            on: self.autostart,
+            mode: self.start_mode,
+        }
+    }
+
+    /// Takes a choice for the start on signing in.
+    pub fn set_auto_start(&mut self, choice: AutoStart) {
+        self.autostart = choice.on;
+        self.start_mode = choice.mode;
+    }
 }
 
 /// The settings file of this user: `%APPDATA%\pult\settings.toml`; `None` without `APPDATA`.
@@ -157,6 +194,7 @@ mod tests {
         let wanted = Settings {
             last_profile: Some(PathBuf::from(r"D:\a b\pult.toml")),
             autostart: true,
+            start_mode: StartMode::Window,
             told_about_tray: true,
         };
         stored.change(|s| *s = wanted.clone()).unwrap();
@@ -171,6 +209,11 @@ mod tests {
         let (stored, note) = Stored::load(Some(folder.file()));
         assert_eq!(note, None);
         assert!(stored.settings.autostart);
+        assert_eq!(
+            stored.settings.start_mode,
+            StartMode::Tray,
+            "a file from before the choice starts as it did then"
+        );
         assert_eq!(stored.settings.last_profile, None);
         assert!(!stored.settings.told_about_tray);
     }
@@ -188,6 +231,30 @@ mod tests {
         assert_eq!(
             fs::read_to_string(folder.file()).unwrap(),
             "autostart = maybe\n"
+        );
+    }
+
+    #[test]
+    fn the_start_is_off_until_chosen() {
+        let start = Settings::default().auto_start();
+        assert!(!start.on);
+        assert_eq!(start.mode, StartMode::Tray);
+    }
+
+    #[test]
+    fn the_way_it_starts_is_a_word_in_the_file() {
+        let folder = Folder::new("mode");
+        let (mut stored, _) = Stored::load(Some(folder.file()));
+        let choice = AutoStart {
+            on: false,
+            mode: StartMode::Window,
+        };
+        stored.change(|s| s.set_auto_start(choice)).unwrap();
+        let text = fs::read_to_string(folder.file()).unwrap();
+        assert!(text.contains("start_mode = \"window\""), "{text}");
+        assert_eq!(
+            Stored::load(Some(folder.file())).0.settings.auto_start(),
+            choice
         );
     }
 

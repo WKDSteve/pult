@@ -16,12 +16,13 @@ usage: pult-app [PROFILE | --demo | --tray]
 
   PROFILE   a pult profile (TOML), for example pult.toml; starts its route
   --demo    a desk in memory with moving meters, no audio device touched
-  --tray    the profile opened last, with the window in the tray (the start on signing in)
+  --tray    the profile opened last, with the window in the tray
   --help    this text
   --version the version
 
 Without an argument the profile opened last starts again; before the first one the window
-says how to start. Settings: %APPDATA%\\pult\\settings.toml.";
+says how to start. Whether pult starts on signing in, in the tray or with the window open, is
+in Options in the window. Settings: %APPDATA%\\pult\\settings.toml.";
 
 /// What the command line asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,7 +33,7 @@ pub enum Start {
     Demo,
     /// Nothing given: the profile opened last, else the start screen.
     Nothing,
-    /// As `Nothing`, with the window in the tray: the start on signing in.
+    /// As `Nothing`, with the window in the tray: the start on signing in, in the background.
     Tray,
     Help,
     Version,
@@ -81,6 +82,8 @@ pub enum Choice {
     /// Open the profile again (after plugging a device in, say).
     Retry,
     Demo,
+    /// Open the options; they matter before the first profile too.
+    Options,
 }
 
 /// A profile being opened on a thread of its own, so the window shows at once even when the
@@ -214,6 +217,12 @@ pub fn screen(ui: &mut Ui, profile: Option<&Path>, problem: Option<&str>) -> Opt
                 .clicked()
             {
                 choice = Some(Choice::Demo);
+            }
+            if ui
+                .add(Button::new(RichText::new("Options").color(p.text)).min_size(size))
+                .clicked()
+            {
+                choice = Some(Choice::Options);
             }
         });
     });

@@ -13,7 +13,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
 use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_SZ, RRF_RT_ANY, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+    HKEY_CURRENT_USER, REG_SZ, RRF_NOEXPAND, RRF_RT_ANY, RegDeleteKeyValueW, RegGetValueW,
+    RegSetKeyValueW,
 };
 use windows::Win32::System::Threading::{
     CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent,
@@ -21,6 +22,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
 use windows::core::HSTRING;
+
+use pult_app::settings::StartMode;
 
 /// The names of the instance in the session of the user (`Local\`): who runs, and how to ask
 /// it to show its window.
@@ -129,16 +132,35 @@ pub fn listen_for_show(name: &str, mut show: impl FnMut() + Send + 'static) -> b
     spawned.is_ok() && made.recv().unwrap_or(false)
 }
 
-/// Lets Windows start `command` when the user signs in (`HKEY_CURRENT_USER\<key>`, value
-/// `name`), or with `None` no longer; removing a value that is not there is no error.
+/// The command that starts `exe` the way `mode` says.
+fn run_command(exe: &str, mode: StartMode) -> String {
+    match mode {
+        StartMode::Tray => format!("\"{exe}\" --tray"),
+        StartMode::Window => format!("\"{exe}\""),
+    }
+}
+
+/// The way a command starts: the path before it is in quotes, so only an argument ends like this.
+fn mode_of(command: &str) -> StartMode {
+    if command.trim_end().ends_with(" --tray") {
+        StartMode::Tray
+    } else {
+        StartMode::Window
+    }
+}
+
+/// Lets Windows start the program `exe` the way `mode` says when the user signs in
+/// (`HKEY_CURRENT_USER\<key>`, value `name`), or with `None` no longer; removing a value that is
+/// not there is no error.
 ///
 /// # Errors
 ///
 /// What Windows said when the value could not be written or removed.
-pub fn set_run(key: &str, name: &str, command: Option<&str>) -> Result<(), String> {
+pub fn set_run(key: &str, name: &str, start: Option<(&str, StartMode)>) -> Result<(), String> {
     let (key, name) = (HSTRING::from(key), HSTRING::from(name));
-    let result = match command {
-        Some(command) => {
+    let result = match start {
+        Some((exe, mode)) => {
+            let command = run_command(exe, mode);
             // REG_SZ data is the text in UTF-16 with its closing NUL, counted in bytes.
             let data: Vec<u16> = command.encode_utf16().chain([0]).collect();
             let bytes = u32::try_from(data.len() * 2).map_err(|e| e.to_string())?;
@@ -166,18 +188,79 @@ pub fn set_run(key: &str, name: &str, command: Option<&str>) -> Result<(), Strin
     result.ok().map_err(|e| e.message())
 }
 
-/// Whether Windows has something to start under `HKEY_CURRENT_USER\<key>`, value `name`.
+/// How Windows starts what it has under `HKEY_CURRENT_USER\<key>`, value `name`; `None` when it
+/// has nothing. A value that does not read as text counts as what pult writes by default.
 #[must_use]
-pub fn run_exists(key: &str, name: &str) -> bool {
+pub fn run_start(key: &str, name: &str) -> Option<StartMode> {
     let (key, name) = (HSTRING::from(key), HSTRING::from(name));
-    // SAFETY: the strings live across the call; no data is asked for, so no buffer is written.
-    unsafe { RegGetValueW(HKEY_CURRENT_USER, &key, &name, RRF_RT_ANY, None, None, None) }.is_ok()
+    let flags = RRF_RT_ANY | RRF_NOEXPAND;
+    let mut bytes = 0u32;
+    // SAFETY: the strings live across the call; no data is asked for, so only `bytes` is written.
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &key,
+            &name,
+            flags,
+            None,
+            None,
+            Some(&raw mut bytes),
+        )
+    }
+    .ok()
+    .ok()?;
+    let mut data = vec![0u16; (bytes as usize).div_ceil(2) + 1];
+    // SAFETY: `data` holds at least `bytes` bytes; the strings live across the call.
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &key,
+            &name,
+            flags,
+            None,
+            Some(data.as_mut_ptr().cast()),
+            Some(&raw mut bytes),
+        )
+    };
+    if read.ok().is_err() {
+        return Some(StartMode::default());
+    }
+    let len = data.iter().position(|&c| c == 0).unwrap_or(data.len());
+    Some(mode_of(&String::from_utf16_lossy(&data[..len])))
+}
+
+/// A place for the start on signing in that belongs to one test, removed with it: never the Run
+/// key, and it does not disturb a running pult-app.
+#[cfg(test)]
+pub struct TestPlace(String);
+
+#[cfg(test)]
+impl TestPlace {
+    pub fn new(what: &str) -> Self {
+        Self(format!(
+            r"Software\pult-app-test-{what}-{}",
+            std::process::id()
+        ))
+    }
+
+    pub fn key(&self) -> &str {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestPlace {
+    fn drop(&mut self) {
+        use windows::Win32::System::Registry::RegDeleteTreeW;
+        // SAFETY: the key belongs to this test.
+        let _ = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(self.0.as_str())) };
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::Registry::{RRF_RT_REG_SZ, RegDeleteTreeW};
+    use windows::Win32::System::Registry::RRF_RT_REG_SZ;
 
     /// A name of this test run only, so a running pult-app is not disturbed.
     fn name(what: &str) -> String {
@@ -231,20 +314,34 @@ mod tests {
 
     #[test]
     fn the_start_with_windows_is_written_and_removed() {
-        // A key of this test run, never the real Run key.
-        let key = format!(r"Software\pult-app-test-{}", std::process::id());
-        let command = r#""C:\Program Files\pult\pult-app.exe" --tray"#;
-        assert!(!run_exists(&key, "pult"), "no key yet");
-        set_run(&key, "pult", Some(command)).unwrap();
-        assert_eq!(read_run(&key, "pult").as_deref(), Some(command));
-        assert!(run_exists(&key, "pult"));
-        assert!(!run_exists(&key, "other"));
-        set_run(&key, "pult", None).unwrap();
-        assert_eq!(read_run(&key, "pult"), None);
-        assert!(!run_exists(&key, "pult"));
-        set_run(&key, "pult", None).unwrap();
-        // SAFETY: the key belongs to this test.
-        let _ = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(key.as_str())) };
+        let place = TestPlace::new("start");
+        let key = place.key();
+        let exe = r"C:\Program Files\pult\pult-app.exe";
+        assert_eq!(run_start(key, "pult"), None, "no key yet");
+        set_run(key, "pult", Some((exe, StartMode::Tray))).unwrap();
+        assert_eq!(
+            read_run(key, "pult").as_deref(),
+            Some(r#""C:\Program Files\pult\pult-app.exe" --tray"#)
+        );
+        assert_eq!(run_start(key, "pult"), Some(StartMode::Tray));
+        assert_eq!(run_start(key, "other"), None);
+        set_run(key, "pult", Some((exe, StartMode::Window))).unwrap();
+        assert_eq!(
+            read_run(key, "pult").as_deref(),
+            Some(r#""C:\Program Files\pult\pult-app.exe""#)
+        );
+        assert_eq!(run_start(key, "pult"), Some(StartMode::Window));
+        set_run(key, "pult", None).unwrap();
+        assert_eq!(read_run(key, "pult"), None);
+        assert_eq!(run_start(key, "pult"), None);
+        set_run(key, "pult", None).unwrap();
+    }
+
+    #[test]
+    fn only_an_argument_says_tray() {
+        assert_eq!(mode_of(r#""C:\a\pult-app.exe" --tray"#), StartMode::Tray);
+        assert_eq!(mode_of(r#""C:\a\pult-app.exe""#), StartMode::Window);
+        assert_eq!(mode_of(r#""C:\a --tray\pult-app.exe""#), StartMode::Window);
     }
 
     #[test]

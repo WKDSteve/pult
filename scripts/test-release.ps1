@@ -261,6 +261,9 @@ try {
     $r = Invoke-Child $installer $places
     $app = Join-Path $install 'pult-app.exe'
     Write-Check ((Get-ItemProperty -LiteralPath $runKey).pult -ceq "`"$app`" --tray") 'a Run value of pult-app elsewhere now starts this install'
+    Set-ItemProperty -LiteralPath $runKey -Name 'pult' -Value '"C:\moved\away\pult-app.exe"'
+    $r = Invoke-Child $installer $places
+    Write-Check ((Get-ItemProperty -LiteralPath $runKey).pult -ceq "`"$app`"") 'and the start with the window open stays that'
     Set-ItemProperty -LiteralPath $runKey -Name 'pult' -Value 'cmd /c something-of-yours'
     $r = Invoke-Child $installer $places
     Write-Check ((Get-ItemProperty -LiteralPath $runKey).pult -ceq 'cmd /c something-of-yours' -and $r.Text -match 'left the Run value') 'a Run value in another form is left alone, and named'
@@ -358,6 +361,10 @@ try {
     if ($r.Code -ne 0) { Write-Output $r.Text }
     Write-Check (-not (Test-Path -LiteralPath $entryKey)) 'and the Settings > Apps entry'
     Write-Check ($null -eq (Get-ItemProperty -LiteralPath $runKey -Name 'pult' -ErrorAction SilentlyContinue)) 'and the start with Windows of this install'
+    $r = Invoke-Child $installer $places
+    New-ItemProperty -LiteralPath $runKey -Name 'pult' -Value "`"$app`"" -PropertyType String -Force | Out-Null
+    $r = Invoke-Child (Join-Path $install 'uninstall.ps1') $places
+    Write-Check ($r.Code -eq 0 -and $null -eq (Get-ItemProperty -LiteralPath $runKey -Name 'pult' -ErrorAction SilentlyContinue)) 'also when it opens the window'
     $r = Invoke-Child (Join-Path $here 'uninstall.ps1') $places
     Write-Check ($r.Code -eq 0 -and $r.Text -match 'nothing to remove') 'a second run finds nothing to do and says so'
 

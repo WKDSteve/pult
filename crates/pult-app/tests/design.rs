@@ -252,6 +252,32 @@ fn start_screen() {
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "the pictures are of Windows: its fonts, its renderer"
+)]
+fn options_dialog() {
+    let mut harness = Harness::builder()
+        .with_size(vec2(1280.0, 760.0))
+        .with_pixels_per_point(1.5)
+        .build_ui(|ui| {
+            Theme::current().apply(ui.ctx());
+            let base = Theme::current().palette.base;
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::new().fill(base))
+                .show(ui, |ui| {
+                    let start = pult_app::settings::AutoStart {
+                        on: true,
+                        mode: pult_app::settings::StartMode::Window,
+                    };
+                    let _ = pult_app::options::show(ui, start, None);
+                });
+        });
+    harness.run_steps(4);
+    harness.snapshot("options_dialog");
+}
+
+#[test]
 fn tray_hint() {
     let mut harness = Harness::builder()
         .with_size(vec2(1280.0, 760.0))

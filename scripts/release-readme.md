@@ -57,7 +57,9 @@ The window remembers it and opens it the next time, from the Start menu too. Do 
 the install folder: the next install replaces it. Without a profile the window offers a demo desk.
 
 Closing the window leaves pult in the tray and the sound running; *Quit pult* in the tray menu ends
-it. *Start with Windows* in the same menu is off until you turn it on.
+it. *Start with Windows* in the same menu is off until you turn it on. *Options* in the window has it
+too, and there you choose whether pult then starts in the background (in the tray) or with its window
+open.
 
 ## SmartScreen
 

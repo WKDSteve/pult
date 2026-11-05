@@ -8,6 +8,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use pult_app::settings::StartMode;
+
 /// The names `ffi` has on Windows, which `main` passes back here.
 pub const INSTANCE: &str = pult_engine::APP_INSTANCE;
 pub const SHOW: &str = "pult-app.show";
@@ -96,11 +98,15 @@ fn exec_word(exe: &str) -> String {
     word
 }
 
-/// The autostart entry that starts `exe` into the tray.
-fn desktop_entry(exe: &str) -> String {
+/// The autostart entry that starts `exe` the way `mode` says.
+fn desktop_entry(exe: &str, mode: StartMode) -> String {
+    let (comment, argument) = match mode {
+        StartMode::Tray => (", into the tray", " --tray"),
+        StartMode::Window => ("", ""),
+    };
     format!(
-        "[Desktop Entry]\nType=Application\nName=pult\nComment=The audio mixer, into the tray\n\
-         Exec={} --tray\nTerminal=false\n",
+        "[Desktop Entry]\nType=Application\nName=pult\nComment=The audio mixer{comment}\n\
+         Exec={}{argument}\nTerminal=false\n",
         exec_word(exe)
     )
 }
@@ -112,8 +118,12 @@ fn xml_text(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// The launch agent `label` that starts `exe` into the tray.
-fn launch_agent(label: &str, exe: &str) -> String {
+/// The launch agent `label` that starts `exe` the way `mode` says.
+fn launch_agent(label: &str, exe: &str, mode: StartMode) -> String {
+    let argument = match mode {
+        StartMode::Tray => "\t\t<string>--tray</string>\n",
+        StartMode::Window => "",
+    };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -121,13 +131,27 @@ fn launch_agent(label: &str, exe: &str) -> String {
          <plist version=\"1.0\">\n<dict>\n\
          \t<key>Label</key>\n\t<string>{}</string>\n\
          \t<key>ProgramArguments</key>\n\t<array>\n\
-         \t\t<string>{}</string>\n\t\t<string>--tray</string>\n\t</array>\n\
+         \t\t<string>{}</string>\n{argument}\t</array>\n\
          \t<key>RunAtLoad</key>\n\t<true/>\n\
          \t<key>ProcessType</key>\n\t<string>Interactive</string>\n\
          </dict>\n</plist>\n",
         xml_text(label),
         xml_text(exe)
     )
+}
+
+/// The way an autostart entry or a launch agent starts: an `Exec` line ending in the argument (the
+/// path before it is in quotes) or the argument as a string of its own.
+fn mode_of(text: &str) -> StartMode {
+    let tray = text.contains("<string>--tray</string>")
+        || text
+            .lines()
+            .any(|line| line.starts_with("Exec=") && line.ends_with(" --tray"));
+    if tray {
+        StartMode::Tray
+    } else {
+        StartMode::Window
+    }
 }
 
 /// Writes `file` whole or not at all, with the folder it needs.
@@ -142,17 +166,16 @@ fn write_whole(file: &Path, text: &str) -> io::Result<()> {
     })
 }
 
-/// Lets the system start `command`, the path of this program, into the tray when the user signs
-/// in (a file of `name` in the folder `key`), or with `None` no longer; removing what is not
-/// there is no error.
+/// Lets the system start the program `exe` the way `mode` says when the user signs in (a file of
+/// `name` in the folder `key`), or with `None` no longer; removing what is not there is no error.
 ///
 /// # Errors
 ///
 /// What the system said when the file could not be written or removed, or that a line break in
 /// the path cannot be written into it.
-pub fn set_run(key: &str, name: &str, command: Option<&str>) -> Result<(), String> {
+pub fn set_run(key: &str, name: &str, start: Option<(&str, StartMode)>) -> Result<(), String> {
     let file = run_file(key, name)?;
-    let Some(exe) = command else {
+    let Some((exe, mode)) = start else {
         return match fs::remove_file(&file) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e.to_string()),
             _ => Ok(()),
@@ -162,17 +185,52 @@ pub fn set_run(key: &str, name: &str, command: Option<&str>) -> Result<(), Strin
         return Err("the path of pult-app has a line break".to_owned());
     }
     let text = if MACOS {
-        launch_agent(name, exe)
+        launch_agent(name, exe, mode)
     } else {
-        desktop_entry(exe)
+        desktop_entry(exe, mode)
     };
     write_whole(&file, &text).map_err(|e| e.to_string())
 }
 
-/// Whether the system has something to start under that name.
+/// How the system starts what it has under that name; `None` when it has nothing. A file that
+/// does not read counts as what pult writes by default.
 #[must_use]
-pub fn run_exists(key: &str, name: &str) -> bool {
-    run_file(key, name).is_ok_and(|file| file.exists())
+pub fn run_start(key: &str, name: &str) -> Option<StartMode> {
+    let file = run_file(key, name).ok()?;
+    if !file.exists() {
+        return None;
+    }
+    Some(fs::read_to_string(&file).map_or_else(|_| StartMode::default(), |text| mode_of(&text)))
+}
+
+/// A place for the start on signing in that belongs to one test, removed with it: never the
+/// folder the system reads.
+#[cfg(test)]
+pub struct TestPlace(String);
+
+#[cfg(test)]
+impl TestPlace {
+    pub fn new(what: &str) -> Self {
+        let folder =
+            std::env::temp_dir().join(format!("pult-app-run-{what}-{}", std::process::id()));
+        Self(
+            folder
+                .to_str()
+                .expect("a temp folder in Unicode")
+                .to_owned(),
+        )
+    }
+
+    pub fn key(&self) -> &str {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestPlace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 #[cfg(test)]
@@ -186,55 +244,52 @@ mod tests {
         assert!(!listen_for_show(SHOW, || {}));
     }
 
-    /// A folder of this test run, never the one the system reads.
-    struct Folder(PathBuf);
-
-    impl Folder {
-        fn new(name: &str) -> Self {
-            Self(std::env::temp_dir().join(format!("pult-app-run-{name}-{}", std::process::id())))
-        }
-
-        fn key(&self) -> &str {
-            self.0.to_str().expect("a temp folder in Unicode")
-        }
-    }
-
-    impl Drop for Folder {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
     #[test]
     fn the_start_is_written_and_removed() {
-        let folder = Folder::new("start");
-        assert!(!run_exists(folder.key(), "pult"), "no folder yet");
+        let folder = TestPlace::new("start");
+        assert_eq!(run_start(folder.key(), "pult"), None, "no folder yet");
         set_run(folder.key(), "pult", None).expect("nothing to remove is no error");
-        set_run(folder.key(), "pult", Some("/opt/pult/pult-app")).expect("written");
-        assert!(run_exists(folder.key(), "pult"));
-        assert!(!run_exists(folder.key(), "other"));
+        set_run(
+            folder.key(),
+            "pult",
+            Some(("/opt/pult/pult-app", StartMode::Tray)),
+        )
+        .expect("written");
+        assert_eq!(run_start(folder.key(), "pult"), Some(StartMode::Tray));
+        assert_eq!(run_start(folder.key(), "other"), None);
         let file = run_file(folder.key(), "pult").expect("a file");
         let text = fs::read_to_string(&file).expect("readable");
         assert!(text.contains("/opt/pult/pult-app"), "{text}");
         assert!(text.contains("--tray"), "{text}");
-        let files = fs::read_dir(&folder.0).expect("the folder").count();
+        let files = fs::read_dir(folder.key()).expect("the folder").count();
         assert_eq!(files, 1, "nothing is left beside it");
-        set_run(folder.key(), "pult", Some("/usr/bin/pult-app")).expect("written again");
+        set_run(
+            folder.key(),
+            "pult",
+            Some(("/usr/bin/pult-app", StartMode::Window)),
+        )
+        .expect("written again");
         let text = fs::read_to_string(&file).expect("readable");
         assert!(
             text.contains("/usr/bin/pult-app") && !text.contains("/opt"),
             "{text}"
         );
+        assert!(!text.contains("--tray"), "{text}");
+        assert_eq!(run_start(folder.key(), "pult"), Some(StartMode::Window));
         set_run(folder.key(), "pult", None).expect("removed");
-        assert!(!run_exists(folder.key(), "pult"));
+        assert_eq!(run_start(folder.key(), "pult"), None);
     }
 
     #[test]
     fn a_line_break_in_the_path_cannot_add_lines_to_the_file() {
-        let folder = Folder::new("break");
-        let refused = set_run(folder.key(), "pult", Some("/a\nExec=/bin/other"));
+        let folder = TestPlace::new("break");
+        let refused = set_run(
+            folder.key(),
+            "pult",
+            Some(("/a\nExec=/bin/other", StartMode::Tray)),
+        );
         assert!(refused.is_err());
-        assert!(!run_exists(folder.key(), "pult"));
+        assert_eq!(run_start(folder.key(), "pult"), None);
     }
 
     #[test]
@@ -269,7 +324,7 @@ mod tests {
         assert_eq!(exec_word("/a`b"), r#""/a\\`b""#);
         assert_eq!(exec_word(r"/a\b"), r#""/a\\\\b""#);
         assert_eq!(exec_word("/100%/pult"), "\"/100%%/pult\"");
-        let entry = desktop_entry("/opt/my apps/pult");
+        let entry = desktop_entry("/opt/my apps/pult", StartMode::Tray);
         assert!(
             entry.starts_with("[Desktop Entry]\nType=Application\n"),
             "{entry}"
@@ -278,11 +333,19 @@ mod tests {
             entry.contains("\nExec=\"/opt/my apps/pult\" --tray\n"),
             "{entry}"
         );
+        assert_eq!(mode_of(&entry), StartMode::Tray);
+        let entry = desktop_entry("/opt/--tray/pult", StartMode::Window);
+        assert!(entry.contains("\nExec=\"/opt/--tray/pult\"\n"), "{entry}");
+        assert_eq!(mode_of(&entry), StartMode::Window);
     }
 
     #[test]
     fn a_launch_agent_keeps_the_path_as_one_escaped_argument() {
-        let agent = launch_agent("io.github.wkdsteve.pult", "/Applications/R&B <1>/pult-app");
+        let agent = launch_agent(
+            "io.github.wkdsteve.pult",
+            "/Applications/R&B <1>/pult-app",
+            StartMode::Tray,
+        );
         assert!(
             agent.contains("<string>io.github.wkdsteve.pult</string>"),
             "{agent}"
@@ -293,5 +356,13 @@ mod tests {
         );
         assert!(agent.contains("<string>--tray</string>"), "{agent}");
         assert!(agent.contains("<key>RunAtLoad</key>\n\t<true/>"), "{agent}");
+        assert_eq!(mode_of(&agent), StartMode::Tray);
+        let agent = launch_agent("label", "/Applications/pult-app", StartMode::Window);
+        assert!(!agent.contains("--tray"), "{agent}");
+        assert!(
+            agent.contains("<string>/Applications/pult-app</string>\n\t</array>"),
+            "{agent}"
+        );
+        assert_eq!(mode_of(&agent), StartMode::Window);
     }
 }

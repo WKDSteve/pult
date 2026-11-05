@@ -251,16 +251,18 @@ foreach ($k in 'NoModify', 'NoRepair') {
 }
 New-ItemProperty -LiteralPath $uninstallKey -Name 'EstimatedSize' -Value $size -PropertyType DWord -Force | Out-Null
 
-# The start with Windows stays what you chose. When it is on, it starts this install from now on (it
-# may name a program that moved, or a build in a checkout). A value in any other form is not ours.
+# The start with Windows stays what you chose, in the tray or with the window open. When it is on, it
+# starts this install from now on (it may name a program that moved, or a build in a checkout). A value
+# in any other form is not ours.
 $runKey = "$RegistryRoot\Microsoft\Windows\CurrentVersion\Run"
 $run = Get-ItemProperty -LiteralPath $runKey -Name 'pult' -ErrorAction SilentlyContinue
 if ($run) {
-    $wanted = "`"$app`" --tray"
+    $how = if ([string]$run.pult -match ' --tray$') { ' --tray' } else { '' }
+    $wanted = "`"$app`"$how"
     if ([string]$run.pult -ceq $wanted) {
         Write-Output 'pult starts with Windows: unchanged'
     }
-    elseif ([string]$run.pult -match '^"[^"]*pult-app\.exe" --tray$') {
+    elseif ([string]$run.pult -match '^"[^"]*pult-app\.exe"( --tray)?$') {
         Set-ItemProperty -LiteralPath $runKey -Name 'pult' -Value $wanted
         Write-Output "pult starts with Windows: now from $app (it was $($run.pult))"
     }

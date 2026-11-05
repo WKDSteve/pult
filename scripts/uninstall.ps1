@@ -145,7 +145,7 @@ $removed = @()
 $runKey = "$RegistryRoot\Microsoft\Windows\CurrentVersion\Run"
 $run = Get-ItemProperty -LiteralPath $runKey -Name 'pult' -ErrorAction SilentlyContinue
 if ($run) {
-    if ([string]$run.pult -match '^"([^"]*)" --tray$' -and (Test-Under $Matches[1] $InstallDir)) {
+    if ([string]$run.pult -match '^"([^"]*)"( --tray)?$' -and (Test-Under $Matches[1] $InstallDir)) {
         Remove-ItemProperty -LiteralPath $runKey -Name 'pult'
         $removed += 'the start with Windows'
     }

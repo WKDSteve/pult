@@ -1,6 +1,7 @@
 //! `pult-app`: the console window over a running route (`pult-app studio.toml`) or the demo
 //! desk (`pult-app --demo`). Without an argument it opens the profile opened last again
-//! (`settings`); `--tray` does so with the window in the tray, which is how the system starts it.
+//! (`settings`); `--tray` does so with the window in the tray, one of the two ways the system can
+//! start it on signing in (`options`).
 //!
 //! A release build is a window program: no console window opens with it. Text for the
 //! command line goes to the terminal it was started from (`ffi`).
@@ -15,14 +16,15 @@ mod ffi;
 #[path = "ffi_elsewhere.rs"]
 mod ffi;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, CentralPanel, Frame, ViewportCommand};
 use pult_app::console::{self, ConsoleState};
-use pult_app::settings::{self, Settings, Stored};
+use pult_app::options;
+use pult_app::settings::{self, AutoStart, Settings, Stored};
 use pult_app::start::{self, Choice, Opening, Start, USAGE};
 use pult_app::theme::Theme;
 use pult_app::tray::{self, Answer, Close, Command, Tray};
@@ -59,6 +61,10 @@ struct App {
     /// What the tray and later starts ask for.
     commands: Receiver<Command>,
     window: Window,
+    /// The options dialog is up.
+    options_open: bool,
+    /// Why the last choice in the options did not take; shown there.
+    options_problem: Option<String>,
     /// What the window keeps between runs: the profile opened last, the start on signing in,
     /// and whether the user saw the hint on the first close.
     settings: Stored,
@@ -82,10 +88,6 @@ impl App {
     fn new(start: &Start, ctx: &egui::Context, settings: Stored, note: Option<String>) -> Self {
         let (send, commands) = mpsc::channel();
         listen_for_later_starts(ctx, &send);
-        // What Windows will do counts, not what was noted here: an uninstall takes the Run value
-        // away and leaves the settings, and an install after it must not show a check that holds
-        // nothing.
-        let autostart = ffi::run_exists(ffi::RUN_KEY, ffi::RUN_VALUE);
         let mut app = Self {
             profile: None,
             desk: None,
@@ -96,15 +98,19 @@ impl App {
             state: ConsoleState::default(),
             clock: Instant::now(),
             title: String::new(),
-            tray: Tray::new(ctx, "pult", autostart, &send).ok(),
+            tray: None,
             commands,
             window: Window::Shown,
+            options_open: false,
+            options_problem: None,
             settings,
             notes: note.into_iter().collect(),
         };
-        if app.settings.settings.autostart != autostart {
-            app.change_settings(|s| s.autostart = autostart);
+        if let Err(problem) = follow_the_system(&mut app.settings, ffi::RUN_KEY, ffi::RUN_VALUE) {
+            app.notes.push(problem);
         }
+        let autostart = app.settings.settings.autostart;
+        app.tray = Tray::new(ctx, "pult", autostart, &send).ok();
         let last = app.settings.settings.last_profile.as_deref();
         if *start == Start::Demo {
             app.use_desk(Box::new(FakeDesk::new()));
@@ -171,17 +177,30 @@ impl App {
         }
     }
 
-    /// Turns the start on signing in over: the Run value first, then the settings, and the
-    /// check in the tray shows what holds.
-    fn turn_autostart(&mut self) {
-        let on = !self.settings.settings.autostart;
-        match set_autostart(on) {
-            Ok(()) => self.change_settings(|s| s.autostart = on),
-            Err(problem) => self.notes.push(problem),
+    /// Makes the start on signing in what the user chose; the check in the tray and the options
+    /// show what holds afterwards.
+    fn choose_start(&mut self, choice: AutoStart) {
+        let result = apply_start(
+            &mut self.settings,
+            ffi::RUN_KEY,
+            ffi::RUN_VALUE,
+            this_program,
+            choice,
+        );
+        self.options_problem = result.as_ref().err().cloned();
+        if let Err(problem) = result {
+            self.notes.push(problem);
         }
         if let Some(tray) = &self.tray {
             tray.set_autostart(self.settings.settings.autostart);
         }
+    }
+
+    /// Turns the start on signing in over, from the check in the tray; the way it starts stays.
+    fn turn_autostart(&mut self) {
+        let mut choice = self.settings.settings.auto_start();
+        choice.on = !choice.on;
+        self.choose_start(choice);
     }
 
     fn use_desk(&mut self, desk: Box<dyn Desk>) {
@@ -199,6 +218,7 @@ impl App {
 
     fn hide(&mut self, ctx: &egui::Context) {
         self.window = Window::Hidden;
+        self.options_open = false;
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
     }
 
@@ -238,6 +258,22 @@ impl App {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 self.window = Window::Asking;
             }
+        }
+    }
+
+    /// Draws the options while they are up; a dialog over whatever the window shows.
+    fn options(&mut self, ui: &mut egui::Ui) {
+        if !self.options_open || self.window != Window::Shown {
+            return;
+        }
+        let start = self.settings.settings.auto_start();
+        let answer = options::show(ui, start, self.options_problem.as_deref());
+        if let Some(choice) = answer.choice {
+            self.choose_start(choice);
+        }
+        if answer.close {
+            self.options_open = false;
+            self.options_problem = None;
         }
     }
 
@@ -309,6 +345,10 @@ impl eframe::App for App {
             for action in console::show(ui, &view, &mut self.state, now) {
                 self.state.act(desk.as_mut(), view.elapsed, action);
             }
+            if self.state.take_options_asked() {
+                self.options_open = true;
+            }
+            self.options(ui);
             if self.window == Window::Asking {
                 match tray::hint(ui) {
                     Some(Answer::ToTray) => {
@@ -338,6 +378,7 @@ impl eframe::App for App {
             })
             .inner;
         match choice {
+            Some(Choice::Options) => self.options_open = true,
             Some(Choice::Retry) => self.open_profile(ui.ctx()),
             Some(Choice::Demo) => {
                 self.profile = None;
@@ -345,34 +386,45 @@ impl eframe::App for App {
             }
             None => {}
         }
+        self.options(ui);
     }
 }
 
-/// What Windows runs on signing in: this program, into the tray.
-#[cfg(windows)]
-fn autostart_command(exe: &Path) -> String {
-    format!("\"{}\" --tray", exe.display())
+/// The path of this program, as the system can be told it.
+fn this_program() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("where is pult-app? {e}"))?;
+    exe.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "the path of pult-app cannot be written down: it is not Unicode".to_owned())
 }
 
-/// What `ffi` writes into the file of the start on signing in: this program, without its words.
-#[cfg(not(windows))]
-fn autostart_command(exe: &Path) -> String {
-    exe.display().to_string()
+/// Makes the start on signing in at `key`, `name` what `choice` says: the system first, then the
+/// settings, so these never claim what the system did not take.
+fn apply_start(
+    stored: &mut Stored,
+    key: &str,
+    name: &str,
+    program: impl FnOnce() -> Result<String, String>,
+    choice: AutoStart,
+) -> Result<(), String> {
+    let exe = if choice.on { Some(program()?) } else { None };
+    ffi::set_run(key, name, exe.as_deref().map(|exe| (exe, choice.mode)))
+        .map_err(|e| format!("could not change the start on signing in: {e}"))?;
+    stored.change(|s| s.set_auto_start(choice))
 }
 
-/// Lets the system start pult on signing in, or no longer.
-fn set_autostart(on: bool) -> Result<(), String> {
-    let command = if on {
-        let exe = std::env::current_exe().map_err(|e| format!("where is pult-app? {e}"))?;
-        if exe.to_str().is_none() {
-            return Err("the path of pult-app cannot be written down: it is not Unicode".into());
-        }
-        Some(autostart_command(&exe))
-    } else {
-        None
-    };
-    ffi::set_run(ffi::RUN_KEY, ffi::RUN_VALUE, command.as_deref())
-        .map_err(|e| format!("could not change the start on signing in: {e}"))
+/// Takes the start on signing in from the system at `key`, `name`: what it will do counts, not
+/// what was noted here. An uninstall takes the value away and leaves the settings, and an install
+/// after it must not show a check that holds nothing; the way it starts is kept for next time.
+fn follow_the_system(stored: &mut Stored, key: &str, name: &str) -> Result<(), String> {
+    let system = ffi::run_start(key, name);
+    let kept = stored.settings.start_mode;
+    stored.change(|s| {
+        s.set_auto_start(AutoStart {
+            on: system.is_some(),
+            mode: system.unwrap_or(kept),
+        });
+    })
 }
 
 /// Shows the window when another start of pult-app asks for it (see `main`).
@@ -384,8 +436,8 @@ fn listen_for_later_starts(ctx: &egui::Context, commands: &Sender<Command>) {
     });
 }
 
-/// Whether a start that finds pult-app running brings its window up: all but the start with
-/// Windows (`--tray`), which then has nothing to do and leaves the window where it is.
+/// Whether a start that finds pult-app running brings its window up: all but the start in the
+/// background (`--tray`), which then has nothing to do and leaves the window where it is.
 fn brings_up_the_window(start: &Start) -> bool {
     *start != Start::Tray
 }
@@ -480,6 +532,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pult_app::settings::StartMode;
 
     #[test]
     fn a_later_start_says_what_happened() {
@@ -496,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_start_with_windows_leaves_a_running_window_alone() {
+    fn only_the_start_in_the_background_leaves_a_running_window_alone() {
         assert!(!brings_up_the_window(&Start::Tray));
         assert!(brings_up_the_window(&Start::Nothing));
         assert!(brings_up_the_window(&Start::Demo));
@@ -505,21 +558,165 @@ mod tests {
         ))));
     }
 
+    const EXE: &str = "/opt/my apps/pult-app";
+
+    /// A settings file of one test; `place` keeps the start of that test apart from the system's.
+    struct Place {
+        place: ffi::TestPlace,
+        file: PathBuf,
+    }
+
+    impl Place {
+        fn new(what: &str) -> Self {
+            let file = std::env::temp_dir()
+                .join(format!("pult-app-main-{what}-{}", std::process::id()))
+                .join("settings.toml");
+            let _ = std::fs::remove_dir_all(file.parent().unwrap());
+            Self {
+                place: ffi::TestPlace::new(what),
+                file,
+            }
+        }
+
+        /// The settings as the next start of pult finds them: read again, then the system asked.
+        fn restarted(&self) -> Stored {
+            let (mut stored, note) = Stored::load(Some(self.file.clone()));
+            assert_eq!(note, None);
+            follow_the_system(&mut stored, self.place.key(), "pult").unwrap();
+            stored
+        }
+
+        fn choose(&self, stored: &mut Stored, choice: AutoStart) {
+            apply_start(
+                stored,
+                self.place.key(),
+                "pult",
+                || Ok(EXE.to_owned()),
+                choice,
+            )
+            .unwrap();
+        }
+    }
+
+    impl Drop for Place {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.file.parent().unwrap());
+        }
+    }
+
     #[test]
-    #[cfg(windows)]
-    fn windows_starts_this_program_into_the_tray() {
+    fn a_choice_reaches_the_system_and_survives_a_restart() {
+        let place = Place::new("choice");
+        let key = place.place.key();
+        let mut stored = place.restarted();
+        assert_eq!(stored.settings.auto_start(), AutoStart::default(), "off");
+        assert_eq!(ffi::run_start(key, "pult"), None);
+
+        let tray = AutoStart {
+            on: true,
+            mode: StartMode::Tray,
+        };
+        place.choose(&mut stored, tray);
+        assert_eq!(ffi::run_start(key, "pult"), Some(StartMode::Tray));
+        assert_eq!(place.restarted().settings.auto_start(), tray);
+
+        let window = AutoStart {
+            on: true,
+            mode: StartMode::Window,
+        };
+        place.choose(&mut stored, window);
+        assert_eq!(ffi::run_start(key, "pult"), Some(StartMode::Window));
+        assert_eq!(place.restarted().settings.auto_start(), window);
+    }
+
+    #[test]
+    fn turning_it_off_takes_the_start_away_and_keeps_the_way_it_starts() {
+        let place = Place::new("off");
+        let key = place.place.key();
+        let mut stored = place.restarted();
+        let window = AutoStart {
+            on: true,
+            mode: StartMode::Window,
+        };
+        place.choose(&mut stored, window);
+        let off = AutoStart {
+            on: false,
+            mode: StartMode::Window,
+        };
+        place.choose(&mut stored, off);
+        assert_eq!(ffi::run_start(key, "pult"), None);
+        let mut again = place.restarted();
+        assert_eq!(again.settings.auto_start(), off);
+        place.choose(&mut again, AutoStart { on: true, ..off });
+        assert_eq!(ffi::run_start(key, "pult"), Some(StartMode::Window));
+    }
+
+    #[test]
+    fn what_the_system_has_counts_over_what_was_noted() {
+        let place = Place::new("system");
+        let key = place.place.key();
+        let mut stored = place.restarted();
+        place.choose(
+            &mut stored,
+            AutoStart {
+                on: true,
+                mode: StartMode::Window,
+            },
+        );
+        // An uninstall takes the value away and leaves the settings.
+        ffi::set_run(key, "pult", None).unwrap();
+        let stored = place.restarted();
         assert_eq!(
-            autostart_command(Path::new(r"C:\Program Files\pult\pult-app.exe")),
-            r#""C:\Program Files\pult\pult-app.exe" --tray"#
+            stored.settings.auto_start(),
+            AutoStart {
+                on: false,
+                mode: StartMode::Window
+            },
+            "no check that holds nothing, the way it starts stays for next time"
+        );
+        // Another copy of pult set it the other way.
+        ffi::set_run(key, "pult", Some((EXE, StartMode::Tray))).unwrap();
+        assert_eq!(
+            place.restarted().settings.auto_start(),
+            AutoStart {
+                on: true,
+                mode: StartMode::Tray
+            }
         );
     }
 
     #[test]
-    #[cfg(not(windows))]
-    fn elsewhere_the_file_of_the_start_gets_this_program_alone() {
-        assert_eq!(
-            autostart_command(Path::new("/opt/my apps/pult-app")),
-            "/opt/my apps/pult-app"
+    fn a_choice_the_system_did_not_take_is_not_claimed() {
+        let place = Place::new("refused");
+        let key = place.place.key();
+        let mut stored = place.restarted();
+        let refused = apply_start(
+            &mut stored,
+            key,
+            "pult",
+            || Err("no path".to_owned()),
+            AutoStart {
+                on: true,
+                mode: StartMode::Window,
+            },
         );
+        assert!(refused.is_err());
+        assert_eq!(stored.settings.auto_start(), AutoStart::default());
+        assert_eq!(ffi::run_start(key, "pult"), None);
+    }
+
+    #[test]
+    fn turning_it_off_does_not_need_the_path_of_the_program() {
+        let place = Place::new("nopath");
+        let mut stored = place.restarted();
+        let off = AutoStart::default();
+        let result = apply_start(
+            &mut stored,
+            place.place.key(),
+            "pult",
+            || Err("no path".to_owned()),
+            off,
+        );
+        assert_eq!(result, Ok(()));
     }
 }

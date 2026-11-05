@@ -7,9 +7,11 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, HarnessBuilder};
 use pult_app::console::{self, ConsoleState, Tab};
 use pult_app::log::Source;
+use pult_app::options::{self, BACKGROUND_LABEL};
+use pult_app::settings::{AutoStart, StartMode};
 use pult_app::start::{self, Choice};
 use pult_app::theme::Theme;
-use pult_app::tray::{self, Answer};
+use pult_app::tray::{self, Answer, START_LABEL};
 use pult_core::view::{Desk, FakeDesk, MixerView};
 
 /// `FakeDesk`'s third input: -3 dB, on bus A2 only.
@@ -267,7 +269,12 @@ fn the_start_screen_offers_a_retry_and_the_demo() {
     harness.run_steps(2);
     harness.get_by_label("Demo desk").click();
     harness.run_steps(2);
-    assert_eq!(harness.state(), &[Choice::Retry, Choice::Demo]);
+    harness.get_by_label("Options").click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state(),
+        &[Choice::Retry, Choice::Demo, Choice::Options]
+    );
 
     // Without a profile there is nothing to try again.
     let harness = HarnessBuilder::default()
@@ -276,6 +283,10 @@ fn the_start_screen_offers_a_retry_and_the_demo() {
             start::screen(ui, None, None);
         });
     assert!(harness.query_by_label("Try again").is_none());
+    assert!(
+        harness.query_by_label("Options").is_some(),
+        "the options matter before the first profile too"
+    );
 }
 
 #[test]
@@ -391,4 +402,217 @@ fn a_cut_name_shows_in_full_on_hover() {
     harness.get_by_label(device).hover();
     harness.run_steps(30);
     assert_eq!(harness.get_all_by_label(device).count(), 2, "no tooltip");
+}
+
+/// The options as the window keeps them: what the user chooses holds at once.
+struct Options {
+    start: AutoStart,
+    problem: Option<String>,
+    closed: bool,
+}
+
+fn options_harness(start: AutoStart, problem: Option<&str>) -> Harness<'static, Options> {
+    let state = Options {
+        start,
+        problem: problem.map(str::to_owned),
+        closed: false,
+    };
+    let mut harness = HarnessBuilder::default()
+        .with_size(vec2(800.0, 500.0))
+        .build_ui_state(
+            |ui, state: &mut Options| {
+                Theme::current().apply(ui.ctx());
+                let answer = options::show(ui, state.start, state.problem.as_deref());
+                if let Some(choice) = answer.choice {
+                    state.start = choice;
+                }
+                state.closed |= answer.close;
+            },
+            state,
+        );
+    harness.run_steps(2);
+    harness
+}
+
+const OFF: AutoStart = AutoStart {
+    on: false,
+    mode: StartMode::Tray,
+};
+
+#[test]
+fn the_start_with_the_system_is_a_check_and_off_by_default() {
+    assert_eq!(AutoStart::default(), OFF);
+    let mut harness = options_harness(OFF, None);
+    assert!(
+        harness
+            .query_by_label_contains("only when you start it")
+            .is_some()
+    );
+    harness.get_by_label(START_LABEL).click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().start,
+        AutoStart {
+            on: true,
+            mode: StartMode::Tray
+        },
+        "turned on, it comes up in the background"
+    );
+    assert!(
+        harness
+            .query_by_label_contains("stays in the tray")
+            .is_some()
+    );
+    harness.get_by_label(START_LABEL).click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().start, OFF);
+}
+
+#[test]
+fn the_way_it_starts_can_be_chosen_while_it_starts() {
+    let on = AutoStart {
+        on: true,
+        mode: StartMode::Tray,
+    };
+    let mut harness = options_harness(on, None);
+    harness.get_by_label(BACKGROUND_LABEL).click();
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().start,
+        AutoStart {
+            on: true,
+            mode: StartMode::Window
+        },
+    );
+    assert!(
+        harness
+            .query_by_label_contains("opens its window")
+            .is_some()
+    );
+    harness.get_by_label(BACKGROUND_LABEL).click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().start, on);
+}
+
+#[test]
+fn the_way_it_starts_does_nothing_while_it_does_not_start() {
+    let off = AutoStart {
+        on: false,
+        mode: StartMode::Window,
+    };
+    let mut harness = options_harness(off, None);
+    assert!(
+        harness
+            .get_by_label(BACKGROUND_LABEL)
+            .accesskit_node()
+            .is_disabled()
+    );
+    harness.get_by_label(BACKGROUND_LABEL).click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().start, off);
+    // Turning it on brings the choice back.
+    harness.get_by_label(START_LABEL).click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().start, AutoStart { on: true, ..off });
+    assert!(
+        !harness
+            .get_by_label(BACKGROUND_LABEL)
+            .accesskit_node()
+            .is_disabled()
+    );
+}
+
+#[test]
+fn the_options_say_why_a_choice_did_not_take_and_close() {
+    let mut harness = options_harness(OFF, Some("could not change the start on signing in: no"));
+    assert!(
+        harness
+            .query_by_label_contains("could not change")
+            .is_some()
+    );
+    assert!(!harness.state().closed);
+    harness.get_by_label("Close").click();
+    harness.run_steps(2);
+    assert!(harness.state().closed);
+}
+
+#[test]
+fn escape_closes_the_options() {
+    let mut harness = options_harness(OFF, None);
+    harness.key_press(Key::Escape);
+    harness.run_steps(2);
+    assert!(harness.state().closed);
+}
+
+#[test]
+fn the_header_asks_for_the_options_once() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    assert!(!harness.state_mut().state.take_options_asked());
+    harness.get_by_label("Options").click();
+    harness.run_steps(2);
+    assert!(harness.state_mut().state.take_options_asked());
+    assert!(!harness.state_mut().state.take_options_asked());
+}
+
+/// The console with the dialog over it, wired as the window wires them.
+struct Window {
+    desk: FakeDesk,
+    state: ConsoleState,
+    start: AutoStart,
+    open: bool,
+}
+
+#[test]
+fn the_options_open_over_the_console_and_every_name_is_unique() {
+    let window = Window {
+        desk: FakeDesk::new(),
+        state: ConsoleState::default(),
+        start: OFF,
+        open: false,
+    };
+    let mut harness = HarnessBuilder::default()
+        .with_size(vec2(1280.0, 760.0))
+        .with_step_dt(1.0 / 30.0)
+        .build_ui_state(
+            |ui, window: &mut Window| {
+                Theme::current().apply(ui.ctx());
+                let view = window.desk.view();
+                let _ = console::show(ui, &view, &mut window.state, 0.0);
+                if window.state.take_options_asked() {
+                    window.open = true;
+                }
+                if window.open {
+                    let answer = options::show(ui, window.start, None);
+                    if let Some(choice) = answer.choice {
+                        window.start = choice;
+                    }
+                    window.open = !answer.close;
+                }
+            },
+            window,
+        );
+    harness.run_steps(2);
+    assert!(harness.query_by_label(START_LABEL).is_none(), "not up yet");
+    harness.get_by_label("Options").click();
+    harness.run_steps(4);
+    assert!(
+        harness.state().open,
+        "the click that opens them does not close them"
+    );
+
+    // `get_by_label` refuses a name that is there twice, as a test sheet and a screen reader
+    // cannot tell such controls apart.
+    for name in ["Options", START_LABEL, BACKGROUND_LABEL, "Close"] {
+        let _ = harness.get_by_label(name);
+    }
+
+    harness.get_by_label(START_LABEL).click();
+    harness.run_steps(2);
+    assert!(harness.state().start.on);
+    assert!(harness.state().open, "a choice leaves them up");
+    harness.get_by_label("Close").click();
+    harness.run_steps(2);
+    assert!(!harness.state().open);
+    assert!(harness.state().start.on, "closing keeps the choice");
 }

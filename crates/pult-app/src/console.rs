@@ -35,6 +35,8 @@ pub struct ConsoleState {
     bus_clipped: Vec<u64>,
     /// What the desk reported and refused, oldest first.
     log: Log,
+    /// "Options" was clicked; the window takes it from here.
+    options_asked: bool,
 }
 
 impl ConsoleState {
@@ -87,6 +89,12 @@ impl ConsoleState {
     /// Notes a problem with the settings of the window at `elapsed`, as the status line shows.
     pub fn settings_problem(&mut self, elapsed: Duration, problem: &str) {
         self.log.settings(elapsed, problem);
+    }
+
+    /// Whether "Options" was clicked since the last time this was asked; the dialog belongs to
+    /// the window, as the start screen has it too.
+    pub fn take_options_asked(&mut self) -> bool {
+        std::mem::take(&mut self.options_asked)
     }
 
     #[must_use]
@@ -166,6 +174,9 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            if ui.button("Options").clicked() {
+                state.options_asked = true;
+            }
             if ui.button("Save profile").clicked() {
                 actions.push(Action::SaveProfile { path: None });
             }

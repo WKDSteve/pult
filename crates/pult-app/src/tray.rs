@@ -1,7 +1,8 @@
 //! The icon in the notification area: the window hides there while the route keeps playing.
 //!
 //! A click on the icon or "Show pult" brings the window back; "Quit pult" ends the route and
-//! the program; [`START_LABEL`] turns the start into the tray on signing in on or off. Closing the window only hides it while a desk is open, so nothing stops
+//! the program; [`START_LABEL`] turns the start on signing in on or off, the way it comes up stays
+//! as chosen in the options (`options`). Closing the window only hides it while a desk is open, so nothing stops
 //! playing by accident; with nothing open, closing quits as before.
 
 use std::sync::mpsc::Sender;
@@ -13,7 +14,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 
 use crate::theme::Theme;
 
-/// The menu's words for the start into the tray on signing in, as the system calls it.
+/// The words for the start on signing in, in the menu and the options, as the system calls it.
 pub const START_LABEL: &str = if cfg!(windows) {
     "Start with Windows"
 } else {

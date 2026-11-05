@@ -356,6 +356,19 @@ Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün,
 Mit `my.nvim` gibt es dieselben Wörter als `:My pult` (`:My pult scene abend`), mit Vervollständigung von Befehlen, Szenen,
 Eingängen und Bussen; einen Namen aus mehreren Wörtern vervollständigt es Wort für Wort. `pult` muss dafür im `PATH` liegen, oder `vim.g.pult_exe` nennt das Programm.
 
+## 9. Beim Anmelden starten
+
+**Options** im Fenster (in der Kopfzeile, ohne offenes Profil auf dem Startbildschirm) hat zwei Häkchen:
+
+- **Start with Windows** (auf Linux und macOS **Start on login**): pult startet, sobald du dich anmeldest. Standard: aus.
+  Dasselbe Häkchen steht im Tray-Menü.
+- **Start in the background**: Dann läuft das zuletzt geöffnete Profil, und das Fenster bleibt im Tray. Ohne dieses Häkchen
+  öffnet sich das Fenster. Es wirkt nur, solange das erste an ist.
+
+Windows merkt sich das als Wert `pult` unter `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`: `"…\pult-app.exe" --tray`
+für den Hintergrund, `"…\pult-app.exe"` für das offene Fenster. Was dort steht, gilt: pult liest es bei jedem Start. Ein
+Update behält deine Wahl, eine Deinstallation nimmt den Wert mit.
+
 ## Fehlermeldungen
 
 | Meldung | Ursache und Abhilfe |
