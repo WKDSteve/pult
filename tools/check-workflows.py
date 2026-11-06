@@ -3,7 +3,7 @@
 
     python tools/check-workflows.py [--online] [--dir .github/workflows]
 
-The workflows run on the author's self-hosted Windows runner of a private repository and publish
+The workflows run on the author's self-hosted Windows runner and publish
 releases, so a few rules are kept by a check instead of by memory. The files are read by a small
 parser of the YAML these workflows use (block mappings and lists, flow lists, block scalars; no
 anchors, no flow mappings, no multi-line plain scalars): anything it does not know is a problem, never

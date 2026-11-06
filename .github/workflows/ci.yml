@@ -1,7 +1,7 @@
 # CI of pult.
 #
-# Runs on a self-hosted runner (the author's Windows machine), by choice: the repository is
-# private, and Linux is reached through its WSL. Without a running runner a push stays "Queued". No
+# Runs on a self-hosted runner (the author's Windows machine), by choice: pult is
+# Windows-only, and Linux is reached through its WSL. Without a running runner a push stays "Queued". No
 # `pull_request` trigger on purpose: a pull request would run its own workflow with the author's
 # rights on this machine.
 #

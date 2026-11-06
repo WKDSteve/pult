@@ -6,7 +6,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 
 > **Status (2026-11-03): Stufe 2 fertig, Stufe 3 (native Oberfläche) im Bau.** Ein Kommandozeilen-Programm, das Eingangsgeräte mischt und auf einen oder mehrere Ausgänge (Busse) spielt, zum Beispiel alle Programme über ein virtuelles Kabel auf das Scarlett 2i2 und weiter zum Verstärker; am echten Aufbau 2 Stunden ohne Aussetzer gelaufen. Welcher Eingang auf welchen Bus geht, mit Gain, Mute und Pan, steht in einem Profil (TOML); während des Laufs lassen sich die Regler per Befehl ändern und als Profil speichern. Pegel, Aussetzer und die Korrektur der Takt-Drift erscheinen live in der Konsole; jeder Eingang läuft durch einen adaptiven Resampler, der dem Takt des Ausgangs folgt. Ein abgestecktes Gerät beendet den Lauf nicht: der Rest spielt weiter, das Gerät wird wieder aufgenommen, sobald es zurück ist. Auch der Ton eines einzelnen Programms kann ein Eingang sein (Prozess-Loopback). Geräte dürfen verschiedene Abtastraten haben. Noch ohne Oberfläche. Einrichtung und Bedienung: [docs/USAGE.md](docs/USAGE.md).
 
-**English.** pult is a personal virtual audio mixer for Windows written in Rust (so far a command line router that mixes input devices onto one or more output buses, configured by a TOML profile). Private, non-commercial; the documentation is in German on purpose, code and commit messages are in English.
+**English.** pult is a personal virtual audio mixer for Windows written in Rust (so far a command line router that mixes input devices onto one or more output buses, configured by a TOML profile). A personal, non-commercial project; the documentation is in German on purpose, code and commit messages are in English.
 
 ## Was geht schon
 
@@ -65,7 +65,7 @@ Die Toolchain gibt `rust-toolchain.toml` vor, die CI läuft auf einem Self-hoste
 
 ## Installieren
 
-Alles für den eigenen Benutzer, ohne Setup und ohne Adminrechte: Programme und Skripte nach `%LOCALAPPDATA%\pult\bin`, ein Startmenü-Eintrag „pult“ für das Fenster und ein Eintrag in *Einstellungen > Apps*. Profile und `%APPDATA%\pult` bleiben unberührt. Ein laufendes pult spielt beim Update mit dem alten Programm weiter, bis es geschlossen wird. Nichts ist signiert; nur für private Rechner, nicht für die Tricentis-Workstation.
+Alles für den eigenen Benutzer, ohne Setup und ohne Adminrechte: Programme und Skripte nach `%LOCALAPPDATA%\pult\bin`, ein Startmenü-Eintrag „pult“ für das Fenster und ein Eintrag in *Einstellungen > Apps*. Profile und `%APPDATA%\pult` bleiben unberührt. Ein laufendes pult spielt beim Update mit dem alten Programm weiter, bis es geschlossen wird. Nichts ist signiert; nur für private Rechner, nicht für einen verwalteten Arbeitsrechner.
 
 - **Rolling-Build:** Nach jedem grünen CI-Lauf auf `main` liegt der Stand auf dem Pre-Release [`latest`](https://github.com/WKDSteve/pult/releases/tag/latest) als `pult-windows-x86_64.zip`.
 

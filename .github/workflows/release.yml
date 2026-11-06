@@ -10,8 +10,8 @@
 # The kit's own stamped install.ps1 is not used: it needs one program with an `install` command (kind hub) or a
 # setup (nsis, inno), and pult is two programs. The install script is in the zip.
 #
-# Runs on the self-hosted Windows runner of the maintainer (`runs-on: [self-hosted, windows]`, the repository is
-# private), so only Windows is built. The release-kit actions run there by Git Bash. appkit is public and read
+# Runs on the self-hosted Windows runner of the maintainer (`runs-on: [self-hosted, windows]`, by the
+# author's choice), so only Windows is built. The release-kit actions run there by Git Bash. appkit is public and read
 # without credentials.
 #
 # Before anything is built: the tag, the version of the workspace in Cargo.toml and the main branch agree, and the
