@@ -1,5 +1,5 @@
-//! The device-free heart of pult: levels, channel mapping, drift control and the mixer that
-//! the audio callbacks drive.
+//! The device-free heart of pult: levels, channel mapping, drift control, gate, compressor and
+//! equalizer, and the mixer that the audio callbacks drive.
 //!
 //! Nothing here touches a device, a file or the clock, so all of it runs in plain tests.
 //! The realtime rule of the callbacks holds for every function they call: no allocation, no
@@ -16,6 +16,8 @@ mod binding;
 pub mod control;
 pub mod drift;
 pub mod dropouts;
+pub mod dynamics;
+pub mod eq;
 pub mod level;
 pub mod midi;
 pub mod mixer;
@@ -30,6 +32,10 @@ pub mod view;
 
 pub use drift::{DriftControl, Event, Plan};
 pub use dropouts::Dropouts;
+pub use dynamics::{
+    Compressor, CompressorControls, CompressorParams, Gate, GateControls, GateParams,
+};
+pub use eq::{Band, BandKind, EQ_BANDS, EqControls, Equalizer};
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
 pub use mixer::{
     BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,
