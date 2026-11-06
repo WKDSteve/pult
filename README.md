@@ -23,7 +23,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Verschiedene Abtastraten: jeder Eingang wird auf die Rate seines Busses umgerechnet (44,1 / 48 / 96 kHz gemischt) | fertig (Stufe 2) |
 | Geräte ab- und anstecken während des Laufs (Hot-Plug): der Rest spielt weiter, das Gerät kommt von selbst zurück | fertig, am echten Aufbau geprüft |
 | Ton einzelner Programme als Eingang (Prozess-Loopback, `--from app:Spotify`, `pult programs`); beendet sich das Programm, wird es beim Neustart wieder aufgenommen | fertig |
-| Szenen im Profil: Gain, Pan, Mute und Matrix wechseln ohne Aussetzer, auf Wunsch weich überblendet; keine Änderung springt mehr (`docs/USAGE.md`) | fertig |
+| Szenen im Profil: Gain, Pan, Mute, Matrix, Gate, Kompressor und EQ wechseln ohne Aussetzer, auf Wunsch weich überblendet; keine Änderung springt mehr (`docs/USAGE.md`) | fertig |
 | Steuern von außen: `pult mute mikro`, `:My pult` in Neovim, eine Fernbedienung im Browser (`pult open`), Kachel im Hub, MIDI-Controller (`pult learn`) (`docs/USAGE.md`, `docs/CONTROL.md`) | fertig |
 | Gate und Kompressor je Eingang, je ein Regler von 0 (aus) bis 10: `gate 2 3`, `comp 2 4`, im Profil, von außen, per MIDI und im Fenster (`docs/USAGE.md`) | fertig |
 | Parametrischer EQ je Bus, 4 Bänder (Kuhschwanz oder Glocke): `eq A1 2 gain 6`, im Profil als `[[bus.eq]]`, von außen, per MIDI und im Fenster auf dem Tab **EQ** (`docs/USAGE.md`) | fertig |

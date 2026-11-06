@@ -182,7 +182,7 @@ pult run --profile meinprofil.toml --log abend.csv
   Seite hin wird die andere leiser. Wirkt nur auf Ausgänge mit mindestens zwei Kanälen.
 - **Gate und Kompressor:** Jeder Eingang hat beides, mit je einem Regler von 0 (aus) bis 10, vor seinem Fader.
   Das **Gate** lässt nur durch, was lauter ist als eine Schwelle: bei 1 liegt sie bei -56 dB, bei 10 bei -20 dB. So bleibt
-  ein Mikrofon zwischen den Wörtern still. Es öffnet in 1 ms, hält 150 ms und schließt in 200 ms. Der **Kompressor** macht
+  ein Mikrofon zwischen den Wörtern still. Es öffnet in 1 ms, hält rund 150 bis 220 ms (je lauter es vorher war, desto länger) und schließt in 200 ms. Der **Kompressor** macht
   einen Eingang gleichmäßiger und insgesamt lauter: Je höher der Regler, desto tiefer die Schwelle (bis -30 dB), desto
   stärker das Verhältnis (bis 8:1) und desto mehr Pegel kommt danach dazu (bis 12 dB). Vollaussteuerung kommt dabei nie
   über Vollaussteuerung heraus. Beide messen den lautesten Kanal und regeln alle Kanäle gleich, das Stereobild bleibt.
@@ -227,6 +227,10 @@ mute = false                 # außerdem gain_db und eq_on
 band = 2
 gain_db = 3                  # außerdem kind, freq_hz und q
 ```
+
+Gate, Kompressor und die Bänder des EQ gehen dabei in ihrer eigenen Zeit, nicht in der von `blend_ms`. Die Schlüssel eines
+Busses (`gain_db`, `mute`, `eq_on`) stehen vor seinem ersten `[[bus.eq]]` bzw. `[[scene.bus.eq]]`: Dahinter gehören sie in
+TOML schon zum Band.
 
 Gewechselt wird mit `scene abend` (Groß- und Kleinschreibung zählen nicht), im Fenster über das Menü **Scene** oder von
 außen ([`CONTROL.md`](CONTROL.md)). Wer danach speichert, speichert die Werte der Szene als Stand des Profils; die Szenen

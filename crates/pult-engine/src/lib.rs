@@ -470,15 +470,32 @@ impl RouteSpec {
                     && change.buses.as_ref().is_none_or(|buses| {
                         !buses.is_empty() && buses.iter().all(|&bus| bus < self.buses.len())
                     })
-            }) && scene.buses.iter().all(|change| {
-                change.bus < self.buses.len() && change.eq.iter().all(|(band, _)| *band < EQ_BANDS)
-            });
+                    && [change.gate, change.comp]
+                        .into_iter()
+                        .flatten()
+                        .all(|amount| pult_core::view::check_amount("", amount).is_ok())
+            }) && scene
+                .buses
+                .iter()
+                .all(|change| change.bus < self.buses.len() && scene_bands_fit(&change.eq));
             if !fits {
                 return invalid(format!("scene \"{}\" does not fit the route", scene.name));
             }
         }
         Ok(())
     }
+}
+
+/// Whether a scene's settings of bands name bands there are, with values in their ranges, and each
+/// band in one piece, which is how a profile writes them.
+fn scene_bands_fit(settings: &[(usize, BandChange)]) -> bool {
+    let mut seen = [false; EQ_BANDS];
+    settings
+        .iter()
+        .all(|(band, setting)| *band < EQ_BANDS && setting.checked().is_ok())
+        && settings
+            .chunk_by(|a, b| a.0 == b.0)
+            .all(|piece| !std::mem::replace(&mut seen[piece[0].0], true))
 }
 
 /// One ring of a running input: its way onto one bus. Every input has one for every bus;
@@ -1249,6 +1266,46 @@ mod tests {
         assert!(
             invalid(&route(vec![InputSpec::new("a", 0.0, vec![1, 1])], 2)).contains("A2 twice")
         );
+        // What a scene sets is checked like what a profile sets, wherever the route comes from.
+        let with_scene = |input: SceneInput, bus: SceneBus| {
+            let mut spec = route(vec![InputSpec::new("a", 0.0, vec![0])], 1);
+            spec.scenes = vec![SceneSpec {
+                name: "s".into(),
+                inputs: vec![input],
+                buses: vec![bus],
+                ..SceneSpec::default()
+            }];
+            spec
+        };
+        let band = |settings: Vec<(usize, BandChange)>| {
+            with_scene(
+                SceneInput::default(),
+                SceneBus {
+                    eq: settings,
+                    ..SceneBus::default()
+                },
+            )
+        };
+        let (one, two) = (BandChange::Gain(1.0), BandChange::Q(2.0));
+        assert!(band(vec![(1, one), (1, two), (2, one)]).validate().is_ok());
+        for bad in [
+            vec![(EQ_BANDS, one)],
+            vec![(0, BandChange::Gain(99.0))],
+            vec![(0, BandChange::Q(f32::NAN))],
+            vec![(0, one), (1, one), (0, two)],
+        ] {
+            assert!(invalid(&band(bad)).contains("does not fit"));
+        }
+        for amount in [11.0, -1.0, f32::NAN] {
+            let scene = with_scene(
+                SceneInput {
+                    gate: Some(amount),
+                    ..SceneInput::default()
+                },
+                SceneBus::default(),
+            );
+            assert!(invalid(&scene).contains("does not fit"), "{amount}");
+        }
         let mut sharp = route(vec![InputSpec::new("a", 0.0, vec![0])], 1);
         sharp.buses[0].eq[2].q = 50.0;
         assert!(invalid(&sharp).contains("bus A1, band 3: the q of a band must be 0.1 to 10"));

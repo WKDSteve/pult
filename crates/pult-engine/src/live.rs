@@ -7,10 +7,10 @@ use std::sync::atomic::Ordering;
 
 use pult_core::control::{Command, HELP, Target, search_name};
 use pult_core::view::{band_line, check_amount, eq_summary};
-use pult_core::{EQ_BANDS, MAX_RAMP_MS, db_to_linear};
+use pult_core::{EQ_BANDS, EqControls, InputControls, MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
-use crate::{RouteSpec, Running, SceneSpec};
+use crate::{BusSpec, InputSpec, RouteSpec, Running, SceneBus, SceneInput, SceneSpec};
 
 impl Running {
     /// The input names a command may name, labels included, in route order.
@@ -188,9 +188,10 @@ impl Running {
         self.spec.inputs[input].pan = pan;
     }
 
-    /// Changes to the scene called `name`, ignoring case: all its values together, over its
-    /// blend time. Only values change, so nothing interrupts the sound. Saving afterwards saves
-    /// them as the state of the route, as with any other change.
+    /// Changes to the scene called `name`, ignoring case: all its values together, gains, pans,
+    /// mutes and routes over its blend time, gate, compressor and equalizer along their own times.
+    /// Only values change, so nothing interrupts the sound. Saving afterwards saves them as the
+    /// state of the route, as with any other change.
     ///
     /// # Errors
     ///
@@ -237,17 +238,11 @@ impl Running {
                 }
                 self.spec.inputs[change.input].buses.clone_from(buses);
             }
-            if let Some(amount) = change.gate {
-                self.inputs[change.input].controls.gate.set_simple(amount);
-                self.spec.inputs[change.input].gate = amount;
-            }
-            if let Some(amount) = change.comp {
-                self.inputs[change.input]
-                    .controls
-                    .compressor
-                    .set_simple(amount);
-                self.spec.inputs[change.input].comp = amount;
-            }
+            scene_dynamics(
+                change,
+                &self.inputs[change.input].controls,
+                &mut self.spec.inputs[change.input],
+            );
         }
         for change in &scene.buses {
             let target = Target::Bus(change.bus);
@@ -257,23 +252,11 @@ impl Running {
             if let Some(muted) = change.muted {
                 self.set_mute(target, muted, blend);
             }
-            let (eq, spec) = (
+            scene_equalizer(
+                change,
                 &self.buses[change.bus].handle.controls.eq,
                 &mut self.spec.buses[change.bus],
             );
-            if let Some(on) = change.eq_on {
-                eq.switch(on);
-                spec.eq_on = on;
-            }
-            for (band, setting) in &change.eq {
-                // The profile checked both.
-                if let Some(set) = spec.eq.get_mut(*band)
-                    && let Ok(changed) = set.changed(*setting)
-                {
-                    *set = changed;
-                    eq.set(*band, changed);
-                }
-            }
         }
     }
 
@@ -375,6 +358,35 @@ impl Running {
     }
 }
 
+/// What a scene changes of the gate and the compressor of an input, in its controls and its spec.
+fn scene_dynamics(change: &SceneInput, controls: &InputControls, spec: &mut InputSpec) {
+    if let Some(amount) = change.gate {
+        controls.gate.set_simple(amount);
+        spec.gate = amount;
+    }
+    if let Some(amount) = change.comp {
+        controls.compressor.set_simple(amount);
+        spec.comp = amount;
+    }
+}
+
+/// What a scene changes of the equalizer of a bus, in its controls and its spec. The route's
+/// validation checked its bands and values.
+fn scene_equalizer(change: &SceneBus, eq: &EqControls, spec: &mut BusSpec) {
+    if let Some(on) = change.eq_on {
+        eq.switch(on);
+        spec.eq_on = on;
+    }
+    for (band, setting) in &change.eq {
+        if let Some(set) = spec.eq.get_mut(*band)
+            && let Ok(changed) = set.changed(*setting)
+        {
+            *set = changed;
+            eq.set(*band, changed);
+        }
+    }
+}
+
 /// Refuses a ramp longer than the mixer takes.
 fn check_ramp(ramp_ms: u32) -> Result<(), String> {
     if ramp_ms > MAX_RAMP_MS {
@@ -444,6 +456,74 @@ pub(crate) fn quoted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scene_reaches_gate_and_compressor_and_leaves_what_it_does_not_name() {
+        use pult_core::{CompressorParams, GateParams};
+        let controls = InputControls::default();
+        controls.compressor.set_simple(5.0);
+        let mut spec = InputSpec {
+            comp: 5.0,
+            ..InputSpec::new("m", 0.0, vec![0])
+        };
+        let gate = SceneInput {
+            gate: Some(3.0),
+            ..SceneInput::default()
+        };
+        scene_dynamics(&gate, &controls, &mut spec);
+        assert!(controls.gate.is_on());
+        assert_eq!(controls.gate.params(), GateParams::simple(3.0));
+        assert_eq!(spec.gate, 3.0);
+        assert!(controls.compressor.is_on(), "it did not name this one");
+        assert_eq!(spec.comp, 5.0);
+
+        let off = SceneInput {
+            comp: Some(0.0),
+            ..SceneInput::default()
+        };
+        scene_dynamics(&off, &controls, &mut spec);
+        assert!(!controls.compressor.is_on());
+        assert_eq!(controls.compressor.params(), CompressorParams::simple(0.0));
+        assert_eq!(spec.comp, 0.0);
+        assert!(controls.gate.is_on());
+    }
+
+    #[test]
+    fn a_scene_reaches_the_equalizer_and_leaves_what_it_does_not_name() {
+        use pult_core::eq::BandChange;
+        use pult_core::{Band, BandKind};
+        let eq = EqControls::default();
+        let mut spec = BusSpec::new("A1", "x");
+        let change = SceneBus {
+            eq_on: Some(false),
+            eq: vec![
+                (1, BandChange::Kind(BandKind::HighShelf)),
+                (1, BandChange::Gain(6.0)),
+            ],
+            ..SceneBus::default()
+        };
+        scene_equalizer(&change, &eq, &mut spec);
+        assert!(!eq.is_on());
+        assert!(!spec.eq_on);
+        let band = Band {
+            kind: BandKind::HighShelf,
+            gain_db: 6.0,
+            ..Band::at(1)
+        };
+        assert_eq!(eq.band(1), Some(band), "in the controls");
+        assert_eq!(spec.eq[1], band, "in the spec");
+        assert_eq!(eq.band(0), Some(Band::at(0)));
+        assert_eq!(spec.eq[0], Band::at(0));
+
+        // Only the switch: the bands stay, and the other way round.
+        let on = SceneBus {
+            eq_on: Some(true),
+            ..SceneBus::default()
+        };
+        scene_equalizer(&on, &eq, &mut spec);
+        assert!(eq.is_on());
+        assert_eq!(eq.band(1), Some(band));
+    }
 
     #[test]
     fn a_knob_at_zero_reads_as_off() {

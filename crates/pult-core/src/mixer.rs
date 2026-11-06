@@ -102,7 +102,7 @@ impl Default for InputControls {
 /// What happened to one ring of an input, counted by the audio threads.
 #[derive(Debug, Default)]
 pub struct InputStats {
-    /// Peak after gain, as fed into the mix.
+    /// Peak where the meter measures: what arrives, or what is fed into the mix.
     pub peak: PeakMeter,
     /// Frames the capture could not store because the ring was full.
     pub dropped_at_capture: Counter,

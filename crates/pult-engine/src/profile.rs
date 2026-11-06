@@ -1383,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_changes_gate_compressor_and_equalizer() {
+    fn a_scene_reads_and_writes_gate_compressor_and_equalizer() {
         let spec = parse(&with_scene(
             "[[scene.input]]\ninput = 1\ngate = 3\ncomp = 0\n\
              [[scene.bus]]\nbus = \"A1\"\neq_on = false\n\

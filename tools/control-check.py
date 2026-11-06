@@ -273,9 +273,9 @@ def main():
                 changes += 1
                 asked = time.time()
                 want = (
-                    (-12, -0.5, ["A1", "A2"], 3, 4, 6, "high")
+                    (-12, -0.5, ["A1", "A2"], 3, 4, 6, "high", 0)
                     if name == "leise"
-                    else (0, 0, ["A1"], 0, 0, 0, "bell")
+                    else (0, 0, ["A1"], 0, 0, 0, "bell", 0)
                 )
                 arrived = shows(
                     port,
@@ -288,6 +288,7 @@ def main():
                         now["inputs"][0]["comp"],
                         now["buses"][1]["eq"][1]["gain_db"],
                         now["buses"][1]["eq"][1]["kind"],
+                        now["buses"][0]["eq"][1]["gain_db"],
                     )
                     == want,
                 )
@@ -349,7 +350,11 @@ def main():
             scenes_at = "# Both buses, one side"
             if saved[saved.index(scenes_at):] != PROFILE[PROFILE.index(scenes_at):]:
                 failed.append("saving changed the scenes")
-            if not saved.startswith("# The route of the check.") or 'buses = ["A1", "A2"]' not in saved:
+            # Before the scenes, which hold these words themselves.
+            route_part = saved[: saved.index(scenes_at)]
+            if not saved.startswith("# The route of the check.") or any(
+                line not in route_part for line in ('buses = ["A1", "A2"]', "gate = 3", "comp = 4")
+            ):
                 failed.append("saving did not keep the file or the state")
 
             begun = time.time()

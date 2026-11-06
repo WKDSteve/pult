@@ -51,10 +51,13 @@ pub const SIMPLE_MAX: f32 = 10.0;
 /// flutter.
 const GATE_HYSTERESIS_DB: f32 = 3.0;
 
-/// How fast the measured level of a gate falls after a peak, in milliseconds: so slowly that
-/// between the half waves of a tone of 50 Hz it falls by less than [`GATE_HYSTERESIS_DB`], and the
-/// gate sees a level and not single waves.
-const GATE_LEVEL_FALL_MS: f32 = 30.0;
+/// How fast the measured level of a gate falls after a peak, in milliseconds. A hold only starts
+/// once it is below the threshold, so this adds to the hold: it stays short.
+const GATE_LEVEL_FALL_MS: f32 = 10.0;
+
+/// The shortest time a gate stays open below its threshold, in milliseconds, whatever its hold
+/// says: half a wave of 20 Hz, so that it sees a tone and not single waves.
+const GATE_LEAST_HOLD_MS: f32 = 25.0;
 
 /// A gate's times are the times after which it has all but arrived: 99 % of the way, 40 dB.
 /// That is this many time constants (the natural logarithm of 100).
@@ -109,7 +112,7 @@ pub struct GateParams {
     pub range_db: f32,
     /// Milliseconds it takes to open (99 % of the way).
     pub attack_ms: f32,
-    /// Milliseconds it stays open after the level fell below the threshold.
+    /// Milliseconds it stays open after the level fell below the threshold; at least 25.
     pub hold_ms: f32,
     /// Milliseconds it takes to close (99 % of the way).
     pub release_ms: f32,
@@ -284,7 +287,7 @@ impl Gate {
         self.attack = pace(params.attack_ms / GATE_ARRIVED, self.rate);
         self.release = pace(params.release_ms / GATE_ARRIVED, self.rate);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let hold_frames = (params.hold_ms * self.rate / 1000.0) as u32;
+        let hold_frames = (params.hold_ms.max(GATE_LEAST_HOLD_MS) * self.rate / 1000.0) as u32;
         self.hold_frames = hold_frames;
     }
 
@@ -727,21 +730,44 @@ mod tests {
 
     #[test]
     fn a_gate_does_not_flutter_on_a_low_tone() {
+        for freq in [20.0, 50.0, 100.0] {
+            let (controls, mut gate) = gate(GateParams {
+                threshold_db: -40.0,
+                hold_ms: 0.0,
+                release_ms: 5.0,
+                ..GateParams::default()
+            });
+            // Hardly above the threshold, without a hold of its own: open between the half waves.
+            let peak = db_to_linear(-39.9);
+            let step = std::f32::consts::TAU * freq / RATE as f32;
+            let original: Vec<f32> = (0..RATE as usize)
+                .map(|frame| peak * (step * frame as f32).sin())
+                .collect();
+            let mut data = original.clone();
+            gate.process(&controls, &mut data, 1);
+            let half = RATE as usize / 2;
+            assert_eq!(data[half..], original[half..], "{freq} Hz");
+        }
+    }
+
+    #[test]
+    fn a_gate_holds_for_its_time_and_then_closes() {
         let (controls, mut gate) = gate(GateParams {
             threshold_db: -40.0,
-            hold_ms: 0.0,
-            release_ms: 5.0,
+            hold_ms: 150.0,
+            release_ms: 20.0,
             ..GateParams::default()
         });
-        // 2 dB above the threshold: open, also between the half waves, without a hold.
-        let peak = db_to_linear(-38.0);
-        let step = std::f32::consts::TAU * 50.0 / RATE as f32;
-        let original: Vec<f32> = (0..RATE as usize)
-            .map(|frame| peak * (step * frame as f32).sin())
-            .collect();
-        let mut data = original.clone();
-        gate.process(&controls, &mut data, 1);
-        assert_eq!(data[RATE as usize / 2..], original[RATE as usize / 2..]);
+        // Just above the threshold, so the level is below it within milliseconds of the end.
+        let mut near = steady(db_to_linear(-39.0), 50, 1);
+        gate.process(&controls, &mut near, 1);
+        let quiet = db_to_linear(-60.0);
+        let mut held = steady(quiet, 120, 1);
+        gate.process(&controls, &mut held, 1);
+        assert_eq!(held[held.len() - 1], quiet, "held open");
+        let mut closed = steady(quiet, 200, 1);
+        gate.process(&controls, &mut closed, 1);
+        assert_eq!(closed[closed.len() - 1], 0.0, "closed after the hold");
     }
 
     #[test]
