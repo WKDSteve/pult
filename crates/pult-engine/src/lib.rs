@@ -38,6 +38,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SupportedStreamConfig};
 use pult_core::EQ_BANDS;
 use pult_core::eq::BandChange;
+use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS};
 use pult_core::{
     Band, BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
     MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
@@ -336,10 +337,16 @@ pub struct BusSpec {
     pub eq_on: bool,
     /// The bands of its equalizer.
     pub eq: [Band; EQ_BANDS],
+    /// Whether its limiter is switched on; off, it keeps its settings.
+    pub limit_on: bool,
+    /// The ceiling of its limiter in dB.
+    pub limit_db: f32,
+    /// The lookahead of its limiter in milliseconds: this much later the sound leaves the bus.
+    pub limit_lookahead_ms: f32,
 }
 
 impl BusSpec {
-    /// A bus at 0 dB, unmuted, its equalizer on and flat.
+    /// A bus at 0 dB, unmuted, its equalizer on and flat, its limiter on.
     #[must_use]
     pub fn new(name: impl Into<String>, device: impl Into<String>) -> Self {
         Self {
@@ -350,6 +357,9 @@ impl BusSpec {
             muted: false,
             eq_on: true,
             eq: Band::all_flat(),
+            limit_on: true,
+            limit_db: DEFAULT_CEILING_DB,
+            limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
         }
     }
 }
@@ -1073,6 +1083,10 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         handle.controls.gain.store(db_to_linear(bus.gain_db));
         handle.controls.muted.store(bus.muted, Ordering::Relaxed);
         handle.controls.eq.set_all(bus.eq_on, &bus.eq);
+        handle
+            .controls
+            .limiter
+            .set_all(bus.limit_on, bus.limit_db, bus.limit_lookahead_ms);
         slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
         opening.push(Opening::Device(found.device, found.config));
         buses.push(RunningBus {

@@ -19,6 +19,7 @@ pub mod dropouts;
 pub mod dynamics;
 pub mod eq;
 pub mod level;
+pub mod limiter;
 pub mod midi;
 pub mod mixer;
 pub mod protocol;
@@ -37,6 +38,7 @@ pub use dynamics::{
 };
 pub use eq::{Band, BandKind, EQ_BANDS, EqControls, Equalizer};
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
+pub use limiter::{Limiter, LimiterControls};
 pub use mixer::{
     BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,
     Mixer, MixerInput, connect, connect_with,

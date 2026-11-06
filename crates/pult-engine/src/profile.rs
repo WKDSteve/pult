@@ -432,6 +432,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             muted: entry.mute,
             eq_on: entry.eq_on.unwrap_or(true),
             eq,
+            ..BusSpec::new("", "")
         });
     }
     Ok(buses)

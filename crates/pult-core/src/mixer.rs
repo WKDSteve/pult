@@ -22,7 +22,8 @@
 //! switched on fades in once it is primed.
 //!
 //! An input passes its gate and its compressor ([`crate::dynamics`]) before its fader, in each
-//! of its rings; a bus passes its equalizer ([`crate::eq`]) after the sum and before its fader.
+//! of its rings; a bus passes its equalizer ([`crate::eq`]) after the sum and before its fader,
+//! and its limiter ([`crate::limiter`]) behind it.
 //! The input meters measure either what arrives, before all of that, or what goes into the mix.
 
 use std::sync::Arc;
@@ -41,6 +42,7 @@ use crate::drift::{DriftControl, Event};
 use crate::dynamics::{Compressor, CompressorControls, Gate, GateControls};
 use crate::eq::{EqControls, Equalizer};
 use crate::level::{AtomicF32, Counter, PeakMeter};
+use crate::limiter::{Limiter, LimiterControls};
 use crate::ramp::{Follower, Glide};
 use crate::rate::RateControl;
 use crate::remix::{remix_add, remix_add_ramped};
@@ -129,6 +131,8 @@ pub struct BusControls {
     pub fade_ms: AtomicU32,
     /// The equalizer, before the gain; flat at first.
     pub eq: EqControls,
+    /// The limiter, behind the gain; off until a route switches it on.
+    pub limiter: LimiterControls,
 }
 
 impl Default for BusControls {
@@ -138,6 +142,7 @@ impl Default for BusControls {
             muted: AtomicBool::new(false),
             fade_ms: AtomicU32::new(0),
             eq: EqControls::default(),
+            limiter: LimiterControls::default(),
         }
     }
 }
@@ -149,6 +154,8 @@ pub struct BusStats {
     pub peak: PeakMeter,
     /// Output samples beyond full scale (clipped to it) or invalid (replaced by silence).
     pub clipped: Counter,
+    /// How far the limiter turned down at most since the last look, in dB.
+    pub limited_db: PeakMeter,
 }
 
 /// The control thread's side of one input ring.
@@ -522,6 +529,8 @@ pub struct Mixer {
     /// The equalizer of the bus, at its output rate. Boxed: what its filters remember is
     /// large, and a mixer is moved around before it plays.
     eq: Box<Equalizer>,
+    /// The limiter of the bus, at its output rate.
+    limiter: Box<Limiter>,
     /// Resumed, and no callback yet: the next one opens the rings.
     opening: bool,
 }
@@ -542,6 +551,7 @@ impl Mixer {
         let mixer = Self {
             gain: Follower::new(rate),
             eq: Box::new(Equalizer::new(rate)),
+            limiter: Box::new(Limiter::new(rate, out_channels)),
             inputs,
             out_channels,
             controls: Arc::clone(&handle.controls),
@@ -568,6 +578,7 @@ impl Mixer {
         self.out_channels = out_channels;
         self.gain.start_over();
         self.eq.start_over();
+        self.limiter.prepare(out_channels);
         self.opening = true;
         for input in &mut self.inputs {
             input.open.store(false, Ordering::Release);
@@ -577,8 +588,8 @@ impl Mixer {
         }
     }
 
-    /// Overwrites `out` (interleaved) with the mix of all inputs times the bus gain, clipped
-    /// to full scale. A NaN (a broken input) becomes silence: a device may turn it into
+    /// Overwrites `out` (interleaved) with the mix of all inputs times the bus gain, limited,
+    /// then clipped to full scale. A NaN (a broken input) becomes silence: a device may turn it into
     /// full-scale noise.
     pub fn process(&mut self, out: &mut [f32]) {
         out.fill(0.0);
@@ -600,20 +611,24 @@ impl Mixer {
         let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
         self.gain
             .follow(self.controls.gain.load(), sounding, fade_ms);
-        let mut clipped = 0;
         if self.gain.ramp.is_steady() {
             let gain = self.gain.ramp.value();
             for sample in out.iter_mut() {
-                clipped += limited(sample, gain);
+                *sample *= gain;
             }
         } else {
             for frame in out.chunks_exact_mut(self.out_channels) {
                 let gain = self.gain.ramp.next_value();
                 for sample in frame {
-                    clipped += limited(sample, gain);
+                    *sample *= gain;
                 }
             }
         }
+        let reduced = self
+            .limiter
+            .process(&self.controls.limiter, out, self.out_channels);
+        self.stats.limited_db.record(reduced);
+        let clipped: u64 = out.iter_mut().map(limited).sum();
         if clipped > 0 {
             self.stats.clipped.add(clipped);
         }
@@ -621,19 +636,17 @@ impl Mixer {
     }
 }
 
-/// `sample` times `gain`, limited to full scale; a NaN becomes silence. Returns how many samples
-/// that had to change: 1 or 0.
+/// `sample` limited to full scale; a NaN becomes silence. Returns how many samples that had to
+/// change: 1 or 0.
 #[inline]
-fn limited(sample: &mut f32, gain: f32) -> u64 {
-    let value = *sample * gain;
-    if value.is_nan() {
+fn limited(sample: &mut f32) -> u64 {
+    if sample.is_nan() {
         *sample = 0.0;
         1
-    } else if value.abs() > 1.0 {
-        *sample = value.clamp(-1.0, 1.0);
+    } else if sample.abs() > 1.0 {
+        *sample = sample.clamp(-1.0, 1.0);
         1
     } else {
-        *sample = value;
         0
     }
 }
@@ -777,6 +790,66 @@ mod tests {
         let (mut mixer, bus) = Mixer::new(vec![input], 1);
         record(&mut mixer, &mut capture, value, 10);
         (mixer, capture, handle, bus)
+    }
+
+    #[test]
+    fn the_limiter_sits_behind_the_bus_fader_and_nothing_clips() {
+        let (mut mixer, mut capture, _, bus) = playing(0.5);
+        bus.controls.limiter.set_all(true, -6.0, 0.0);
+        // Switched on, it slides down from out of the way.
+        record(&mut mixer, &mut capture, 0.5, 10);
+        bus.controls.gain.store(8.0);
+        let out = record(&mut mixer, &mut capture, 0.5, 200);
+        let peak = out.iter().fold(0.0_f32, |max, s| max.max(s.abs()));
+        // The fader alone would take the 0.5 to 4; the slide of the fader and the ceiling are done.
+        assert!((out[out.len() - 1] - db_to_linear(-6.0)).abs() < 1e-3);
+        assert!(peak <= 1.0);
+        assert_eq!(bus.stats.clipped.get(), 0);
+        assert!(bus.stats.limited_db.take() > 6.0);
+        // The meter behind it shows what leaves the bus.
+        assert!(bus.stats.peak.take() <= 1.0);
+    }
+
+    #[test]
+    fn with_the_limiter_off_the_clamp_still_counts() {
+        let (mut mixer, mut capture, _, bus) = playing(0.5);
+        bus.controls.gain.store(8.0);
+        let out = record(&mut mixer, &mut capture, 0.5, 10);
+        assert!(out.iter().all(|s| s.abs() <= 1.0));
+        assert!(bus.stats.clipped.get() > 0);
+        assert_eq!(bus.stats.limited_db.take(), 0.0);
+    }
+
+    #[test]
+    fn a_broken_sum_stays_silence_with_the_limiter_on() {
+        let (capture, input, _handle) = connect(config(1, 0));
+        drop(capture);
+        let (mut mixer, bus) = Mixer::new(vec![input], 1);
+        bus.controls.limiter.set_all(true, -6.0, 1.0);
+        bus.controls.gain.store(f32::NAN);
+        let mut out = vec![0.0; PERIOD];
+        for _ in 0..50 {
+            mixer.process(&mut out);
+        }
+        assert!(out.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn a_device_back_with_more_channels_is_limited_too() {
+        let (mut capture, input, _handle) = connect(config(1, 480));
+        let (mut mixer, bus) = Mixer::new(vec![input], 1);
+        bus.controls.limiter.set_all(true, -6.0, 0.0);
+        bus.controls.gain.store(8.0);
+        record(&mut mixer, &mut capture, 0.5, 10);
+        mixer.suspend();
+        mixer.resume(2);
+        let mut out = vec![0.0; PERIOD * 2];
+        for _ in 0..200 {
+            push_dc(&mut capture, PERIOD, 0.5);
+            mixer.process(&mut out);
+        }
+        assert!(out.iter().all(|s| s.abs() <= db_to_linear(-6.0) * 1.0001));
+        assert!(out[0].abs() > 0.1);
     }
 
     #[test]
@@ -1502,11 +1575,17 @@ mod tests {
                 .set(CompressorParams::simple(8.0));
             handle.controls.compressor.switch(true);
             bus.controls.eq.set(1, Band::at(1).with_gain(6.0));
+            // The limiter at work, with another lookahead, and switched off.
+            bus.controls.limiter.set_all(true, -20.0, 5.0);
             for round in 0..10 {
+                if round == 3 {
+                    bus.controls.limiter.set_lookahead(1.0);
+                }
                 if round == 5 {
                     handle.controls.gate.switch(false);
                     handle.controls.compressor.switch(false);
                     bus.controls.eq.switch(false);
+                    bus.controls.limiter.switch(false);
                 }
                 capture.push(&data);
                 mixer.process(&mut out);

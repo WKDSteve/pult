@@ -73,6 +73,13 @@ impl PeakMeter {
         }
     }
 
+    /// Records `value`, which is not negative, as it is.
+    pub fn record(&self, value: f32) {
+        if value > 0.0 {
+            self.0.fetch_max(value.to_bits(), Ordering::Relaxed);
+        }
+    }
+
     /// The peak since the last call, and starts a new measurement.
     pub fn take(&self) -> f32 {
         f32::from_bits(self.0.swap(0, Ordering::Relaxed))
