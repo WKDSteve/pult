@@ -37,6 +37,7 @@ USAGE:
     pult mute <TARGET>      pult unmute <TARGET>
     pult solo <INPUT>       pult unsolo <INPUT>
     pult pan <INPUT> <-1..1> [over <MS>]
+    pult gate <INPUT> <0..10|off>   pult comp <INPUT> <0..10|off>
     pult route <INPUT> <BUS>      pult unroute <INPUT> <BUS>
     pult scene <NAME>       pult scenes
     pult show [--json]
@@ -239,7 +240,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
             Some("--open") => no_more(args).map(|()| Command::Remote(Remote::Start { open: true })),
             Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
         },
-        "gain" | "mute" | "unmute" | "solo" | "unsolo" | "pan" | "route" | "unroute" | "scene" => {
+        "gain" | "mute" | "unmute" | "solo" | "unsolo" | "pan" | "gate" | "comp" | "route"
+        | "unroute" | "scene" => {
             // Quoted or not: the input line reads a name of several words either way.
             let rest: Vec<String> = args.collect();
             Ok(Command::Remote(Remote::Line(format!(
@@ -440,6 +442,20 @@ mod tests {
                 Ok(Command::Remote(Remote::Line(format!("{word} Analogue 1"))))
             );
         }
+    }
+
+    #[test]
+    fn gate_and_comp_go_to_the_running_pult_too() {
+        assert_eq!(
+            parse(["gate".to_owned(), "2".to_owned(), "3".to_owned()]),
+            Ok(Command::Remote(Remote::Line("gate 2 3".to_owned())))
+        );
+        assert_eq!(
+            parse(["comp".to_owned(), "Analogue 1".to_owned(), "off".to_owned()]),
+            Ok(Command::Remote(Remote::Line(
+                "comp Analogue 1 off".to_owned()
+            )))
+        );
     }
 
     #[test]

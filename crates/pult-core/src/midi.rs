@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::binding::{Binding, BusParam, InputParam, Value};
 use crate::protocol::{Op, OpValue};
 use crate::scale::{fader_db, fader_pos};
-use crate::view::{GAIN_RANGE_DB, MixerView};
+use crate::view::{AMOUNT_RANGE, GAIN_RANGE_DB, MixerView};
 
 /// How long a change of a fader glides: its seven bits are steps one would hear otherwise.
 const FADER_RAMP_MS: u32 = 20;
@@ -228,6 +228,8 @@ enum Param {
     Gain(Binding),
     /// A pan.
     Pan(Binding),
+    /// The one knob of a gate or a compressor.
+    Amount(Binding),
     /// A mute, a solo or a crosspoint.
     Switch(Binding),
     /// A scene.
@@ -250,6 +252,7 @@ impl Param {
                 Self::Gain(binding)
             }
             Binding::Input(_, InputParam::Pan) => Self::Pan(binding),
+            Binding::Input(_, InputParam::Gate | InputParam::Comp) => Self::Amount(binding),
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
             | Binding::Bus(_, BusParam::Mute)
             | Binding::Route { .. } => Self::Switch(binding),
@@ -562,6 +565,20 @@ impl Map {
                     self.pick_up(control, pos, current, target, view, to_value)
                 }
             }
+            (Param::Amount(binding), Message::Cc { value, .. }) => {
+                let (_, most) = AMOUNT_RANGE;
+                let current = match binding.read(view) {
+                    Some(Value::Amount(amount)) => amount / most,
+                    _ => return Step::default(),
+                };
+                let to_value = |pos: f32| OpValue::Number(pos * most);
+                if relative {
+                    self.turn(control, value, current, target, view, to_value)
+                } else {
+                    let pos = f32::from(value) / 127.0;
+                    self.pick_up(control, pos, current, target, view, to_value)
+                }
+            }
             (Param::Switch(binding), _) => {
                 if !self.pressed(control, message) {
                     return Step::default();
@@ -591,7 +608,9 @@ impl Map {
                 }
             }
             // A button bound to a level by hand in the file.
-            (Param::Gain(_) | Param::Pan(_), Message::Note { .. }) => Step::default(),
+            (Param::Gain(_) | Param::Pan(_) | Param::Amount(_), Message::Note { .. }) => {
+                Step::default()
+            }
         }
     }
 

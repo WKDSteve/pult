@@ -22,6 +22,10 @@ pub enum InputParam {
     Solo,
     /// Its pan.
     Pan,
+    /// Its gate, as one knob.
+    Gate,
+    /// Its compressor, as one knob.
+    Comp,
     /// Its peak, read only.
     Meter,
 }
@@ -62,6 +66,8 @@ pub enum Value {
     Switch(bool),
     /// -1 (left) to 1 (right).
     Pan(f32),
+    /// The one knob of a gate or a compressor, 0 (off) to 10.
+    Amount(f32),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -131,6 +137,8 @@ impl Binding {
                     "mute" => InputParam::Mute,
                     "solo" => InputParam::Solo,
                     "pan" => InputParam::Pan,
+                    "gate" => InputParam::Gate,
+                    "comp" => InputParam::Comp,
                     "meter" => InputParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -165,6 +173,8 @@ impl Binding {
                     InputParam::Mute => "mute",
                     InputParam::Solo => "solo",
                     InputParam::Pan => "pan",
+                    InputParam::Gate => "gate",
+                    InputParam::Comp => "comp",
                     InputParam::Meter => "meter",
                 };
                 format!("input/{}/{param}", input(index)?)
@@ -192,6 +202,8 @@ impl Binding {
                     InputParam::Mute => Value::Switch(input.muted),
                     InputParam::Solo => Value::Switch(input.solo),
                     InputParam::Pan => Value::Pan(input.pan),
+                    InputParam::Gate => Value::Amount(input.gate),
+                    InputParam::Comp => Value::Amount(input.comp),
                     InputParam::Meter => Value::Peak(input.peak_db),
                 }
             }
@@ -232,6 +244,12 @@ impl Binding {
                 pan,
                 ramp_ms: 0,
             },
+            (Self::Input(input, InputParam::Gate), Value::Amount(amount)) => {
+                Action::InputGate { input, amount }
+            }
+            (Self::Input(input, InputParam::Comp), Value::Amount(amount)) => {
+                Action::InputComp { input, amount }
+            }
             (Self::Bus(bus, BusParam::Gain), Value::Gain(db)) => Action::BusGain {
                 bus,
                 db: action_gain(db),
@@ -246,8 +264,8 @@ impl Binding {
     }
 
     /// What a control bound here is called for assistive technology: `Guitar mute`,
-    /// `Guitar to A1`; just the owner's name for a gain, pan or meter, whose controls say what
-    /// they are themselves. Empty when the view has no such input or bus.
+    /// `Guitar gate`, `Guitar to A1`; just the owner's name for a gain, pan or meter, whose
+    /// controls say what they are themselves. Empty when the view has no such input or bus.
     #[must_use]
     pub fn title(self, view: &MixerView) -> String {
         let input = |index: usize| view.inputs.get(index).map_or("", InputView::shown_name);
@@ -255,6 +273,8 @@ impl Binding {
         match self {
             Self::Input(index, InputParam::Mute) => format!("{} mute", input(index)),
             Self::Input(index, InputParam::Solo) => format!("{} solo", input(index)),
+            Self::Input(index, InputParam::Gate) => format!("{} gate", input(index)),
+            Self::Input(index, InputParam::Comp) => format!("{} compressor", input(index)),
             Self::Input(index, _) => input(index).to_owned(),
             Self::Bus(index, BusParam::Mute) => format!("{} mute", bus(index)),
             Self::Bus(index, _) => bus(index).to_owned(),
@@ -285,6 +305,8 @@ mod tests {
             ("input/2/mute", Binding::Input(1, InputParam::Mute)),
             ("input/2/solo", Binding::Input(1, InputParam::Solo)),
             ("input/2/pan", Binding::Input(1, InputParam::Pan)),
+            ("input/2/gate", Binding::Input(1, InputParam::Gate)),
+            ("input/2/comp", Binding::Input(1, InputParam::Comp)),
             ("input/2/meter", Binding::Input(1, InputParam::Meter)),
             ("bus/A1/gain", Binding::Bus(0, BusParam::Gain)),
             ("bus/A1/mute", Binding::Bus(0, BusParam::Mute)),
@@ -343,6 +365,8 @@ mod tests {
         input.muted = true;
         input.solo = false;
         input.pan = 0.25;
+        input.gate = 2.0;
+        input.comp = 7.5;
         input.peak_db = Some(-12.0);
         input.buses = vec![0];
         let bus = &mut view.buses[0];
@@ -354,6 +378,8 @@ mod tests {
         assert_eq!(read("input/2/mute"), Some(Value::Switch(true)));
         assert_eq!(read("input/2/solo"), Some(Value::Switch(false)));
         assert_eq!(read("input/2/pan"), Some(Value::Pan(0.25)));
+        assert_eq!(read("input/2/gate"), Some(Value::Amount(2.0)));
+        assert_eq!(read("input/2/comp"), Some(Value::Amount(7.5)));
         assert_eq!(read("input/2/meter"), Some(Value::Peak(Some(-12.0))));
         assert_eq!(read("bus/A1/gain"), Some(Value::Gain(-1.5)));
         assert_eq!(read("bus/A1/mute"), Some(Value::Switch(false)));
@@ -397,6 +423,20 @@ mod tests {
                 input: 1,
                 pan: -0.5,
                 ramp_ms: 0
+            })
+        );
+        assert_eq!(
+            write(Binding::Input(1, InputParam::Gate), Value::Amount(4.0)),
+            Some(Action::InputGate {
+                input: 1,
+                amount: 4.0
+            })
+        );
+        assert_eq!(
+            write(Binding::Input(1, InputParam::Comp), Value::Amount(0.0)),
+            Some(Action::InputComp {
+                input: 1,
+                amount: 0.0
             })
         );
         assert_eq!(
@@ -469,6 +509,14 @@ mod tests {
             format!("{input} solo")
         );
         assert_eq!(Binding::Input(1, InputParam::Gain).title(&view), *input);
+        assert_eq!(
+            Binding::Input(1, InputParam::Gate).title(&view),
+            format!("{input} gate")
+        );
+        assert_eq!(
+            Binding::Input(1, InputParam::Comp).title(&view),
+            format!("{input} compressor")
+        );
         assert_eq!(
             Binding::Bus(0, BusParam::Mute).title(&view),
             format!("{bus} mute")

@@ -72,6 +72,8 @@ fn showcase(t: f64) -> MixerView {
                 muted: i == 3,
                 solo: i == 1,
                 pan: [0.0, -0.35, 0.25, 0.0, 0.0, 0.0, 0.0][i],
+                gate: 0.0,
+                comp: 0.0,
                 buses: buses.to_vec(),
                 present: i != 6,
                 peak_db: (i != 3 && i != 6)

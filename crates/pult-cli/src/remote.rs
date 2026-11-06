@@ -1,6 +1,7 @@
 //! Commands to a pult that is already running: the words of its input line, from any terminal,
 //! script or editor.
 
+use std::fmt::Write as _;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -256,6 +257,11 @@ fn shown(state: &State) -> Vec<String> {
             input.pan,
             input.buses.join(", ")
         );
+        for (what, amount) in [("gate", input.gate), ("comp", input.comp)] {
+            if amount > 0.0 {
+                let _ = write!(line, "  {what} {amount:.1}");
+            }
+        }
         if input.muted {
             line.push_str("  muted");
         }

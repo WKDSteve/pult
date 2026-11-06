@@ -33,6 +33,10 @@ device = "Analogue 1 + 2"
 buses = ["A1"]
 gain_db = -6
 mute = true
+# A gate keeps it quiet between words, a compressor evens out its level and makes it louder:
+# one knob each, 0 (off) to 10. Remove the # to try.
+# gate = 3
+# comp = 4
 
 # A scene changes values while the route runs (`scene abend`), without opening a device and
 # without a dropout. It names only what differs; remove the # to try.

@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use pult_core::control::{Command, HELP, Target, search_name};
+use pult_core::view::check_amount;
 use pult_core::{MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
@@ -38,8 +39,8 @@ impl Running {
             .collect()
     }
 
-    /// The route as it is now: the spec it started with, with the gains, mutes and pans
-    /// changed since.
+    /// The route as it is now: the spec it started with, with the gains, mutes, pans, gates
+    /// and compressors changed since.
     #[must_use]
     pub fn current(&self) -> RouteSpec {
         self.spec.clone()
@@ -84,6 +85,26 @@ impl Running {
                     "{}: pan {pan:.2}{}",
                     self.target_label(Target::Input(*index)),
                     over(*ramp_ms)
+                )])
+            }
+            Command::Gate(index, amount) => {
+                let amount = check_amount("gate", *amount)?;
+                self.inputs[*index].controls.gate.set_simple(amount);
+                self.spec.inputs[*index].gate = amount;
+                Ok(vec![format!(
+                    "{}: gate {}",
+                    self.target_label(Target::Input(*index)),
+                    knob(amount)
+                )])
+            }
+            Command::Comp(index, amount) => {
+                let amount = check_amount("comp", *amount)?;
+                self.inputs[*index].controls.compressor.set_simple(amount);
+                self.spec.inputs[*index].comp = amount;
+                Ok(vec![format!(
+                    "{}: comp {}",
+                    self.target_label(Target::Input(*index)),
+                    knob(amount)
                 )])
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
@@ -281,6 +302,11 @@ impl Running {
                 spec.pan,
                 buses.join(", ")
             );
+            for (what, amount) in [("gate", spec.gate), ("comp", spec.comp)] {
+                if amount > 0.0 {
+                    let _ = write!(line, "  {what} {}", knob(amount));
+                }
+            }
             if spec.muted {
                 line.push_str("  muted");
             }
@@ -305,6 +331,15 @@ fn check_ramp(ramp_ms: u32) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// How a line says the one knob of a gate or a compressor: `off` at 0, else its setting.
+pub(crate) fn knob(amount: f32) -> String {
+    if amount > 0.0 {
+        format!("{amount:.1}")
+    } else {
+        "off".to_owned()
+    }
 }
 
 /// How a confirmation says the time a change takes; nothing for the shortest.
@@ -357,6 +392,13 @@ pub(crate) fn quoted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_knob_at_zero_reads_as_off() {
+        assert_eq!(knob(0.0), "off");
+        assert_eq!(knob(3.0), "3.0");
+        assert_eq!(knob(7.25), "7.2");
+    }
 
     #[test]
     fn quoted_escapes_what_toml_needs() {

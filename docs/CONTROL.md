@@ -55,6 +55,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
       "muted": false,
       "solo": false,
       "pan": 0.0,
+      "gate": 0.0,
+      "comp": 0.0,
       "buses": ["A1"],
       "present": true,
       "peak_db": -12.1,
@@ -87,6 +89,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
 - `events` sind die letzten 32 Ereignisse; `seq` zählt hoch und zeigt, welche ein Client schon kennt. `type` ist `lost`,
   `back`, `refused` oder `slow`.
 - `gain_db`, `pan`, `muted` und `buses` nennen das Ziel. Läuft eine Rampe, folgt der Ton noch.
+- `gate` und `comp` sind die Regler von Gate und Kompressor des Eingangs, 0 (aus) bis 10. Ein pult, das beides noch nicht
+  kennt, lässt die Felder weg; sie lesen sich dann als 0.
 - `scenes` sind die Szenen des Profils in dessen Reihenfolge.
 - `midi` nennt `device`, `connected`, `learning` und `bindings` des Controllers, wo einer läuft, sonst `null`. `problem` sagt ohne
   Ordner, warum MIDI aus ist, etwa bei einer `midi.toml`, die sich nicht lesen lässt; sonst `null`.
@@ -118,6 +122,7 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 |---|---|
 | `input/<n>/gain`, `bus/<name>/gain` | Zahl, -96 bis 24 dB; außerhalb wird abgelehnt, nicht begrenzt |
 | `input/<n>/pan` | Zahl, -1 bis 1 |
+| `input/<n>/gate`, `input/<n>/comp` | Zahl, 0 (aus) bis 10; außerhalb wird abgelehnt |
 | `input/<n>/mute`, `input/<n>/solo`, `bus/<name>/mute` | `true` oder `false` |
 | `matrix/<n>/<bus>` | `true` oder `false` |
 | `input/<n>/meter`, `bus/<name>/meter` | nur lesbar, im Zustand als `peak_db` |

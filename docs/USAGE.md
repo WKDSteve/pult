@@ -154,6 +154,8 @@ buses = ["A1", "A2"]       # die Matrix: auf welche Busse dieser Eingang geht
 label = "Musik"            # optional: so nennt ihn das Fenster statt des Gerätenamens
 gain_db = 0                # optional, -96 bis 24
 pan = 0                    # optional, -1 links bis 1 rechts
+gate = 0                   # optional, 0 (aus) bis 10: unter einem Pegel still
+comp = 0                   # optional, 0 (aus) bis 10: gleichmäßiger und lauter
 mute = false               # optional
 ```
 
@@ -170,6 +172,13 @@ pult run --profile meinprofil.toml --log abend.csv
   Mute und Pan gelten für alle seine Busse gemeinsam; der Bus-Gain wirkt auf die Summe.
 - **Pan:** Bei Mono-Eingängen ein Panorama, bei Stereo-Eingängen eine Balance: in der Mitte beide Seiten voll, zur
   Seite hin wird die andere leiser. Wirkt nur auf Ausgänge mit mindestens zwei Kanälen.
+- **Gate und Kompressor:** Jeder Eingang hat beides, mit je einem Regler von 0 (aus) bis 10, vor seinem Fader.
+  Das **Gate** lässt nur durch, was lauter ist als eine Schwelle: bei 1 liegt sie bei -56 dB, bei 10 bei -20 dB. So bleibt
+  ein Mikrofon zwischen den Wörtern still. Es öffnet in 1 ms, hält 150 ms und schließt in 200 ms. Der **Kompressor** macht
+  einen Eingang gleichmäßiger und insgesamt lauter: Je höher der Regler, desto tiefer die Schwelle (bis -30 dB), desto
+  stärker das Verhältnis (bis 8:1) und desto mehr Pegel kommt danach dazu (bis 12 dB). Vollaussteuerung kommt dabei nie
+  über Vollaussteuerung heraus. Beide messen den lautesten Kanal und regeln alle Kanäle gleich, das Stereobild bleibt.
+  Die Eingangs-Meter zeigen den Pegel dahinter.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
   ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
 - **Szenen:** `[[scene]]` benennt einen Zustand des Mischpults, siehe unten.
@@ -254,9 +263,10 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `mute <Ziel>`, `unmute <Ziel>` | stumm schalten, wieder einschalten; die Statuszeile zeigt dann `muted` |
 | `solo <Eingang>`, `unsolo <Eingang>` | nur die Eingänge mit Solo hören, Solo wieder lösen. Es wird nicht gespeichert |
 | `pan <Eingang> <-1..1> [over <ms>]` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
+| `gate <Eingang> <0..10>`, `comp <Eingang> <0..10>` | Gate bzw. Kompressor eines Eingangs einstellen (siehe 5.); `0` oder `off` schaltet aus |
 | `route <Eingang> <Bus>`, `unroute <Eingang> <Bus>` | einen Eingang zusätzlich auf einen Bus legen, von ihm nehmen; der letzte Bus eines Eingangs bleibt (dafür `mute`) |
 | `scene <Name>`, `scenes` | zu einer Szene des Profils wechseln (siehe 5.), die Szenen auflisten |
-| `show` | alle Eingänge und Busse mit Gain, Pan und Mute |
+| `show` | alle Eingänge und Busse mit Gain, Pan, Gate, Kompressor und Mute |
 | `save <Datei>` | den aktuellen Stand als Profil schreiben, später mit `--profile` laden. Ein Profil mit denselben Bussen und Eingängen behält seine Kommentare und Reihenfolge, nur geänderte Werte werden ersetzt; jede andere Datei wird überschrieben |
 | `help` | die Befehle |
 | `quit`, Enter auf leerer Zeile, Strg+C | beenden |
@@ -266,7 +276,7 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
   Eingang und einen Bus zugleich, lehnt pult ab und nennt die Treffer. Groß- und Kleinschreibung zählen nicht.
 - **Bedienen:** Pfeil hoch und runter holen frühere Befehle zurück, Esc leert die Zeile.
 - **Ohne Knacken:** Keine Änderung springt. Gain, Pan, Mute und Solo gleiten mindestens 5 ms, ein Eingang blendet beim
-  Ein- und Ausrouten aus bzw. ein. Anzeigen und `show` nennen schon das Ziel, der Ton folgt in der angegebenen Zeit. Geht
+  Ein- und Ausrouten aus bzw. ein. Gate und Kompressor gehen beim Ausschalten in ihrer eigenen Zeit zurück. Anzeigen und `show` nennen schon das Ziel, der Ton folgt in der angegebenen Zeit. Geht
   ein Eingang neu auf einen Bus, setzt er nach dem Füllen seines Puffers ein; rund 2 s später gleicht pult einmalig seinen
   Versatz aus, was bei einem größeren Versatz leise zu hören sein kann.
 - **Von außen:** Andere Programme auf diesem Rechner können eine laufende Route lesen und steuern, siehe
@@ -289,7 +299,7 @@ pult show
 
 | Befehl | Wirkung |
 |---|---|
-| `pult gain`, `mute`, `unmute`, `solo`, `unsolo`, `pan`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
+| `pult gain`, `mute`, `unmute`, `solo`, `unsolo`, `pan`, `gate`, `comp`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
 | `pult scenes` | die Szenen, je eine Zeile |
 | `pult show` | Eingänge, Busse und Szenen; `pult show --json` den ganzen Zustand für Programme |
 | `pult save` | in das Profil speichern, aus dem die Route kam; eine andere Datei geht von außen nicht |

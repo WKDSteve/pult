@@ -25,7 +25,9 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Ton einzelner Programme als Eingang (Prozess-Loopback, `--from app:Spotify`, `pult programs`); beendet sich das Programm, wird es beim Neustart wieder aufgenommen | fertig |
 | Szenen im Profil: Gain, Pan, Mute und Matrix wechseln ohne Aussetzer, auf Wunsch weich überblendet; keine Änderung springt mehr (`docs/USAGE.md`) | fertig |
 | Steuern von außen: `pult mute mikro`, `:My pult` in Neovim, eine Fernbedienung im Browser (`pult open`), Kachel im Hub, MIDI-Controller (`pult learn`) (`docs/USAGE.md`, `docs/CONTROL.md`) | fertig |
-| EQ/Kompressor | geplant |
+| Gate und Kompressor je Eingang, je ein Regler von 0 (aus) bis 10: `gate 2 3`, `comp 2 4`, im Profil, von außen und per MIDI (`docs/USAGE.md`) | fertig, noch ohne Regler im Fenster |
+| Parametrischer EQ je Bus (4 Bänder) | im Mischer fertig, Bedienung folgt |
+| Limiter, Verzögerung je Bus, Rauschunterdrückung | geplant |
 
 ## Plattformen
 

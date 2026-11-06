@@ -289,6 +289,10 @@ pub struct InputSpec {
     pub gain_db: f32,
     /// -1 (left) to 1 (right).
     pub pan: f32,
+    /// Its gate as one knob, 0 (off) to 10.
+    pub gate: f32,
+    /// Its compressor as one knob, 0 (off) to 10.
+    pub comp: f32,
     /// Starts muted.
     pub muted: bool,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
@@ -296,7 +300,7 @@ pub struct InputSpec {
 }
 
 impl InputSpec {
-    /// An input at `gain_db`, centred, unmuted, feeding `buses`.
+    /// An input at `gain_db`, centred, unmuted, without gate or compressor, feeding `buses`.
     #[must_use]
     pub fn new(device: impl Into<String>, gain_db: f32, buses: Vec<usize>) -> Self {
         Self {
@@ -305,6 +309,8 @@ impl InputSpec {
             label: None,
             gain_db,
             pan: 0.0,
+            gate: 0.0,
+            comp: 0.0,
             muted: false,
             buses,
         }
@@ -411,6 +417,11 @@ impl RouteSpec {
         for input in &self.inputs {
             if input.buses.is_empty() {
                 return invalid(format!("input \"{}\" feeds no bus", input.device));
+            }
+            for (what, amount) in [("gate", input.gate), ("comp", input.comp)] {
+                if let Err(why) = pult_core::view::check_amount(what, amount) {
+                    return invalid(format!("input \"{}\": {why}", input.device));
+                }
             }
             for (i, &bus) in input.buses.iter().enumerate() {
                 if bus >= self.buses.len() {
@@ -923,6 +934,8 @@ fn find_input(
     let controls = Arc::new(InputControls::default());
     controls.gain.store(db_to_linear(input.gain_db));
     controls.pan.store(input.pan);
+    controls.gate.set_simple(input.gate);
+    controls.compressor.set_simple(input.comp);
     controls.muted.store(input.muted, Ordering::Relaxed);
     let (target, band, capacity) = buffering(sample_rate, rings.latency_ms);
     let ring = InputConfig {
@@ -1212,5 +1225,10 @@ mod tests {
         assert!(
             invalid(&route(vec![InputSpec::new("a", 0.0, vec![1, 1])], 2)).contains("A2 twice")
         );
+        let loud = InputSpec {
+            comp: 11.0,
+            ..InputSpec::new("a", 0.0, vec![0])
+        };
+        assert!(invalid(&route(vec![loud], 1)).contains("comp must be 0 (off) to 10"));
     }
 }

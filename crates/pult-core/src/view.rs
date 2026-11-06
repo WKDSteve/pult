@@ -68,6 +68,10 @@ pub struct InputView {
     pub solo: bool,
     /// -1 (left) to 1 (right).
     pub pan: f32,
+    /// Its gate as one knob, 0 (off) to 10: the higher, the louder a sound must be to pass.
+    pub gate: f32,
+    /// Its compressor as one knob, 0 (off) to 10: the higher, the more even and the louder.
+    pub comp: f32,
     /// The buses it feeds, as indices into [`MixerView::buses`].
     pub buses: Vec<usize>,
     /// Whether the device or program is there; false while it is gone.
@@ -189,6 +193,20 @@ pub enum Action {
         /// Milliseconds to get there (0: at once, free of clicks).
         ramp_ms: u32,
     },
+    /// Sets an input's gate by its one knob.
+    InputGate {
+        /// Input index.
+        input: usize,
+        /// 0 (off) to 10.
+        amount: f32,
+    },
+    /// Sets an input's compressor by its one knob.
+    InputComp {
+        /// Input index.
+        input: usize,
+        /// 0 (off) to 10.
+        amount: f32,
+    },
     /// Sets a bus's gain in dB.
     BusGain {
         /// Bus index.
@@ -269,6 +287,25 @@ pub trait Desk {
 /// range (`pult_engine::profile::GAIN_DB` is built from it).
 pub const GAIN_RANGE_DB: (f32, f32) = (-96.0, 24.0);
 
+/// Lowest and highest setting of the one knob of a gate or a compressor; the lowest is off.
+pub const AMOUNT_RANGE: (f32, f32) = (0.0, crate::dynamics::SIMPLE_MAX);
+
+/// `amount` when it is a setting of the one knob of a gate or a compressor (`what`).
+///
+/// # Errors
+///
+/// A message naming the range otherwise.
+pub fn check_amount(what: &str, amount: f32) -> Result<f32, String> {
+    let (low, high) = AMOUNT_RANGE;
+    if (low..=high).contains(&amount) {
+        Ok(amount)
+    } else {
+        Err(format!(
+            "{what} must be {low} (off) to {high}, not {amount}"
+        ))
+    }
+}
+
 /// A mixer in memory for building and testing interfaces: three inputs, two buses, meters
 /// that move with every view (one view counts as 1/30 s), an event now and then, and every
 /// action applied to its own state. It never touches a device, a file or the clock.
@@ -297,6 +334,8 @@ impl FakeDesk {
             muted,
             solo: false,
             pan: 0.0,
+            gate: 0.0,
+            comp: 0.0,
             buses,
             present: true,
             peak_db: None,
@@ -378,6 +417,18 @@ impl FakeDesk {
             .inputs
             .get_mut(input)
             .ok_or_else(|| format!("there is no input {} (only {count})", input + 1))
+    }
+
+    /// Sets the one knob `what` (`gate` or `comp`) of an input.
+    fn set_knob(&mut self, input: usize, what: &str, amount: f32) -> Reply {
+        let amount = check_amount(what, amount)?;
+        let strip = self.input_mut(input)?;
+        if what == "gate" {
+            strip.gate = amount;
+        } else {
+            strip.comp = amount;
+        }
+        Ok(vec![format!("[{}] {what} {amount:.1}", input + 1)])
     }
 
     fn bus_mut(&mut self, bus: usize) -> Result<&mut BusView, String> {
@@ -491,6 +542,8 @@ impl Desk for FakeDesk {
                 self.input_mut(input)?.pan = pan;
                 Ok(vec![format!("[{}] pan {pan:.2}", input + 1)])
             }
+            Action::InputGate { input, amount } => self.set_knob(input, "gate", amount),
+            Action::InputComp { input, amount } => self.set_knob(input, "comp", amount),
             Action::BusGain { bus, db, .. } => {
                 let db = check_gain(db)?;
                 let bus = self.bus_mut(bus)?;
@@ -692,6 +745,29 @@ mod tests {
             .unwrap();
         assert!(saved[0].contains("neu.toml"));
         assert_eq!(mixer.view().profile, Some(PathBuf::from("neu.toml")));
+    }
+
+    #[test]
+    fn the_fake_takes_the_knobs_of_gate_and_compressor_in_their_range() {
+        let mut mixer = FakeDesk::new();
+        let gate = |amount| Action::InputGate { input: 0, amount };
+        let comp = |amount| Action::InputComp { input: 0, amount };
+        assert!(mixer.act(gate(3.0)).is_ok());
+        assert!(mixer.act(comp(10.0)).is_ok());
+        assert!(mixer.act(comp(0.0)).is_ok());
+        assert!(mixer.act(comp(10.5)).is_err());
+        assert!(mixer.act(gate(-1.0)).is_err());
+        assert!(mixer.act(gate(f32::NAN)).is_err());
+        assert!(
+            mixer
+                .act(Action::InputGate {
+                    input: 9,
+                    amount: 1.0
+                })
+                .is_err()
+        );
+        let view = mixer.view();
+        assert_eq!((view.inputs[0].gate, view.inputs[0].comp), (3.0, 0.0));
     }
 
     #[test]

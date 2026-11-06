@@ -148,6 +148,16 @@ fn commands_reach_the_running_pult() {
     assert!(output.status.success(), "{}", stderr(&output));
     let output = pult(&folder.0, &["route", "spotify", "A1"]);
     assert!(output.status.success(), "{}", stderr(&output));
+    let output = pult(&folder.0, &["gate", "spotify", "3"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "[3] gate 3.0");
+    let output = pult(&folder.0, &["comp", "spotify", "11"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("comp must be 0 (off) to 10"),
+        "{}",
+        stderr(&output)
+    );
     let output = pult(&folder.0, &["scene", "Abend"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output).trim(), "scene Abend");

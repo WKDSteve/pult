@@ -6,6 +6,8 @@
 //! mute <target>          unmute <target>
 //! solo <input>           unsolo <input>
 //! pan <input> <-1..1>    pan (mono) or balance (stereo) of an input
+//! gate <input> <0..10>   keep an input quiet below a level; 0 or off switches it off
+//! comp <input> <0..10>   even out an input's level and make it louder; 0 or off switches it off
 //! route <input> <bus>    send an input to a bus too; unroute <input> <bus> takes it off
 //! scene <name>           change to a scene of the profile; scenes lists them
 //! learn <target>         the next movement on the MIDI controller binds it; unlearn takes it off
@@ -45,6 +47,10 @@ pub enum Command {
     Solo(usize, bool),
     /// Sets the pan of an input, -1 (left) to 1 (right), reached in so many milliseconds.
     Pan(usize, f32, u32),
+    /// Sets the gate of an input by its one knob, 0 (off) to 10.
+    Gate(usize, f32),
+    /// Sets the compressor of an input by its one knob, 0 (off) to 10.
+    Comp(usize, f32),
     /// Routes an input (first index) to a bus (second index), or takes it off.
     Route(usize, usize, bool),
     /// Changes to the scene of this name.
@@ -71,6 +77,8 @@ gain <target> <dB>   set the gain of an input or bus (gain A1 -6, gain 2 0)
 mute <target>        mute an input or bus; unmute <target> undoes it
 solo <input>         hear only the soloed inputs; unsolo <input> undoes it
 pan <input> <-1..1>  pan a mono input, balance a stereo one
+gate <input> <0..10> keep an input quiet below a level (gate 2 3); gate 2 off undoes it
+comp <input> <0..10> even out an input's level and make it louder; comp 2 off undoes it
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
 scene <name>         change to a scene of the profile; scenes lists them
 learn <address>      the next movement on the MIDI controller binds it (learn input/1/gain,
@@ -182,6 +190,28 @@ pub fn parse<S: AsRef<str>>(
             match target(&name, names)? {
                 Target::Input(index) => Ok(Command::Pan(index, value, ramp_ms)),
                 Target::Bus(_) => error("pan works on inputs only"),
+            }
+        }
+        "gate" | "comp" | "compressor" => {
+            let gate = keyword.eq_ignore_ascii_case("gate");
+            let usage = if gate {
+                "gate <input> <0..10|off>"
+            } else {
+                "comp <input> <0..10|off>"
+            };
+            // `off` is the knob at 0.
+            let off = rest
+                .last()
+                .is_some_and(|word| word.eq_ignore_ascii_case("off"));
+            let (name, amount) = if off && rest.len() > 1 {
+                (rest[..rest.len() - 1].join(" "), 0.0)
+            } else {
+                split_value(rest, usage)?
+            };
+            match target(&name, names)? {
+                Target::Input(index) if gate => Ok(Command::Gate(index, amount)),
+                Target::Input(index) => Ok(Command::Comp(index, amount)),
+                Target::Bus(_) => error(format!("{keyword} works on inputs only")),
             }
         }
         "route" | "unroute" => {
@@ -409,6 +439,11 @@ mod tests {
         assert_eq!(ok("UNSOLO Analogue 1"), Command::Solo(1, false));
         assert_eq!(ok("pan spotify -0.5"), Command::Pan(2, -0.5, 0));
         assert_eq!(ok("route 2 B2"), Command::Route(1, 1, true));
+        assert_eq!(ok("gate 2 3"), Command::Gate(1, 3.0));
+        assert_eq!(ok("GATE cable 7.5"), Command::Gate(0, 7.5));
+        assert_eq!(ok("gate Analogue 1 off"), Command::Gate(1, 0.0));
+        assert_eq!(ok("comp 3 4"), Command::Comp(2, 4.0));
+        assert_eq!(ok("compressor spotify OFF"), Command::Comp(2, 0.0));
         assert_eq!(ok("ROUTE Analogue 1 a1"), Command::Route(1, 0, true));
         assert_eq!(ok("unroute cable b2"), Command::Route(0, 1, false));
         assert_eq!(ok("show"), Command::Show);
@@ -530,6 +565,11 @@ mod tests {
         assert!(bad("mute a").contains("several inputs"));
         assert!(bad("mute").contains("which input or bus"));
         assert!(bad("pan A1 0").contains("inputs only"));
+        assert!(bad("gate A1 3").contains("gate works on inputs only"));
+        assert!(bad("comp B2 off").contains("comp works on inputs only"));
+        assert!(bad("gate 2").contains("usage: gate <input> <0..10|off>"));
+        assert!(bad("comp off").contains("usage: comp <input> <0..10|off>"));
+        assert!(bad("comp 2 viel").contains("\"viel\" is not a number"));
         assert!(bad("solo A1").contains("solo works on inputs only"));
         assert!(bad("unsolo").contains("which input or bus"));
         assert!(bad("route").contains("usage: route"));

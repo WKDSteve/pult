@@ -16,6 +16,8 @@
 //! label = "Musik"              # optional, what the window calls it
 //! gain_db = -3                 # optional
 //! pan = 0                      # optional, -1 left to 1 right
+//! gate = 0                     # optional, 0 (off) to 10: quiet below a level
+//! comp = 0                     # optional, 0 (off) to 10: more even, and louder
 //! mute = false                 # optional
 //!
 //! [[input]]
@@ -142,6 +144,10 @@ struct InputEntry {
     gain_db: f32,
     #[serde(default)]
     pan: f32,
+    #[serde(default)]
+    gate: f32,
+    #[serde(default)]
+    comp: f32,
     #[serde(default)]
     mute: bool,
 }
@@ -350,6 +356,10 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         check_gain(&what, entry.gain_db)?;
         check_label(&what, entry.label.as_ref())?;
         check_pan(&what, entry.pan)?;
+        for (key, amount) in [("gate", entry.gate), ("comp", entry.comp)] {
+            pult_core::view::check_amount(key, amount)
+                .map_err(|why| ProfileError(format!("{what}: {why}")))?;
+        }
         let mut routed = Vec::with_capacity(entry.buses.len());
         for name in &entry.buses {
             let Some(index) = buses.iter().position(|b| &b.name == name) else {
@@ -367,6 +377,8 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             label: entry.label,
             gain_db: entry.gain_db,
             pan: entry.pan,
+            gate: entry.gate,
+            comp: entry.comp,
             muted: entry.mute,
             buses: routed,
         });
@@ -426,14 +438,20 @@ pub fn render(spec: &RouteSpec) -> String {
             .collect();
         let _ = write!(
             text,
-            "\n[[input]]\n{key} = {}\nbuses = [{}]\n{}gain_db = {}\npan = {}\nmute = {}\n",
+            "\n[[input]]\n{key} = {}\nbuses = [{}]\n{}gain_db = {}\npan = {}\n",
             quoted(&input.device),
             buses.join(", "),
             label_line(input.label.as_ref()),
             input.gain_db,
             input.pan,
-            input.muted
         );
+        // Only when they are on: most inputs have neither.
+        for (key, amount) in [("gate", input.gate), ("comp", input.comp)] {
+            if amount > 0.0 {
+                let _ = writeln!(text, "{key} = {amount}");
+            }
+        }
+        let _ = writeln!(text, "mute = {}", input.muted);
     }
     for scene in &spec.scenes {
         let _ = write!(text, "\n[[scene]]\nname = {}\n", quoted(&scene.name));
@@ -541,6 +559,8 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_label(table, input.label.as_ref());
         set_number(table, "gain_db", input.gain_db);
         set_number(table, "pan", input.pan);
+        set_number(table, "gate", input.gate);
+        set_number(table, "comp", input.comp);
         set_switch(table, "mute", input.muted);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
@@ -713,6 +733,13 @@ mod tests {
         spec.buses[1].label = Some("Kopfhörer".into());
         spec.latency_ms = 80;
         let text = render(&spec);
+        // A gate or a compressor that is off has no line.
+        assert!(!text.contains("gate") && !text.contains("comp"), "{text}");
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        spec.inputs[0].gate = 2.5;
+        spec.inputs[1].comp = 10.0;
+        let text = render(&spec);
+        assert!(text.contains("gate = 2.5\n") && text.contains("comp = 10\n"));
         assert_eq!(parse(&text), Ok(spec), "{text}");
     }
 
@@ -749,11 +776,15 @@ mod tests {
         spec.inputs[0].gain_db = -3.7;
         spec.inputs[0].pan = 0.5;
         spec.inputs[0].label = Some("Musik".into());
+        spec.inputs[0].gate = 3.0;
+        spec.inputs[1].comp = 4.5;
         spec.inputs[1].muted = false;
         spec.buses[0].gain_db = -6.0;
         spec.latency_ms = 80;
         let text = merge(EXAMPLE, &spec);
         assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        assert!(text.contains("gate = 3\n"), "{text}");
+        assert!(text.contains("comp = 4.5\n"), "{text}");
 
         // Every comment line of the example is still there, in its order.
         let comments = |text: &str| -> Vec<String> {
@@ -1018,6 +1049,11 @@ mod tests {
             )
         };
         assert!(error(&input("pan = 2")).contains("pan must be -1 to 1"));
+        assert!(error(&input("gate = 11")).contains("input \"m\": gate must be 0 (off) to 10"));
+        assert!(error(&input("comp = -1")).contains("input \"m\": comp must be 0 (off) to 10"));
+        assert!(error(&input("compressor = 3")).contains("unknown field"));
+        let spec = parse(&input("gate = 2\ncomp = 7.5")).expect("a gate and a compressor");
+        assert_eq!((spec.inputs[0].gate, spec.inputs[0].comp), (2.0, 7.5));
         assert!(error(&input("gain_db = -100")).contains("input \"m\""));
         assert!(error("[[bus]]\nname = 1").contains("line 2"));
     }

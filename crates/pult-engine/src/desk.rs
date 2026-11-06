@@ -166,6 +166,8 @@ impl Desk for EngineDesk {
                     muted: spec.muted,
                     solo,
                     pan: spec.pan,
+                    gate: spec.gate,
+                    comp: spec.comp,
                     buses: input
                         .routes
                         .iter()
@@ -226,6 +228,14 @@ impl Desk for EngineDesk {
             } => {
                 let index = self.input_index(input)?;
                 self.running.apply(&Command::Pan(index, pan, ramp_ms))
+            }
+            Action::InputGate { input, amount } => {
+                let index = self.input_index(input)?;
+                self.running.apply(&Command::Gate(index, amount))
+            }
+            Action::InputComp { input, amount } => {
+                let index = self.input_index(input)?;
+                self.running.apply(&Command::Comp(index, amount))
             }
             Action::BusGain { bus, db, ramp_ms } => {
                 let target = Target::Bus(self.bus_index(bus)?);

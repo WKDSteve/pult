@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::binding::{Binding, BusParam, InputParam, Value};
 use crate::control::{Command, Target};
 use crate::view::{Action, BusView, EventKind, EventView, GAIN_RANGE_DB, InputView, MeterPoint};
-use crate::view::{MixerView, SourceKind};
+use crate::view::{MixerView, SourceKind, check_amount};
 
 /// The version of these messages; a change that an old client would misread raises it.
 pub const VERSION: u32 = 1;
@@ -87,6 +87,12 @@ pub struct InputState {
     pub solo: bool,
     /// -1 (left) to 1 (right).
     pub pan: f32,
+    /// Its gate as one knob, 0 (off) to 10; 0 from a run older than gates.
+    #[serde(default)]
+    pub gate: f32,
+    /// Its compressor as one knob, 0 (off) to 10; 0 from a run older than compressors.
+    #[serde(default)]
+    pub comp: f32,
     /// The names of the buses it feeds.
     pub buses: Vec<String>,
     /// Whether the device or program is there.
@@ -216,6 +222,8 @@ impl InputState {
             muted: input.muted,
             solo: input.solo,
             pan: input.pan,
+            gate: input.gate,
+            comp: input.comp,
             buses: input.buses.iter().filter_map(bus_name).collect(),
             present: input.present,
             peak_db: input.peak_db,
@@ -247,7 +255,7 @@ impl BusState {
 pub enum OpValue {
     /// For a mute, a solo or a crosspoint.
     Switch(bool),
-    /// For a gain in dB or a pan.
+    /// For a gain in dB, a pan, or the one knob of a gate or a compressor.
     Number(f32),
 }
 
@@ -322,6 +330,16 @@ impl Op {
                 OpValue::Number(*pan),
                 *ramp_ms,
             ),
+            Command::Gate(input, amount) => set(
+                target(Target::Input(*input), "gate")?,
+                OpValue::Number(*amount),
+                0,
+            ),
+            Command::Comp(input, amount) => set(
+                target(Target::Input(*input), "comp")?,
+                OpValue::Number(*amount),
+                0,
+            ),
             Command::Route(input, to, on) => set(
                 format!("matrix/{}/{}", input + 1, bus(*to)?),
                 OpValue::Switch(*on),
@@ -345,7 +363,7 @@ impl Op {
     /// # Errors
     ///
     /// A message when the address names nothing in `view`, its parameter is only read, the
-    /// value is of the wrong kind, a gain is out of range, or a ramp is too long or asked of
+    /// value is of the wrong kind or out of range, or a ramp is too long or asked of
     /// what does not ramp. Elsewhere a fader's off is sent as the lowest gain; a client's number
     /// that is too high or too low is a mistake.
     pub fn action(&self, view: &MixerView) -> Result<Action, String> {
@@ -403,6 +421,12 @@ fn value_for(binding: Binding, value: OpValue, address: &str) -> Result<Value, S
         }
         (Binding::Input(_, InputParam::Pan), OpValue::Number(pan)) => {
             Ok(Value::Pan(wants_number(pan)?))
+        }
+        (Binding::Input(_, InputParam::Gate), OpValue::Number(amount)) => {
+            check_amount("gate", wants_number(amount)?).map(Value::Amount)
+        }
+        (Binding::Input(_, InputParam::Comp), OpValue::Number(amount)) => {
+            check_amount("comp", wants_number(amount)?).map(Value::Amount)
         }
         (
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
@@ -504,6 +528,20 @@ mod tests {
             })
         );
         assert_eq!(
+            action(r#"{"op":"set","address":"input/2/gate","value":3}"#),
+            Ok(Action::InputGate {
+                input: 1,
+                amount: 3.0
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/2/comp","value":0}"#),
+            Ok(Action::InputComp {
+                input: 1,
+                amount: 0.0
+            })
+        );
+        assert_eq!(
             action(r#"{"op":"set","address":"matrix/2/A1","value":false}"#),
             Ok(Action::Route {
                 input: 1,
@@ -574,6 +612,20 @@ mod tests {
                 input: 0,
                 pan: 0.5,
                 ramp_ms: 20
+            })
+        );
+        assert_eq!(
+            action(&Command::Gate(1, 2.5)),
+            Ok(Action::InputGate {
+                input: 1,
+                amount: 2.5
+            })
+        );
+        assert_eq!(
+            action(&Command::Comp(0, 10.0)),
+            Ok(Action::InputComp {
+                input: 0,
+                amount: 10.0
             })
         );
         assert_eq!(
@@ -665,8 +717,13 @@ mod tests {
 
         let mut older = serde_json::to_value(&state).expect("to JSON");
         older.as_object_mut().expect("an object").remove("scenes");
+        // A run older than gates and compressors says nothing of them: they read as off.
+        let input = older["inputs"][0].as_object_mut().expect("an input");
+        input.remove("gate");
+        input.remove("comp");
         let read: State = serde_json::from_value(older).expect("from JSON");
         assert_eq!(read.scenes, Vec::<String>::new());
+        assert_eq!((read.inputs[0].gate, read.inputs[0].comp), (0.0, 0.0));
     }
 
     #[test]
@@ -691,6 +748,22 @@ mod tests {
         assert!(refused(r#"{"op":"set","address":"input/1/gain","value":60}"#).contains("outside"));
         assert!(
             refused(r#"{"op":"set","address":"input/1/gain","value":-200}"#).contains("outside")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"input/1/gate","value":11}"#)
+                .contains("gate must be 0 (off) to 10")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"input/1/comp","value":-1}"#)
+                .contains("comp must be 0 (off) to 10")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"input/1/comp","value":true}"#)
+                .contains("takes a number")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"input/1/comp","value":3,"ramp_ms":100}"#)
+                .contains("only a gain or a pan")
         );
     }
 

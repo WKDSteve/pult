@@ -200,6 +200,12 @@ impl GateControls {
         }
     }
 
+    /// Sets the gate by its one knob ([`GateParams::simple`]); at 0 it is off.
+    pub fn set_simple(&self, amount: f32) {
+        self.set(GateParams::simple(amount));
+        self.switch(amount > 0.0);
+    }
+
     /// Switches the gate on or off; off, it opens and keeps its settings.
     pub fn switch(&self, on: bool) {
         self.on.store(on, Ordering::Release);
@@ -456,6 +462,12 @@ impl CompressorControls {
             release_ms: self.release_ms.load(),
             makeup_db: self.makeup_db.load(),
         }
+    }
+
+    /// Sets the compressor by its one knob ([`CompressorParams::simple`]); at 0 it is off.
+    pub fn set_simple(&self, amount: f32) {
+        self.set(CompressorParams::simple(amount));
+        self.switch(amount > 0.0);
     }
 
     /// Switches the compressor on or off; off, it lets go and keeps its settings.
