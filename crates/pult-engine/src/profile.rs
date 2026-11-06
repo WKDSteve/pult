@@ -38,11 +38,15 @@
 //!
 //! [[scene.input]]
 //! input = 2                    # its place in the route, as in input/2/gain
-//! gain_db = -12                # only what differs; also pan, mute, buses
+//! gain_db = -12                # only what differs; also pan, mute, gate, comp, buses
 //!
 //! [[scene.bus]]
 //! bus = "A1"
-//! mute = false                 # also gain_db
+//! mute = false                 # also gain_db, eq_on
+//!
+//! [[scene.bus.eq]]             # one band of this bus's equalizer
+//! band = 2
+//! gain_db = 3                  # only what differs; also kind, freq_hz, q
 //! ```
 //!
 //! Unknown keys are errors, so a typo does not silently fall back to a default.
@@ -55,6 +59,7 @@ use serde::Deserialize;
 
 use std::fmt::Write as _;
 
+use pult_core::eq::BandChange;
 use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
@@ -119,6 +124,8 @@ struct SceneInputEntry {
     pan: Option<f32>,
     mute: Option<bool>,
     buses: Option<Vec<String>>,
+    gate: Option<f32>,
+    comp: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,6 +134,9 @@ struct SceneBusEntry {
     bus: String,
     gain_db: Option<f32>,
     mute: Option<bool>,
+    eq_on: Option<bool>,
+    #[serde(default)]
+    eq: Vec<EqEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,6 +225,101 @@ fn bus_index(what: &str, name: &str, buses: &[BusSpec]) -> Result<usize, Profile
     })
 }
 
+/// What a scene `what` changes of the input at `index`.
+fn scene_input(
+    what: &str,
+    index: usize,
+    input: SceneInputEntry,
+    buses: &[BusSpec],
+) -> Result<SceneInput, ProfileError> {
+    let place = format!("{what}, input {}", input.input);
+    if let Some(gain_db) = input.gain_db {
+        check_gain(&place, gain_db)?;
+    }
+    if let Some(pan) = input.pan {
+        check_pan(&place, pan)?;
+    }
+    let routed = match input.buses {
+        Some(names) => {
+            if names.is_empty() {
+                return fail(format!("{place} would feed no bus; mute it instead"));
+            }
+            let mut routed = Vec::with_capacity(names.len());
+            for name in &names {
+                let bus = bus_index(&place, name, buses)?;
+                if routed.contains(&bus) {
+                    return fail(format!("{place} names bus {name} twice"));
+                }
+                routed.push(bus);
+            }
+            routed.sort_unstable();
+            Some(routed)
+        }
+        None => None,
+    };
+    for (key, amount) in [("gate", input.gate), ("comp", input.comp)] {
+        if let Some(amount) = amount {
+            pult_core::view::check_amount(key, amount)
+                .map_err(|why| ProfileError(format!("{place}: {why}")))?;
+        }
+    }
+    if input.gain_db.is_none()
+        && input.pan.is_none()
+        && input.mute.is_none()
+        && routed.is_none()
+        && input.gate.is_none()
+        && input.comp.is_none()
+    {
+        return fail(format!("{place} changes nothing"));
+    }
+    Ok(SceneInput {
+        input: index,
+        gain_db: input.gain_db,
+        pan: input.pan,
+        muted: input.mute,
+        buses: routed,
+        gate: input.gate,
+        comp: input.comp,
+    })
+}
+
+/// What a scene changes of the bands of a bus: each setting it names, with its band from 0.
+fn scene_bands(
+    what: &str,
+    entries: Vec<EqEntry>,
+) -> Result<Vec<(usize, BandChange)>, ProfileError> {
+    let mut changes = Vec::new();
+    let mut named = [false; EQ_BANDS];
+    for entry in entries {
+        let Some(index) = entry.band.checked_sub(1).filter(|&index| index < EQ_BANDS) else {
+            return fail(format!(
+                "{what} names band {}; bands are 1 to {EQ_BANDS}",
+                entry.band
+            ));
+        };
+        if std::mem::replace(&mut named[index], true) {
+            return fail(format!("{what} names band {} twice", entry.band));
+        }
+        let settings = [
+            entry.kind.map(BandChange::Kind),
+            entry.freq_hz.map(BandChange::Freq),
+            entry.gain_db.map(BandChange::Gain),
+            entry.q.map(BandChange::Q),
+        ];
+        let before = changes.len();
+        for setting in settings.into_iter().flatten() {
+            let setting = setting
+                .checked()
+                .map_err(|why| ProfileError(format!("{what}, band {}: {why}", entry.band)))?;
+            changes.push((index, setting));
+        }
+        if changes.len() == before {
+            return fail(format!("{what}, band {} changes nothing", entry.band));
+        }
+    }
+    Ok(changes)
+}
+
 /// The scene `entry` against what the route has; `count` is its number of inputs.
 fn scene(entry: SceneEntry, count: usize, buses: &[BusSpec]) -> Result<SceneSpec, ProfileError> {
     if entry.name.is_empty() || entry.name != entry.name.trim() {
@@ -244,45 +349,7 @@ fn scene(entry: SceneEntry, count: usize, buses: &[BusSpec]) -> Result<SceneSpec
         if inputs.iter().any(|known| known.input == index) {
             return fail(format!("{what} names input {} twice", input.input));
         }
-        let place = format!("{what}, input {}", input.input);
-        if let Some(gain_db) = input.gain_db {
-            check_gain(&place, gain_db)?;
-        }
-        if let Some(pan) = input.pan {
-            check_pan(&place, pan)?;
-        }
-        let routed = match input.buses {
-            Some(names) => {
-                if names.is_empty() {
-                    return fail(format!("{place} would feed no bus; mute it instead"));
-                }
-                let mut routed = Vec::with_capacity(names.len());
-                for name in &names {
-                    let bus = bus_index(&place, name, buses)?;
-                    if routed.contains(&bus) {
-                        return fail(format!("{place} names bus {name} twice"));
-                    }
-                    routed.push(bus);
-                }
-                routed.sort_unstable();
-                Some(routed)
-            }
-            None => None,
-        };
-        if input.gain_db.is_none()
-            && input.pan.is_none()
-            && input.mute.is_none()
-            && routed.is_none()
-        {
-            return fail(format!("{place} changes nothing"));
-        }
-        inputs.push(SceneInput {
-            input: index,
-            gain_db: input.gain_db,
-            pan: input.pan,
-            muted: input.mute,
-            buses: routed,
-        });
+        inputs.push(scene_input(&what, index, input, buses)?);
     }
     let mut scene_buses: Vec<SceneBus> = Vec::with_capacity(entry.bus.len());
     for bus in entry.bus {
@@ -294,13 +361,16 @@ fn scene(entry: SceneEntry, count: usize, buses: &[BusSpec]) -> Result<SceneSpec
         if let Some(gain_db) = bus.gain_db {
             check_gain(&place, gain_db)?;
         }
-        if bus.gain_db.is_none() && bus.mute.is_none() {
+        let eq = scene_bands(&place, bus.eq)?;
+        if bus.gain_db.is_none() && bus.mute.is_none() && bus.eq_on.is_none() && eq.is_empty() {
             return fail(format!("{place} changes nothing"));
         }
         scene_buses.push(SceneBus {
             bus: index,
             gain_db: bus.gain_db,
             muted: bus.mute,
+            eq_on: bus.eq_on,
+            eq,
         });
     }
     Ok(SceneSpec {
@@ -535,6 +605,11 @@ pub fn render(spec: &RouteSpec) -> String {
         for input in &scene.inputs {
             let _ = write!(text, "\n[[scene.input]]\ninput = {}\n", input.input + 1);
             render_changes(&mut text, input.gain_db, input.pan, input.muted);
+            for (key, amount) in [("gate", input.gate), ("comp", input.comp)] {
+                if let Some(amount) = amount {
+                    let _ = writeln!(text, "{key} = {amount}");
+                }
+            }
             if let Some(buses) = &input.buses {
                 let names: Vec<String> = buses
                     .iter()
@@ -547,6 +622,22 @@ pub fn render(spec: &RouteSpec) -> String {
             let name = quoted(&spec.buses[bus.bus].name);
             let _ = write!(text, "\n[[scene.bus]]\nbus = {name}\n");
             render_changes(&mut text, bus.gain_db, None, bus.muted);
+            if let Some(on) = bus.eq_on {
+                let _ = writeln!(text, "eq_on = {on}");
+            }
+            for settings in bus.eq.chunk_by(|a, b| a.0 == b.0) {
+                let _ = write!(text, "\n[[scene.bus.eq]]\nband = {}\n", settings[0].0 + 1);
+                for (_, setting) in settings {
+                    let _ = match setting {
+                        BandChange::Kind(kind) => {
+                            writeln!(text, "kind = {}", quoted(kind.word()))
+                        }
+                        BandChange::Freq(hz) => writeln!(text, "freq_hz = {hz}"),
+                        BandChange::Gain(db) => writeln!(text, "gain_db = {db}"),
+                        BandChange::Q(q) => writeln!(text, "q = {q}"),
+                    };
+                }
+            }
         }
     }
     text
@@ -1169,11 +1260,15 @@ mod tests {
                         pan: Some(-0.5),
                         muted: Some(false),
                         buses: Some(vec![0, 1]),
+                        gate: None,
+                        comp: None,
                     }],
                     buses: vec![SceneBus {
                         bus: 1,
                         gain_db: Some(-6.0),
                         muted: Some(true),
+                        eq_on: None,
+                        eq: Vec::new(),
                     }],
                 },
                 SceneSpec {
@@ -1184,6 +1279,8 @@ mod tests {
                         bus: 0,
                         gain_db: Some(3.0),
                         muted: None,
+                        eq_on: None,
+                        eq: Vec::new(),
                     }],
                 },
             ]
@@ -1274,6 +1371,65 @@ mod tests {
             ))
             .contains("names bus A1 twice")
         );
+    }
+
+    /// A route with one scene of `scene`, which starts inside its `[[scene]]`.
+    fn with_scene(scene: &str) -> String {
+        format!(
+            "[[bus]]\nname = \"A1\"\ndevice = \"x\"\n\
+             [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\n\
+             [[scene]]\nname = \"s\"\n{scene}"
+        )
+    }
+
+    #[test]
+    fn a_scene_changes_gate_compressor_and_equalizer() {
+        let spec = parse(&with_scene(
+            "[[scene.input]]\ninput = 1\ngate = 3\ncomp = 0\n\
+             [[scene.bus]]\nbus = \"A1\"\neq_on = false\n\
+             [[scene.bus.eq]]\nband = 2\ngain_db = 6\nkind = \"high\"\n\
+             [[scene.bus.eq]]\nband = 4\nq = 1.4\nfreq_hz = 9000\n",
+        ))
+        .expect("a scene");
+        let scene = &spec.scenes[0];
+        assert_eq!(
+            (scene.inputs[0].gate, scene.inputs[0].comp),
+            (Some(3.0), Some(0.0))
+        );
+        assert_eq!(scene.buses[0].eq_on, Some(false));
+        assert_eq!(
+            scene.buses[0].eq,
+            [
+                (1, BandChange::Kind(BandKind::HighShelf)),
+                (1, BandChange::Gain(6.0)),
+                (3, BandChange::Freq(9000.0)),
+                (3, BandChange::Q(1.4)),
+            ]
+        );
+        let text = render(&spec);
+        assert_eq!(parse(&text), Ok(spec), "{text}");
+    }
+
+    #[test]
+    fn a_scene_refuses_what_does_not_fit_gate_compressor_and_equalizer() {
+        let refused = |scene: &str| error(&with_scene(scene));
+        assert!(
+            refused("[[scene.input]]\ninput = 1\ngate = 11").contains("gate must be 0 (off) to 10")
+        );
+        assert!(
+            refused("[[scene.input]]\ninput = 1\ncomp = -1").contains("comp must be 0 (off) to 10")
+        );
+        let bus = "[[scene.bus]]\nbus = \"A1\"\n[[scene.bus.eq]]\n";
+        assert!(refused(&format!("{bus}band = 5\ngain_db = 1")).contains("bands are 1 to 4"));
+        assert!(refused(&format!("{bus}band = 1")).contains("band 1 changes nothing"));
+        assert!(refused(&format!("{bus}band = 1\ngain_db = 30")).contains("-24 to 24 dB"));
+        assert!(
+            refused(&format!(
+                "{bus}band = 1\nq = 1\n[[scene.bus.eq]]\nband = 1\nq = 2"
+            ))
+            .contains("names band 1 twice")
+        );
+        assert!(refused("[[scene.bus]]\nbus = \"A1\"").contains("changes nothing"));
     }
 
     #[test]

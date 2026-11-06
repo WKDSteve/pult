@@ -13,5 +13,9 @@ return {
     { ask = "Remote control and MIDI together, a click on the hub page with real sound?" },
     { ask = ":My pult works against the real window?" },
     { ask = "pult start --open opens a real browser tab, and the tile in the running hub-desktop is right?" },
+    { ask = "A real microphone with a gate (gate <input> 3, meter on PRE to set it): quiet between words, no word cut off, no flutter?" },
+    { ask = "The same with a compressor (comp <input> 4): more even and louder, no pumping, no clip on a shout?" },
+    { ask = "The equalizer on the speakers (tab EQ): each band sounds as it says, and moving it or switching it off does not click?" },
+    { ask = "A scene that changes gate, compressor and equalizer: without a click?" },
   },
 }

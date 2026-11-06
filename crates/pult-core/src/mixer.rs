@@ -23,7 +23,7 @@
 //!
 //! An input passes its gate and its compressor ([`crate::dynamics`]) before its fader, in each
 //! of its rings; a bus passes its equalizer ([`crate::eq`]) after the sum and before its fader.
-//! The input meters measure behind gate and compressor.
+//! The input meters measure either what arrives, before all of that, or what goes into the mix.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -73,7 +73,8 @@ pub struct InputControls {
     /// Silent because other inputs are soloed; the control thread sets it for every input
     /// that is not soloed while any is. Acts like `muted` without touching it.
     pub soloed_out: AtomicBool,
-    /// The peak meter measures before gain and mute (true) or after them (false).
+    /// The peak meter measures what arrives, before gate, compressor, gain and mute (true), or
+    /// what goes into the mix, after them (false).
     pub meter_pre_fader: AtomicBool,
     /// -1 (left) to 1 (right); see [`remix_add`].
     pub pan: Glide,
@@ -416,6 +417,9 @@ impl MixerInput {
             // A priming ring is silent, and the ramps wait: a fade-in starts with the sound.
             if self.next_chunk(n) {
                 let block = &mut self.resampled[..n * ch];
+                if pre_fader {
+                    self.stats.peak.record_scaled(block, 1.0);
+                }
                 self.gate.process(&self.controls.gate, block, ch);
                 self.compressor
                     .process(&self.controls.compressor, block, ch);
@@ -429,12 +433,10 @@ impl MixerInput {
                     let (gain, pan) = (&mut self.gain.ramp, &mut self.pan.ramp);
                     remix_add_ramped(block, ch, rest, out_channels, gain, pan);
                 }
-                let metered = if pre_fader {
-                    1.0
-                } else {
-                    before.max(self.gain.ramp.value())
-                };
-                self.stats.peak.record_scaled(block, metered);
+                if !pre_fader {
+                    let metered = before.max(self.gain.ramp.value());
+                    self.stats.peak.record_scaled(block, metered);
+                }
             } else {
                 self.gain.hold();
             }
@@ -1292,6 +1294,83 @@ mod tests {
         handle.stats.peak.take();
         record(&mut mixer, &mut capture, 0.5, 1);
         assert!((handle.stats.peak.take() - 0.5 * compressed).abs() < 2e-3);
+    }
+
+    #[test]
+    fn before_the_fader_the_meter_shows_what_arrives_at_the_gate() {
+        let (mut mixer, mut capture, handle, _) = playing(0.01);
+        handle.controls.gate.set(GateParams {
+            threshold_db: -20.0,
+            hold_ms: 0.0,
+            release_ms: 5.0,
+            ..GateParams::default()
+        });
+        handle.controls.gate.switch(true);
+        let out = record(&mut mixer, &mut capture, 0.01, 20);
+        assert_eq!(out[out.len() - 1], 0.0, "the gate is closed");
+
+        // After the fader nothing goes into the mix; before it the level is there to set it by.
+        handle.stats.peak.take();
+        record(&mut mixer, &mut capture, 0.01, 2);
+        assert_eq!(handle.stats.peak.take(), 0.0);
+        handle
+            .controls
+            .meter_pre_fader
+            .store(true, Ordering::Relaxed);
+        record(&mut mixer, &mut capture, 0.01, 2);
+        assert!((handle.stats.peak.take() - 0.01).abs() < 1e-4);
+    }
+
+    /// How long a second of sound takes through one bus with two stereo rings, in ms. A
+    /// measurement, not a check. The allocation check of these tests needs debug assertions, so:
+    /// `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo test -p pult-core --release
+    /// what_the_dsp_costs -- --ignored --nocapture`.
+    fn time_a_second(set: impl Fn(&InputHandle, &BusHandle)) -> f64 {
+        let (mut a, ring_a, handle_a) = connect(config(2, 960));
+        let (mut b, ring_b, handle_b) = connect(config(2, 960));
+        let (mut mixer, bus) = Mixer::new(vec![ring_a, ring_b], 2);
+        set(&handle_a, &bus);
+        set(&handle_b, &bus);
+        let step = std::f32::consts::TAU * 440.0 / 48_000.0;
+        let mut phase = 0.0_f32;
+        let mut data = vec![0.0; PERIOD * 2];
+        let mut out = vec![0.0; PERIOD * 2];
+        let mut spent = std::time::Duration::ZERO;
+        for _ in 0..1000 {
+            for frame in data.as_chunks_mut::<2>().0 {
+                let sample = 0.5 * phase.sin();
+                *frame = [sample, sample];
+                phase = (phase + step) % std::f32::consts::TAU;
+            }
+            a.push(&data);
+            b.push(&data);
+            let begun = std::time::Instant::now();
+            mixer.process(&mut out);
+            spent += begun.elapsed();
+        }
+        // A thousand callbacks of 10 ms are ten seconds of sound.
+        spent.as_secs_f64() * 100.0
+    }
+
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn what_the_dsp_costs() {
+        let plain = time_a_second(|_, _| {});
+        let dynamics = time_a_second(|input, _| {
+            input.controls.gate.set_simple(5.0);
+            input.controls.compressor.set_simple(8.0);
+        });
+        let all = time_a_second(|input, bus| {
+            input.controls.gate.set_simple(5.0);
+            input.controls.compressor.set_simple(8.0);
+            for band in 0..crate::eq::EQ_BANDS {
+                bus.controls.eq.set(band, Band::at(band).with_gain(3.0));
+            }
+        });
+        println!("per second of sound, two stereo rings on one bus:");
+        println!("  plain                {plain:.2} ms");
+        println!("  gate and compressor  {dynamics:.2} ms");
+        println!("  with all four bands  {all:.2} ms");
     }
 
     #[test]

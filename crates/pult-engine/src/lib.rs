@@ -37,6 +37,7 @@ use assert_no_alloc::assert_no_alloc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SupportedStreamConfig};
 use pult_core::EQ_BANDS;
+use pult_core::eq::BandChange;
 use pult_core::{
     Band, BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
     MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
@@ -366,6 +367,10 @@ pub struct SceneInput {
     pub muted: Option<bool>,
     /// The buses it feeds from now on, as indices into [`RouteSpec::buses`].
     pub buses: Option<Vec<usize>>,
+    /// Its gate as one knob. Goes along its own times, not the scene's.
+    pub gate: Option<f32>,
+    /// Its compressor as one knob. Goes along its own times, not the scene's.
+    pub comp: Option<f32>,
 }
 
 /// What a scene changes of one bus; what it does not name stays as it is.
@@ -377,6 +382,11 @@ pub struct SceneBus {
     pub gain_db: Option<f32>,
     /// Muted.
     pub muted: Option<bool>,
+    /// The switch of its equalizer.
+    pub eq_on: Option<bool>,
+    /// Settings of the bands of its equalizer, each with its band from 0. They glide at their own
+    /// pace, not the scene's.
+    pub eq: Vec<(usize, BandChange)>,
 }
 
 /// A named state of the mixer. It changes values only and opens no device, so it never
@@ -460,10 +470,9 @@ impl RouteSpec {
                     && change.buses.as_ref().is_none_or(|buses| {
                         !buses.is_empty() && buses.iter().all(|&bus| bus < self.buses.len())
                     })
-            }) && scene
-                .buses
-                .iter()
-                .all(|change| change.bus < self.buses.len());
+            }) && scene.buses.iter().all(|change| {
+                change.bus < self.buses.len() && change.eq.iter().all(|(band, _)| *band < EQ_BANDS)
+            });
             if !fits {
                 return invalid(format!("scene \"{}\" does not fit the route", scene.name));
             }

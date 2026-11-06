@@ -1,6 +1,6 @@
 # pult benutzen
 
-Stand Stufe 1 (im Bau): ein Kommandozeilen-Programm, ein Ausgang direkt über `--to` oder mehrere über ein Profil; Eingänge sind Geräte oder einzelne Programme. Beispiel durchgehend: Alle Programme spielen über das virtuelle Kabel VB-CABLE, pult leitet den Ton über ein Focusrite Scarlett 2i2 zum Verstärker.
+Ein Kommandozeilen-Programm und ein Fenster, ein Ausgang direkt über `--to` oder mehrere über ein Profil; Eingänge sind Geräte oder einzelne Programme. Beispiel durchgehend: Alle Programme spielen über das virtuelle Kabel VB-CABLE, pult leitet den Ton über ein Focusrite Scarlett 2i2 zum Verstärker.
 
 ```
 Programme ──► CABLE Input ══ VB-CABLE ══ CABLE Output ──► pult ──► Scarlett 2i2 ──► Verstärker
@@ -186,7 +186,8 @@ pult run --profile meinprofil.toml --log abend.csv
   einen Eingang gleichmäßiger und insgesamt lauter: Je höher der Regler, desto tiefer die Schwelle (bis -30 dB), desto
   stärker das Verhältnis (bis 8:1) und desto mehr Pegel kommt danach dazu (bis 12 dB). Vollaussteuerung kommt dabei nie
   über Vollaussteuerung heraus. Beide messen den lautesten Kanal und regeln alle Kanäle gleich, das Stereobild bleibt.
-  Die Eingangs-Meter zeigen den Pegel dahinter. Im Fenster sitzen beide als kleine Regler **GATE** und **COMP** im Kanalzug.
+  Zum Einstellen der Schwelle: Das Eingangs-Meter zeigt in der Stellung PRE, was ankommt, vor Gate und Kompressor; in der
+  Stellung POST, was in den Mix geht. Im Fenster sitzen beide als kleine Regler **GATE** und **COMP** im Kanalzug.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
@@ -216,11 +217,15 @@ blend_ms = 500               # optional, wie lange der Wechsel dauert, höchsten
 
 [[scene.input]]
 input = 2                    # der zweite [[input]], wie in input/2/gain
-gain_db = -12                # außerdem pan, mute und buses = ["A1", "A2"]
+gain_db = -12                # außerdem pan, mute, gate, comp und buses = ["A1", "A2"]
 
 [[scene.bus]]
 bus = "A1"
-mute = false                 # außerdem gain_db
+mute = false                 # außerdem gain_db und eq_on
+
+[[scene.bus.eq]]             # ein Band des EQ dieses Busses
+band = 2
+gain_db = 3                  # außerdem kind, freq_hz und q
 ```
 
 Gewechselt wird mit `scene abend` (Groß- und Kleinschreibung zählen nicht), im Fenster über das Menü **Scene** oder von

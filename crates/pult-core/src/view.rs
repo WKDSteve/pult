@@ -159,9 +159,9 @@ pub struct EventView {
 /// Where the input meters measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MeterPoint {
-    /// Before gain and mute: what arrives.
+    /// Before gate, compressor, gain and mute: what arrives.
     PreFader,
-    /// After gain and mute: what goes into the mix.
+    /// After all of those: what goes into the mix.
     #[default]
     PostFader,
 }

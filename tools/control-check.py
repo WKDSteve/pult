@@ -62,11 +62,18 @@ input = 1
 gain_db = -12
 pan = -0.5
 buses = ["A1", "A2"]
+gate = 3
+comp = 4
 
 [[scene.bus]]
 bus = "A2"
 gain_db = -6
 mute = false
+
+[[scene.bus.eq]]
+band = 2
+gain_db = 6
+kind = "high"
 
 # As it started.
 [[scene]]
@@ -78,10 +85,17 @@ input = 1
 gain_db = 0
 pan = 0
 buses = ["A1"]
+gate = 0
+comp = 0
 
 [[scene.bus]]
 bus = "A2"
 mute = true
+
+[[scene.bus.eq]]
+band = 2
+gain_db = 0
+kind = "bell"
 """
 
 
@@ -194,6 +208,28 @@ def main():
             if status != 422:
                 failed.append(f"refusal: {status} {text}")
 
+            # Gate, compressor and equalizer, each to its address and back through the state.
+            for address, value, shown in [
+                ("input/1/gate", 2, lambda now: now["inputs"][0]["gate"]),
+                ("input/1/comp", 5, lambda now: now["inputs"][0]["comp"]),
+                ("bus/A1/eq/1/gain", 3, lambda now: now["buses"][0]["eq"][0]["gain_db"]),
+                ("bus/A1/eq/1/freq", 200, lambda now: now["buses"][0]["eq"][0]["freq_hz"]),
+            ]:
+                status, text = op(port, token, op="set", address=address, value=value)
+                if status != 200 or not shows(port, token, lambda now: shown(now) == value):
+                    failed.append(f"{address}: {status} {text}")
+            status, text = op(port, token, op="set", address="input/1/comp", value=11)
+            if status != 422:
+                failed.append(f"a compressor out of range: {status} {text}")
+            status, text = op(port, token, op="set", address="bus/A1/eq", value=False)
+            if status != 200 or not shows(port, token, lambda now: not now["buses"][0]["eq_on"]):
+                failed.append(f"the switch of the equalizer: {status} {text}")
+            op(port, token, op="set", address="bus/A1/eq", value=True)
+            op(port, token, op="set", address="bus/A1/eq/1/gain", value=0)
+            op(port, token, op="set", address="bus/A1/eq/1/freq", value=100)
+            op(port, token, op="set", address="input/1/gate", value=0)
+            op(port, token, op="set", address="input/1/comp", value=0)
+
             stream = socket.create_connection(("127.0.0.1", port), timeout=5)
             stream.sendall(
                 f"GET /api/pult/stream HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
@@ -236,7 +272,11 @@ def main():
                     break
                 changes += 1
                 asked = time.time()
-                want = (-12, -0.5, ["A1", "A2"]) if name == "leise" else (0, 0, ["A1"])
+                want = (
+                    (-12, -0.5, ["A1", "A2"], 3, 4, 6, "high")
+                    if name == "leise"
+                    else (0, 0, ["A1"], 0, 0, 0, "bell")
+                )
                 arrived = shows(
                     port,
                     token,
@@ -244,6 +284,10 @@ def main():
                         now["inputs"][0]["gain_db"],
                         now["inputs"][0]["pan"],
                         now["inputs"][0]["buses"],
+                        now["inputs"][0]["gate"],
+                        now["inputs"][0]["comp"],
+                        now["buses"][1]["eq"][1]["gain_db"],
+                        now["buses"][1]["eq"][1]["kind"],
                     )
                     == want,
                 )

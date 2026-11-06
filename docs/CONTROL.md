@@ -121,7 +121,7 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `{"op": "set", "address": "input/2/gain", "value": -6}` | einen Parameter setzen |
 | `{"op": "set", "address": "input/2/gain", "value": -6, "ramp_ms": 500}` | Gain oder Pan in so vielen Millisekunden erreichen, höchstens 60000; bei anderen Adressen abgelehnt |
 | `{"op": "scene", "name": "abend"}` | zu einer Szene wechseln, Groß- und Kleinschreibung zählen nicht |
-| `{"op": "meter_point", "value": "pre"}` | Eingangs-Meter vor (`pre`) oder hinter (`post`) den Fader legen |
+| `{"op": "meter_point", "value": "pre"}` | Eingangs-Meter auf das legen, was ankommt, vor Gate und Kompressor (`pre`), oder auf das, was in den Mix geht (`post`) |
 | `{"op": "save"}` | den Stand in das Profil speichern, aus dem die Route kam |
 | `{"op": "stop"}` | die Route beenden; wer sie betreibt, macht das in der nächsten Runde selbst und räumt auf |
 | `{"op": "learn", "target": "input/1/gain"}` | die nächste Bewegung am MIDI-Controller bindet die Adresse oder `scene/<name>` |

@@ -51,9 +51,9 @@ pub struct State {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MeterPlace {
-    /// Before gain and mute.
+    /// Before gate, compressor, gain and mute.
     Pre,
-    /// After gain and mute.
+    /// After all of those.
     Post,
 }
 

@@ -61,7 +61,12 @@ mute = true
 # input = 2                  # the second [[input]] above
 # gain_db = -12
 # mute = false
+# comp = 4                   # also gate
 #
 # [[scene.bus]]
 # bus = "A1"
 # gain_db = -6
+#
+# [[scene.bus.eq]]           # also eq_on above, to switch all bands
+# band = 1
+# gain_db = 3

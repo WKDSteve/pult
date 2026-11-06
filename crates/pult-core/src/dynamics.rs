@@ -51,9 +51,10 @@ pub const SIMPLE_MAX: f32 = 10.0;
 /// flutter.
 const GATE_HYSTERESIS_DB: f32 = 3.0;
 
-/// How fast the measured level of a gate falls after a peak, in milliseconds: slower than a
-/// wave of a low tone, so the gate sees a level and not single waves.
-const GATE_LEVEL_FALL_MS: f32 = 10.0;
+/// How fast the measured level of a gate falls after a peak, in milliseconds: so slowly that
+/// between the half waves of a tone of 50 Hz it falls by less than [`GATE_HYSTERESIS_DB`], and the
+/// gate sees a level and not single waves.
+const GATE_LEVEL_FALL_MS: f32 = 30.0;
 
 /// A gate's times are the times after which it has all but arrived: 99 % of the way, 40 dB.
 /// That is this many time constants (the natural logarithm of 100).
@@ -722,6 +723,25 @@ mod tests {
         let mut data = steady(level, 500, 1);
         gate.process(&controls, &mut data, 1);
         assert_eq!(data[data.len() - 1], 0.0);
+    }
+
+    #[test]
+    fn a_gate_does_not_flutter_on_a_low_tone() {
+        let (controls, mut gate) = gate(GateParams {
+            threshold_db: -40.0,
+            hold_ms: 0.0,
+            release_ms: 5.0,
+            ..GateParams::default()
+        });
+        // 2 dB above the threshold: open, also between the half waves, without a hold.
+        let peak = db_to_linear(-38.0);
+        let step = std::f32::consts::TAU * 50.0 / RATE as f32;
+        let original: Vec<f32> = (0..RATE as usize)
+            .map(|frame| peak * (step * frame as f32).sin())
+            .collect();
+        let mut data = original.clone();
+        gate.process(&controls, &mut data, 1);
+        assert_eq!(data[RATE as usize / 2..], original[RATE as usize / 2..]);
     }
 
     #[test]

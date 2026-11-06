@@ -237,6 +237,17 @@ impl Running {
                 }
                 self.spec.inputs[change.input].buses.clone_from(buses);
             }
+            if let Some(amount) = change.gate {
+                self.inputs[change.input].controls.gate.set_simple(amount);
+                self.spec.inputs[change.input].gate = amount;
+            }
+            if let Some(amount) = change.comp {
+                self.inputs[change.input]
+                    .controls
+                    .compressor
+                    .set_simple(amount);
+                self.spec.inputs[change.input].comp = amount;
+            }
         }
         for change in &scene.buses {
             let target = Target::Bus(change.bus);
@@ -245,6 +256,23 @@ impl Running {
             }
             if let Some(muted) = change.muted {
                 self.set_mute(target, muted, blend);
+            }
+            let (eq, spec) = (
+                &self.buses[change.bus].handle.controls.eq,
+                &mut self.spec.buses[change.bus],
+            );
+            if let Some(on) = change.eq_on {
+                eq.switch(on);
+                spec.eq_on = on;
+            }
+            for (band, setting) in &change.eq {
+                // The profile checked both.
+                if let Some(set) = spec.eq.get_mut(*band)
+                    && let Ok(changed) = set.changed(*setting)
+                {
+                    *set = changed;
+                    eq.set(*band, changed);
+                }
             }
         }
     }
