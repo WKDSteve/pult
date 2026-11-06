@@ -2,7 +2,9 @@
 //! window against `FakeDesk`, checked through what the desk ends up with. Controls are found
 //! by their accessible names (`Spotify.exe mute`, `Spotify.exe to A1`, `Spotify.exe gain dB`).
 
-use eframe::egui::{Key, vec2};
+use eframe::egui::{
+    Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, pos2, vec2,
+};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, HarnessBuilder};
 use pult_app::console::{self, ConsoleState, Tab};
@@ -12,7 +14,7 @@ use pult_app::settings::{AutoStart, StartMode};
 use pult_app::start::{self, Choice};
 use pult_app::theme::Theme;
 use pult_app::tray::{self, Answer, START_LABEL};
-use pult_core::view::{Desk, FakeDesk, MixerView};
+use pult_core::view::{Action, BandKind, Desk, FakeDesk, MixerView};
 
 /// `FakeDesk`'s third input: -3 dB, on bus A2 only.
 const SPOTIFY: usize = 2;
@@ -26,6 +28,8 @@ struct App {
     label: Option<(usize, String)>,
     /// Hides the scenes of the desk.
     no_scenes: bool,
+    /// What the window asked of the desk, in order.
+    actions: Vec<Action>,
 }
 
 fn harness() -> Harness<'static, App> {
@@ -35,6 +39,7 @@ fn harness() -> Harness<'static, App> {
         rename: None,
         label: None,
         no_scenes: false,
+        actions: Vec::new(),
     };
     HarnessBuilder::default()
         .with_size(vec2(1280.0, 760.0))
@@ -54,6 +59,7 @@ fn harness() -> Harness<'static, App> {
                     view.inputs[*input].label = Some(label.clone());
                 }
                 for action in console::show(ui, &view, &mut app.state, 0.0) {
+                    app.actions.push(action.clone());
                     app.state.act(&mut app.desk, view.elapsed, action);
                 }
             },
@@ -224,10 +230,95 @@ fn dragging_a_dial_turns_it_and_a_double_click_takes_it_home() {
     let gate = desk_view(&mut harness).inputs[SPOTIFY].gate;
     assert!((gate - 2.5).abs() < 1e-3, "gate {gate}");
 
+    // One click is no double click, and leaves it where it is.
+    harness.state_mut().actions.clear();
     harness.get_by_label("Spotify.exe gate").click();
-    harness.step();
+    let gate = desk_view(&mut harness).inputs[SPOTIFY].gate;
+    assert!((gate - 2.5).abs() < 1e-3, "gate {gate}");
+    assert_eq!(harness.state_mut().actions, []);
+
     harness.get_by_label("Spotify.exe gate").click();
     assert_eq!(desk_view(&mut harness).inputs[SPOTIFY].gate, 0.0);
+    assert_eq!(harness.state_mut().actions.len(), 1, "one action for it");
+}
+
+/// One notch of the wheel where the pointer is.
+fn wheel(harness: &Harness<'_, App>, notches: f32) {
+    harness.event(Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: vec2(0.0, notches),
+        phase: TouchPhase::Move,
+        source: MouseWheelSource::Wheel,
+        modifiers: Modifiers::NONE,
+    });
+}
+
+#[test]
+fn the_wheel_on_a_dial_turns_it_and_leaves_the_page_where_it_is() {
+    let label = "A1 equalizer band 2 gain";
+    let mut harness = harness();
+    harness.set_size(vec2(1000.0, 300.0));
+    harness.state_mut().state.tab = Tab::Equalizer;
+    harness.run_steps(2);
+    let before = harness.get_by_label(label).rect().center();
+    harness.hover_at(before);
+    harness.run_steps(2);
+    for _ in 0..5 {
+        wheel(&harness, -1.0);
+        harness.step();
+    }
+    harness.run_steps(10);
+    let gain = desk_view(&mut harness).buses[0].eq[1].gain_db;
+    assert!((gain + 5.0).abs() < 1e-3, "gain {gain}");
+    let after = harness.get_by_label(label).rect().center();
+    assert_eq!(after.y, before.y, "the page stayed");
+}
+
+#[test]
+fn each_tab_scrolls_for_itself() {
+    let mut harness = harness();
+    harness.set_size(vec2(1000.0, 220.0));
+    harness.state_mut().state.tab = Tab::Equalizer;
+    harness.run_steps(2);
+    let start = harness.get_by_label("A1 equalizer").rect().center().y;
+
+    harness.state_mut().state.tab = Tab::Matrix;
+    harness.run_steps(2);
+    let cell = harness.get_by_label("Spotify.exe to A1").rect().center();
+    // Inside the part of the view that shows: the cell itself lies below the window.
+    harness.hover_at(pos2(500.0, 130.0));
+    harness.run_steps(2);
+    for _ in 0..5 {
+        wheel(&harness, -1.0);
+        harness.step();
+    }
+    harness.run_steps(30);
+    let moved = harness.get_by_label("Spotify.exe to A1").rect().center().y;
+    assert!(
+        moved < cell.y,
+        "the matrix scrolled: {moved} from {}",
+        cell.y
+    );
+
+    harness.state_mut().state.tab = Tab::Equalizer;
+    harness.run_steps(2);
+    let back = harness.get_by_label("A1 equalizer").rect().center().y;
+    assert_eq!(back, start);
+}
+
+#[test]
+fn a_screen_reader_cannot_set_a_dial_past_its_ends() {
+    let mut harness = harness();
+    harness.state_mut().state.tab = Tab::Equalizer;
+    harness.run_steps(2);
+    let freq = "A1 equalizer band 2 freq";
+    for (set, expected) in [(-5.0, 20.0), (1e9, 20_000.0), (440.0, 440.0)] {
+        harness.get_by_label(freq).set_value_accesskit(set);
+        harness.run_steps(2);
+        assert_eq!(desk_view(&mut harness).buses[0].eq[1].freq_hz, expected);
+    }
+    let refused = harness.state_mut().state.log().entries().len();
+    assert_eq!(refused, 0, "nothing was refused");
 }
 
 #[test]
@@ -243,7 +334,6 @@ fn a_bus_strip_switches_its_equalizer() {
 
 #[test]
 fn the_equalizer_view_sets_its_bands() {
-    use pult_core::view::BandKind;
     let mut harness = harness();
     harness.run_steps(2);
     harness.get_by_label("EQ").click();
@@ -264,8 +354,11 @@ fn the_equalizer_view_sets_its_bands() {
         .get_by_label("A2 equalizer band 2 kind high")
         .click();
     harness.run_steps(2);
-    // The kind it has already: one of them is always on, and nothing changes.
+    // The kind it has already: one of them is always on, and nothing is asked of the desk.
+    harness.state_mut().actions.clear();
     harness.get_by_label("A2 equalizer band 1 kind low").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state_mut().actions, []);
     harness.get_by_label("A1 equalizer").click();
     let view = desk_view(&mut harness);
     let band = view.buses[1].eq[1];
@@ -712,6 +805,7 @@ fn header_gap(width: f32, profile: Option<&str>) -> f32 {
         rename: None,
         label: None,
         no_scenes: false,
+        actions: Vec::new(),
     };
     let profile = profile.map(std::path::PathBuf::from);
     let mut harness = HarnessBuilder::default()
@@ -768,6 +862,7 @@ fn the_header_keeps_what_says_most() {
             rename: None,
             label: None,
             no_scenes: false,
+            actions: Vec::new(),
         };
         let mut harness = HarnessBuilder::default()
             .with_size(vec2(width, 760.0))

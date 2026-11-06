@@ -82,6 +82,18 @@ impl Dial {
     pub fn stepped(self, value: f32, steps: f32) -> f32 {
         self.span.value(self.span.pos(value) + steps * STEP)
     }
+
+    /// How much a step from `value` changes it. By octaves that depends on where it stands; at the
+    /// upper end, the step down.
+    #[must_use]
+    pub fn step_at(self, value: f32) -> f32 {
+        let up = self.stepped(value, 1.0) - value;
+        if up > 0.0 {
+            up
+        } else {
+            value - self.stepped(value, -1.0)
+        }
+    }
 }
 
 /// The number in `value`; `None` for what is no number of a dial.
@@ -148,11 +160,13 @@ pub fn dial(ui: &mut Ui, value: &mut f32, dial: Dial, size: f32, label: &str) ->
         if wheel != 0.0 {
             *value = dial.stepped(*value, wheel);
         }
+        // The wheel is this dial's now: a page that scrolls would carry it away under the pointer.
+        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
     if let Some(asked) = super::assisted(ui, response.id) {
         *value = match asked {
             #[allow(clippy::cast_possible_truncation)]
-            super::Assist::Set(set) => dial.span.value(dial.span.pos(set as f32)),
+            super::Assist::Set(set) => (set as f32).clamp(dial.span.low(), dial.span.high()),
             super::Assist::Steps(steps) => dial.stepped(*value, steps),
         };
     }
@@ -161,7 +175,7 @@ pub fn dial(ui: &mut Ui, value: &mut f32, dial: Dial, size: f32, label: &str) ->
     }
     response.widget_info(|| WidgetInfo::slider(true, f64::from(*value), label));
     let (low, high) = (f64::from(dial.span.low()), f64::from(dial.span.high()));
-    super::offer_range(ui, response.id, low..=high, (high - low) * f64::from(STEP));
+    super::offer_range(ui, response.id, low..=high, f64::from(dial.step_at(*value)));
 
     if !ui.is_rect_visible(rect) {
         return response;
@@ -272,6 +286,20 @@ mod tests {
         // Half the way up from 20 Hz: where 20 kHz has as many octaves as 20 Hz.
         let middle = dial.dragged(20.0, -80.0, false);
         assert!((middle - 632.5).abs() < 1.0, "{middle}");
+    }
+
+    #[test]
+    fn a_step_says_what_it_comes_to_where_the_dial_stands() {
+        let even = Dial::of(GATE).expect("a dial");
+        assert!((even.step_at(0.0) - 10.0 / 48.0).abs() < 1e-4);
+        assert!(
+            (even.step_at(10.0) - 10.0 / 48.0).abs() < 1e-4,
+            "at the top"
+        );
+        let octaves = Dial::of(band(BandParam::Freq)).expect("a dial");
+        let (low, high) = (octaves.step_at(20.0), octaves.step_at(500.0));
+        assert!((low - 3.1).abs() < 0.1, "{low}");
+        assert!((high - 77.0).abs() < 2.0, "{high}");
     }
 
     #[test]

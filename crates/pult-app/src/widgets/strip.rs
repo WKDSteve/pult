@@ -29,8 +29,9 @@ const DYNAMICS_HEIGHT: f32 = 54.0;
 const DIAL_SIZE: f32 = 26.0;
 const MUTE_SOLO_HEIGHT: f32 = 30.0;
 const READOUT_HEIGHT: f32 = 42.0;
-/// Below this the fader is too short to use; the strip scrolls instead.
-pub const MIN_FADER_HEIGHT: f32 = 160.0;
+/// Below this the fader is too short to use. The strip does not scroll up and down: a window too
+/// small even for this cuts it off at the bottom.
+pub const MIN_FADER_HEIGHT: f32 = 100.0;
 
 /// Zones of one strip, shared by all strips of a console.
 #[derive(Clone, Copy, Debug)]
@@ -84,14 +85,17 @@ impl Zones {
         }
     }
 
-    /// Height a strip needs for `buses` with the shortest usable fader.
+    /// Height the console needs for strips over `buses` with the shortest usable fader, with the
+    /// gaps above and below them.
     #[must_use]
     pub fn min_height(buses: usize) -> f32 {
         let pad = Theme::current().metrics.strip_pad;
+        let gap = Theme::current().metrics.strip_gap;
         let rows = buses.div_ceil(ASSIGN_PER_ROW).max(1);
         #[allow(clippy::cast_precision_loss)]
         let assign = rows as f32 * ASSIGN_ROW_HEIGHT + 6.0;
-        2.0 * pad
+        2.0 * gap
+            + 2.0 * pad
             + HEADER_HEIGHT
             + PAN_HEIGHT
             + assign
@@ -567,6 +571,13 @@ mod tests {
         let short = Zones::new(Rect::from_min_size(pos2(0.0, 0.0), vec2(88.0, 100.0)), 3);
         assert!(short.fader.height() >= MIN_FADER_HEIGHT);
         assert!(Zones::min_height(4) > Zones::min_height(3));
+        // A strip of the height the console gives it holds all its zones.
+        let gap = Theme::current().metrics.strip_gap;
+        let height = Zones::min_height(4) - 2.0 * gap;
+        let least = Rect::from_min_size(pos2(0.0, 0.0), vec2(88.0, height));
+        let zones = Zones::new(least, 4);
+        assert!((zones.fader.height() - MIN_FADER_HEIGHT).abs() < 1e-3);
+        assert!(zones.readout.bottom() <= least.bottom());
         assert_eq!(zones.rect(Zone::Info), zones.pan.union(zones.assign));
     }
 }

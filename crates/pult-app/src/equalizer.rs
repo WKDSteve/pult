@@ -43,7 +43,9 @@ pub fn show(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
             .color(p.text_faint),
     );
     ui.add_space(6.0);
-    ScrollArea::both().auto_shrink(false).show(ui, |ui| {
+    // A name of its own: the matrix scrolls in the same place, and would lend it its offset.
+    let area = ScrollArea::both().id_salt("equalizer");
+    area.auto_shrink(false).show(ui, |ui| {
         for (index, bus) in view.buses.iter().enumerate() {
             Frame::new()
                 .fill(p.surface)

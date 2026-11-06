@@ -52,9 +52,14 @@ impl Span {
         self.high
     }
 
-    /// Where `value` lies between the ends, 0 to 1.
+    /// Where `value` lies between the ends, 0 to 1; what lies outside them counts as the nearer
+    /// end, a NaN as the lower.
     #[must_use]
     pub fn pos(self, value: f32) -> f32 {
+        // Below the lower end, before the logarithm: of a negative number it has none.
+        if value.is_nan() || value <= self.low {
+            return 0.0;
+        }
         let pos = if self.octaves {
             (value / self.low).ln() / (self.high / self.low).ln()
         } else {
@@ -63,9 +68,13 @@ impl Span {
         pos.clamp(0.0, 1.0)
     }
 
-    /// The value at `pos`, 0 to 1; never outside the ends, whatever the rounding does.
+    /// The value at `pos`, 0 to 1; never outside the ends, whatever the rounding does, and a NaN
+    /// is the lower end.
     #[must_use]
     pub fn value(self, pos: f32) -> f32 {
+        if pos.is_nan() {
+            return self.low;
+        }
         let pos = pos.clamp(0.0, 1.0);
         let value = if self.octaves {
             self.low * (self.high / self.low).powf(pos)
@@ -182,6 +191,24 @@ pub fn format_mark(db: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_span_has_a_place_for_everything_and_stays_between_its_ends() {
+        for span in [Span::even((-24.0, 24.0)), Span::octaves((20.0, 20_000.0))] {
+            for odd in [f32::NAN, f32::NEG_INFINITY, span.low() - 1.0] {
+                assert_eq!(span.pos(odd), 0.0, "{odd}");
+            }
+            assert_eq!(span.pos(f32::INFINITY), 1.0);
+            assert_eq!(span.pos(1e9), 1.0);
+            assert_eq!(span.value(f32::NAN), span.low());
+            assert_eq!(span.value(-1.0), span.low());
+            assert_eq!(span.value(2.0), span.high());
+        }
+        // By octaves also what has no logarithm.
+        let octaves = Span::octaves((20.0, 20_000.0));
+        assert_eq!(octaves.pos(-5.0), 0.0);
+        assert_eq!(octaves.pos(0.0), 0.0);
+    }
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4

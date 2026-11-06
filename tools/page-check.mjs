@@ -131,14 +131,63 @@ try {
   );
   check("gain arrives", true);
 
-  // The one knob of a compressor, through its slider; off is said in a word.
-  const comp = page.getByRole("slider", { name: "Compressor of CABLE" });
-  check("the compressor starts off", (await comp.inputValue()) === "0");
-  await comp.fill("4");
-  await page.waitForFunction(() =>
-    document.getElementById("notice").textContent.includes("comp 4.0"),
-  );
-  check("the compressor arrives", true);
+  // Asks past the page, like another client: what a slider then shows came through the state.
+  const setOutside = (address, value) =>
+    page.evaluate(
+      async ({ address, value }) => {
+        const token = sessionStorage.getItem("pult.session");
+        const reply = await fetch("/api/pult/ops", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ op: "set", address, value }),
+        });
+        return reply.status;
+      },
+      { address, value },
+    );
+  const follows = async (slider, value) => {
+    for (let tries = 0; tries < 50; tries += 1) {
+      if ((await slider.inputValue()) === value) {
+        return true;
+      }
+      await new Promise((done) => setTimeout(done, 100));
+    }
+    return false;
+  };
+
+  // The one knob of gate and compressor, each to its own address and back through the state.
+  for (const [what, word, address] of [
+    ["Gate", "gate", "input/1/gate"],
+    ["Compressor", "comp", "input/1/comp"],
+  ]) {
+    const knob = page.getByRole("slider", { name: `${what} of CABLE` });
+    check(`the ${word} starts off`, (await knob.inputValue()) === "0");
+    await knob.fill("4");
+    await page.waitForFunction(
+      (text) => document.getElementById("notice").textContent.includes(text),
+      `${word} 4.0`,
+    );
+    check(`the ${word} arrives`, true);
+    const status = await setOutside(address, 7);
+    check(`the ${word} follows another client`, status === 200 && (await follows(knob, "7")));
+    await setOutside(address, 0);
+    check(`the ${word} goes off again`, await follows(knob, "0"));
+  }
+
+  // Let go where it started: a browser fires no change then, and the slider follows all the same.
+  const knob = page.getByRole("slider", { name: "Compressor of CABLE" });
+  await knob.scrollIntoViewIfNeeded();
+  const box = await knob.boundingBox();
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + 8, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, y, { steps: 4 });
+  await page.mouse.move(box.x + 8, y, { steps: 4 });
+  await page.mouse.up();
+  await setOutside("input/1/comp", 3);
+  check("a slider let go where it started still follows", await follows(knob, "3"));
+  await setOutside("input/1/comp", 0);
+  await follows(knob, "0");
 
   // The switch of an equalizer comes back through the state too.
   const eq = page.getByRole("button", { name: "EQ of A1" });

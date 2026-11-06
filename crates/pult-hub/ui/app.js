@@ -133,6 +133,36 @@ function make(tag, className, text) {
   return node;
 }
 
+// Sends what `slider` is let go at. The result says whether a new state has to leave it alone: while
+// it is in the hand, and until the last answer is there. A browser fires no `change` when the slider
+// is let go where it started, so letting go is an event of its own; and every drag counts by itself,
+// so an old answer does not take a new drag out of the hand.
+function holdSlider(slider, send) {
+  let inHand = false;
+  let waiting = 0;
+  const letGo = () => {
+    inHand = false;
+  };
+  slider.addEventListener("pointerdown", () => {
+    inHand = true;
+    window.addEventListener("pointerup", letGo, { once: true });
+    window.addEventListener("pointercancel", letGo, { once: true });
+  });
+  slider.addEventListener("input", () => {
+    inHand = true;
+  });
+  slider.addEventListener("keyup", letGo);
+  slider.addEventListener("blur", letGo);
+  slider.addEventListener("change", () => {
+    inHand = false;
+    waiting += 1;
+    send(Number(slider.value)).finally(() => {
+      waiting -= 1;
+    });
+  });
+  return () => inHand || waiting > 0;
+}
+
 // A small slider for the one knob of a gate or a compressor, 0 (off) to 10. Its `update` leaves it
 // alone while it is in the hand.
 function makeKnob(address, word, what) {
@@ -147,22 +177,16 @@ function makeKnob(address, word, what) {
   label.append(name, slider, value);
   const says = (amount) => (amount > 0 ? amount.toFixed(1) : "off");
 
-  let held = false;
   slider.addEventListener("input", () => {
-    held = true;
     value.textContent = says(Number(slider.value));
   });
-  slider.addEventListener("change", () => {
-    ask({ op: "set", address, value: Number(slider.value) }).finally(() => {
-      held = false;
-    });
-  });
+  const held = holdSlider(slider, (set) => ask({ op: "set", address, value: set }));
 
   return {
     node: label,
     update(amount, called) {
       slider.setAttribute("aria-label", `${what} of ${called}`);
-      if (!held) {
+      if (!held()) {
         slider.value = amount;
         value.textContent = says(amount);
       }
@@ -208,20 +232,15 @@ function makeStrip(address, title, isInput) {
   }
 
   let shown = { muted: false, gain_db: 0, eq_on: false };
-  let held = false;
   mute.addEventListener("click", () => {
     ask({ op: "set", address: `${address}/mute`, value: !shown.muted });
   });
   slider.addEventListener("input", () => {
-    held = true;
     gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
   });
-  slider.addEventListener("change", () => {
-    const value = Number(slider.value);
-    ask({ op: "set", address: `${address}/gain`, value }).finally(() => {
-      held = false;
-    });
-  });
+  const held = holdSlider(slider, (value) =>
+    ask({ op: "set", address: `${address}/gain`, value }),
+  );
 
   return {
     node: li,
@@ -244,7 +263,7 @@ function makeStrip(address, title, isInput) {
       }
       meter.value = state.peak_db === null ? METER_FLOOR : state.peak_db;
       level.textContent = state.peak_db === null ? "silence" : `${state.peak_db.toFixed(1)} dB`;
-      if (!held) {
+      if (!held()) {
         slider.value = state.gain_db;
         gain.textContent = `${state.gain_db.toFixed(1)} dB`;
       }
