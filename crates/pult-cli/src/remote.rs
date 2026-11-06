@@ -272,6 +272,10 @@ fn shown(state: &State) -> Vec<String> {
     }
     for bus in &state.buses {
         let mut line = format!("{} {}  gain {:.1} dB", bus.name, bus.device, bus.gain_db);
+        // A run older than equalizers names no bands: nothing to say of them.
+        if !bus.eq.is_empty() {
+            line.push_str(&pult_core::view::eq_summary(bus.eq_on, &bus.eq));
+        }
         if bus.muted {
             line.push_str("  muted");
         }

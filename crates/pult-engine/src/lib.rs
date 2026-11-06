@@ -36,8 +36,9 @@ use std::time::Instant;
 use assert_no_alloc::assert_no_alloc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SupportedStreamConfig};
+use pult_core::EQ_BANDS;
 use pult_core::{
-    BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
+    Band, BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
     MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
 };
 
@@ -330,10 +331,14 @@ pub struct BusSpec {
     pub gain_db: f32,
     /// Starts muted.
     pub muted: bool,
+    /// Whether its equalizer is switched on; off, the bands keep their settings.
+    pub eq_on: bool,
+    /// The bands of its equalizer.
+    pub eq: [Band; EQ_BANDS],
 }
 
 impl BusSpec {
-    /// A bus at 0 dB, unmuted.
+    /// A bus at 0 dB, unmuted, its equalizer on and flat.
     #[must_use]
     pub fn new(name: impl Into<String>, device: impl Into<String>) -> Self {
         Self {
@@ -342,6 +347,8 @@ impl BusSpec {
             label: None,
             gain_db: 0.0,
             muted: false,
+            eq_on: true,
+            eq: Band::all_flat(),
         }
     }
 }
@@ -437,6 +444,13 @@ impl RouteSpec {
                         "input \"{}\" feeds bus {} twice",
                         input.device, self.buses[bus].name
                     ));
+                }
+            }
+        }
+        for bus in &self.buses {
+            for (index, band) in bus.eq.iter().enumerate() {
+                if let Err(why) = band.checked() {
+                    return invalid(format!("bus {}, band {}: {why}", bus.name, index + 1));
                 }
             }
         }
@@ -1032,6 +1046,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         let sample_rate = found.config.sample_rate();
         handle.controls.gain.store(db_to_linear(bus.gain_db));
         handle.controls.muted.store(bus.muted, Ordering::Relaxed);
+        handle.controls.eq.set_all(bus.eq_on, &bus.eq);
         slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
         opening.push(Opening::Device(found.device, found.config));
         buses.push(RunningBus {
@@ -1225,6 +1240,9 @@ mod tests {
         assert!(
             invalid(&route(vec![InputSpec::new("a", 0.0, vec![1, 1])], 2)).contains("A2 twice")
         );
+        let mut sharp = route(vec![InputSpec::new("a", 0.0, vec![0])], 1);
+        sharp.buses[0].eq[2].q = 50.0;
+        assert!(invalid(&sharp).contains("bus A1, band 3: the q of a band must be 0.1 to 10"));
         let loud = InputSpec {
             comp: 11.0,
             ..InputSpec::new("a", 0.0, vec![0])

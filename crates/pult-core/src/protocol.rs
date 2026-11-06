@@ -9,8 +9,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::binding::{Binding, BusParam, InputParam, Value};
+use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
 use crate::control::{Command, Target};
+use crate::eq::{Band, BandChange, BandKind};
 use crate::view::{Action, BusView, EventKind, EventView, GAIN_RANGE_DB, InputView, MeterPoint};
 use crate::view::{MixerView, SourceKind, check_amount};
 
@@ -120,6 +121,13 @@ pub struct BusState {
     pub gain_db: f32,
     /// Muted.
     pub muted: bool,
+    /// Whether its equalizer is switched on; off from a run older than equalizers.
+    #[serde(default)]
+    pub eq_on: bool,
+    /// The bands of its equalizer, as in the addresses from 1 (`bus/A1/eq/2/gain`); none from
+    /// a run older than equalizers.
+    #[serde(default)]
+    pub eq: Vec<Band>,
     /// Whether the device is there.
     pub present: bool,
     /// The highest peak since the previous state in dBFS; `None` for silence.
@@ -242,6 +250,8 @@ impl BusState {
             sample_rate: bus.sample_rate,
             gain_db: bus.gain_db,
             muted: bus.muted,
+            eq_on: bus.eq_on,
+            eq: bus.eq.to_vec(),
             present: bus.present,
             peak_db: bus.peak_db,
             clipped: bus.clipped,
@@ -250,13 +260,15 @@ impl BusState {
 }
 
 /// A new value for a parameter.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OpValue {
-    /// For a mute, a solo or a crosspoint.
+    /// For a mute, a solo, a crosspoint or the switch of an equalizer.
     Switch(bool),
-    /// For a gain in dB, a pan, or the one knob of a gate or a compressor.
+    /// For a gain in dB, a pan, the one knob of a gate or a compressor, or a number of a band.
     Number(f32),
+    /// For the kind of a band: `low`, `bell` or `high`.
+    Word(String),
 }
 
 /// What a client asks of the mixer.
@@ -265,7 +277,7 @@ pub enum OpValue {
 pub enum Op {
     /// Sets the parameter at `address`.
     Set {
-        /// For example `input/2/gain`, `bus/A1/mute` or `matrix/2/A1`.
+        /// For example `input/2/gain`, `bus/A1/mute`, `bus/A1/eq/2/gain` or `matrix/2/A1`.
         address: String,
         /// The new value.
         value: OpValue,
@@ -340,6 +352,17 @@ impl Op {
                 OpValue::Number(*amount),
                 0,
             ),
+            Command::Eq(to, on) => set(format!("bus/{}/eq", bus(*to)?), OpValue::Switch(*on), 0),
+            Command::EqBand(to, band, change) => {
+                let (setting, value) = match change {
+                    BandChange::Kind(kind) => ("kind", OpValue::Word(kind.word().to_owned())),
+                    BandChange::Freq(hz) => ("freq", OpValue::Number(*hz)),
+                    BandChange::Gain(db) => ("gain", OpValue::Number(*db)),
+                    BandChange::Q(q) => ("q", OpValue::Number(*q)),
+                };
+                let address = format!("bus/{}/eq/{}/{setting}", bus(*to)?, band + 1);
+                set(address, value, 0)
+            }
             Command::Route(input, to, on) => set(
                 format!("matrix/{}/{}", input + 1, bus(*to)?),
                 OpValue::Switch(*on),
@@ -374,7 +397,7 @@ impl Op {
                 ramp_ms,
             } => {
                 let binding = Binding::parse(address, view).map_err(|e| e.to_string())?;
-                let value = value_for(binding, *value, address)?;
+                let value = value_for(binding, value, address)?;
                 let action = binding
                     .write(value)
                     .ok_or_else(|| format!("{address} can only be read"))?;
@@ -398,7 +421,8 @@ impl Op {
 }
 
 /// `value` as the kind of value `binding` takes.
-fn value_for(binding: Binding, value: OpValue, address: &str) -> Result<Value, String> {
+fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, String> {
+    use BusParam::EqBand;
     let wants_number = |number: f32| {
         if number.is_finite() {
             Ok(number)
@@ -406,13 +430,17 @@ fn value_for(binding: Binding, value: OpValue, address: &str) -> Result<Value, S
             Err(format!("{address} takes a finite number"))
         }
     };
+    let band = |change: BandChange| change.checked().map_err(|why| format!("{address}: {why}"));
     match (binding, value) {
+        (Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter), _) => {
+            Err(format!("{address} can only be read"))
+        }
         (
             Binding::Input(_, InputParam::Gain) | Binding::Bus(_, BusParam::Gain),
             OpValue::Number(db),
         ) => {
             let (low, high) = GAIN_RANGE_DB;
-            let db = wants_number(db)?;
+            let db = wants_number(*db)?;
             if (low..=high).contains(&db) {
                 Ok(Value::Gain(db))
             } else {
@@ -420,25 +448,44 @@ fn value_for(binding: Binding, value: OpValue, address: &str) -> Result<Value, S
             }
         }
         (Binding::Input(_, InputParam::Pan), OpValue::Number(pan)) => {
-            Ok(Value::Pan(wants_number(pan)?))
+            Ok(Value::Pan(wants_number(*pan)?))
         }
         (Binding::Input(_, InputParam::Gate), OpValue::Number(amount)) => {
-            check_amount("gate", wants_number(amount)?).map(Value::Amount)
+            check_amount("gate", wants_number(*amount)?).map(Value::Amount)
         }
         (Binding::Input(_, InputParam::Comp), OpValue::Number(amount)) => {
-            check_amount("comp", wants_number(amount)?).map(Value::Amount)
+            check_amount("comp", wants_number(*amount)?).map(Value::Amount)
+        }
+        (Binding::Bus(_, EqBand(_, BandParam::Gain)), OpValue::Number(db)) => {
+            band(BandChange::Gain(wants_number(*db)?)).map(|_| Value::Boost(*db))
+        }
+        (Binding::Bus(_, EqBand(_, BandParam::Freq)), OpValue::Number(hz)) => {
+            band(BandChange::Freq(wants_number(*hz)?)).map(|_| Value::Freq(*hz))
+        }
+        (Binding::Bus(_, EqBand(_, BandParam::Q)), OpValue::Number(q)) => {
+            band(BandChange::Q(wants_number(*q)?)).map(|_| Value::Width(*q))
+        }
+        (Binding::Bus(_, EqBand(_, BandParam::Kind)), OpValue::Word(word)) => {
+            BandKind::from_word(word)
+                .map(Value::Kind)
+                .ok_or_else(|| format!("{address} takes low, bell or high, not \"{word}\""))
+        }
+        (Binding::Bus(_, EqBand(_, BandParam::Kind)), _) => {
+            Err(format!("{address} takes low, bell or high"))
         }
         (
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq)
             | Binding::Route { .. },
             OpValue::Switch(on),
-        ) => Ok(Value::Switch(on)),
-        (Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter), _) => {
-            Err(format!("{address} can only be read"))
-        }
-        (_, OpValue::Number(_)) => Err(format!("{address} takes true or false")),
-        (_, OpValue::Switch(_)) => Err(format!("{address} takes a number")),
+        ) => Ok(Value::Switch(*on)),
+        (
+            Binding::Input(_, InputParam::Mute | InputParam::Solo)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq)
+            | Binding::Route { .. },
+            _,
+        ) => Err(format!("{address} takes true or false")),
+        _ => Err(format!("{address} takes a number")),
     }
 }
 
@@ -542,6 +589,33 @@ mod tests {
             })
         );
         assert_eq!(
+            action(r#"{"op":"set","address":"bus/A2/eq","value":false}"#),
+            Ok(Action::BusEq { bus: 1, on: false })
+        );
+        let band = |change| {
+            Ok(Action::BusEqBand {
+                bus: 0,
+                band: 1,
+                change,
+            })
+        };
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/eq/2/gain","value":-4.5}"#),
+            band(BandChange::Gain(-4.5))
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/eq/2/freq","value":1000}"#),
+            band(BandChange::Freq(1000.0))
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/eq/2/q","value":2}"#),
+            band(BandChange::Q(2.0))
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/eq/2/kind","value":"HIGH"}"#),
+            band(BandChange::Kind(BandKind::HighShelf))
+        );
+        assert_eq!(
             action(r#"{"op":"set","address":"matrix/2/A1","value":false}"#),
             Ok(Action::Route {
                 input: 1,
@@ -628,6 +702,25 @@ mod tests {
                 amount: 10.0
             })
         );
+        assert_eq!(
+            action(&Command::Eq(1, false)),
+            Ok(Action::BusEq { bus: 1, on: false })
+        );
+        for change in [
+            BandChange::Kind(BandKind::LowShelf),
+            BandChange::Freq(250.0),
+            BandChange::Gain(-3.0),
+            BandChange::Q(1.5),
+        ] {
+            assert_eq!(
+                action(&Command::EqBand(0, 3, change)),
+                Ok(Action::BusEqBand {
+                    bus: 0,
+                    band: 3,
+                    change
+                })
+            );
+        }
         assert_eq!(
             action(&Command::Route(2, 0, true)),
             Ok(Action::Route {
@@ -721,9 +814,15 @@ mod tests {
         let input = older["inputs"][0].as_object_mut().expect("an input");
         input.remove("gate");
         input.remove("comp");
+        let bus = older["buses"][0].as_object_mut().expect("a bus");
+        bus.remove("eq_on");
+        bus.remove("eq");
         let read: State = serde_json::from_value(older).expect("from JSON");
         assert_eq!(read.scenes, Vec::<String>::new());
         assert_eq!((read.inputs[0].gate, read.inputs[0].comp), (0.0, 0.0));
+        assert!(!read.buses[0].eq_on && read.buses[0].eq.is_empty());
+        assert!(state.buses[0].eq_on);
+        assert_eq!(state.buses[0].eq.len(), crate::eq::EQ_BANDS);
     }
 
     #[test]
@@ -750,6 +849,34 @@ mod tests {
             refused(r#"{"op":"set","address":"input/1/gain","value":-200}"#).contains("outside")
         );
         assert!(
+            refused(r#"{"op":"set","address":"bus/A1/eq/2/gain","value":30}"#)
+                .contains("the gain of a band must be -24 to 24 dB")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/eq/2/freq","value":5}"#)
+                .contains("the freq of a band must be 20 to 20000 Hz")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/eq/2/kind","value":"notch"}"#)
+                .contains("takes low, bell or high, not \"notch\"")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/eq/2/kind","value":1}"#)
+                .contains("takes low, bell or high")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/eq/2/gain","value":"bell"}"#)
+                .contains("takes a number")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/eq","value":"bell"}"#)
+                .contains("true or false")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/eq/2/gain","value":3,"ramp_ms":100}"#)
+                .contains("only a gain or a pan")
+        );
+        assert!(
             refused(r#"{"op":"set","address":"input/1/gate","value":11}"#)
                 .contains("gate must be 0 (off) to 10")
         );
@@ -773,7 +900,6 @@ mod tests {
             r#"{"op":"save","path":"C:\\evil.toml"}"#,
             r#"{"op":"delete"}"#,
             r#"{"op":"set","address":"input/1/gain"}"#,
-            r#"{"op":"set","address":"input/1/gain","value":"-6"}"#,
             r#"{"op":"set","address":"input/1/gain","value":0,"extra":1}"#,
             r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":-1}"#,
             r#"{"op":"set","address":"input/1/gain","value":0,"ramp_ms":"soon"}"#,

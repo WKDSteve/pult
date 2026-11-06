@@ -9,6 +9,14 @@
 //! label = "Boxen"              # optional, what the window calls it
 //! gain_db = 0                  # optional
 //! mute = false                 # optional
+//! eq_on = true                 # optional: false switches the equalizer off, keeping its bands
+//!
+//! [[bus.eq]]                   # optional: one band of this bus's equalizer
+//! band = 2                     # 1 to 4: low shelf, two bells, high shelf to start with
+//! kind = "bell"                # optional: low, bell or high
+//! freq_hz = 500                # optional, 20 to 20000
+//! gain_db = 3                  # optional, -24 to 24
+//! q = 0.7                      # optional, 0.1 to 10: higher is narrower
 //!
 //! [[input]]
 //! device = "CABLE Output"
@@ -47,8 +55,8 @@ use serde::Deserialize;
 
 use std::fmt::Write as _;
 
-use pult_core::MAX_RAMP_MS;
-use toml_edit::{Array, DocumentMut, Item, Table, Value};
+use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use crate::live::quoted;
 use crate::{BusSpec, Error, InputKind, InputSpec, RouteSpec, SceneBus, SceneInput, SceneSpec};
@@ -131,6 +139,19 @@ struct BusEntry {
     gain_db: f32,
     #[serde(default)]
     mute: bool,
+    eq_on: Option<bool>,
+    #[serde(default)]
+    eq: Vec<EqEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EqEntry {
+    band: usize,
+    kind: Option<BandKind>,
+    freq_hz: Option<f32>,
+    gain_db: Option<f32>,
+    q: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,6 +311,62 @@ fn scene(entry: SceneEntry, count: usize, buses: &[BusSpec]) -> Result<SceneSpec
     })
 }
 
+/// The bands of a bus from its `[[bus.eq]]` entries; a band without an entry stays flat.
+fn bands(what: &str, entries: Vec<EqEntry>) -> Result<[Band; EQ_BANDS], ProfileError> {
+    let mut bands = Band::all_flat();
+    let mut named = [false; EQ_BANDS];
+    for entry in entries {
+        let Some(index) = entry.band.checked_sub(1).filter(|&index| index < EQ_BANDS) else {
+            return fail(format!(
+                "{what} names band {}; bands are 1 to {EQ_BANDS}",
+                entry.band
+            ));
+        };
+        if std::mem::replace(&mut named[index], true) {
+            return fail(format!("{what} names band {} twice", entry.band));
+        }
+        let start = bands[index];
+        bands[index] = Band {
+            kind: entry.kind.unwrap_or(start.kind),
+            freq_hz: entry.freq_hz.unwrap_or(start.freq_hz),
+            gain_db: entry.gain_db.unwrap_or(start.gain_db),
+            q: entry.q.unwrap_or(start.q),
+        }
+        .checked()
+        .map_err(|why| ProfileError(format!("{what}, band {}: {why}", entry.band)))?;
+    }
+    Ok(bands)
+}
+
+/// The buses of a profile, each checked.
+fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
+    let mut buses: Vec<BusSpec> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if !valid_bus_name(&entry.name) {
+            return fail(format!(
+                "bus name \"{}\" must be 1 to {MAX_BUS_NAME} letters, digits, - or _",
+                entry.name
+            ));
+        }
+        if buses.iter().any(|b| b.name == entry.name) {
+            return fail(format!("bus \"{}\" is defined twice", entry.name));
+        }
+        check_gain(&format!("bus {}", entry.name), entry.gain_db)?;
+        check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
+        let eq = bands(&format!("bus {}", entry.name), entry.eq)?;
+        buses.push(BusSpec {
+            name: entry.name,
+            device: entry.device,
+            label: entry.label,
+            gain_db: entry.gain_db,
+            muted: entry.mute,
+            eq_on: entry.eq_on.unwrap_or(true),
+            eq,
+        });
+    }
+    Ok(buses)
+}
+
 fn valid_bus_name(name: &str) -> bool {
     (1..=MAX_BUS_NAME).contains(&name.len())
         && name
@@ -315,27 +392,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         ));
     }
 
-    let mut buses: Vec<BusSpec> = Vec::with_capacity(file.bus.len());
-    for entry in file.bus {
-        if !valid_bus_name(&entry.name) {
-            return fail(format!(
-                "bus name \"{}\" must be 1 to {MAX_BUS_NAME} letters, digits, - or _",
-                entry.name
-            ));
-        }
-        if buses.iter().any(|b| b.name == entry.name) {
-            return fail(format!("bus \"{}\" is defined twice", entry.name));
-        }
-        check_gain(&format!("bus {}", entry.name), entry.gain_db)?;
-        check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
-        buses.push(BusSpec {
-            name: entry.name,
-            device: entry.device,
-            label: entry.label,
-            gain_db: entry.gain_db,
-            muted: entry.mute,
-        });
-    }
+    let buses = buses(file.bus)?;
 
     let mut inputs = Vec::with_capacity(file.input.len());
     for (number, entry) in file.input.into_iter().enumerate() {
@@ -425,6 +482,23 @@ pub fn render(spec: &RouteSpec) -> String {
             bus.gain_db,
             bus.muted
         );
+        if !bus.eq_on {
+            text.push_str("eq_on = false\n");
+        }
+        // Only the bands that are not as they start: most buses have none.
+        for (index, band) in bus.eq.iter().enumerate() {
+            if *band != Band::at(index) {
+                let _ = write!(
+                    text,
+                    "\n[[bus.eq]]\nband = {}\nkind = {}\nfreq_hz = {}\ngain_db = {}\nq = {}\n",
+                    index + 1,
+                    quoted(band.kind.word()),
+                    band.freq_hz,
+                    band.gain_db,
+                    band.q
+                );
+            }
+        }
     }
     for input in &spec.inputs {
         let key = match input.kind {
@@ -504,6 +578,8 @@ pub fn merge(existing: &str, spec: &RouteSpec) -> String {
 /// The merge itself; `None` when `existing` is not a profile of these buses and inputs.
 fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
     let mut file: DocumentMut = existing.parse().ok()?;
+    // What the file says now, to leave the bands of an equalizer alone that did not change.
+    let old = parse(existing).ok()?;
 
     if file.get("latency_ms").is_some() || spec.latency_ms != DEFAULT_LATENCY_MS {
         let same =
@@ -521,7 +597,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
     if buses.len() != spec.buses.len() {
         return None;
     }
-    for (table, bus) in buses.iter_mut().zip(&spec.buses) {
+    for ((table, bus), old) in buses.iter_mut().zip(&spec.buses).zip(&old.buses) {
         if text_of(table, "name") != Some(&bus.name)
             || text_of(table, "device") != Some(&bus.device)
         {
@@ -530,6 +606,16 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_label(table, bus.label.as_ref());
         set_number(table, "gain_db", bus.gain_db);
         set_switch(table, "mute", bus.muted);
+        if old.eq_on != bus.eq_on {
+            if bus.eq_on {
+                table.remove("eq_on");
+            } else {
+                set(table, "eq_on", false.into());
+            }
+        }
+        if old.eq != bus.eq {
+            set_bands(table, &bus.eq);
+        }
     }
 
     let inputs = file.get_mut("input")?.as_array_of_tables_mut()?;
@@ -570,6 +656,38 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
     } else {
         text
     })
+}
+
+/// Writes the bands of a bus anew, as [`render`] does: those that are not as they start.
+fn set_bands(table: &mut Table, bands: &[Band; EQ_BANDS]) {
+    let mut entries = ArrayOfTables::new();
+    for (index, band) in bands.iter().enumerate() {
+        if *band == Band::at(index) {
+            continue;
+        }
+        let mut entry = Table::new();
+        // A whole number where it is one, so 500 does not become 500.0.
+        let number = |value: f32| {
+            let shown = value.to_string();
+            shown.parse::<i64>().map_or_else(
+                |_| shown.parse::<f64>().map_or(Value::from(0.0), Value::from),
+                Value::from,
+            )
+        };
+        let band_number = i64::try_from(index + 1).unwrap_or(1);
+        entry.insert("band", Item::Value(band_number.into()));
+        entry.insert("kind", Item::Value(band.kind.word().into()));
+        entry.insert("freq_hz", Item::Value(number(band.freq_hz)));
+        entry.insert("gain_db", Item::Value(number(band.gain_db)));
+        entry.insert("q", Item::Value(number(band.q)));
+        entry.decor_mut().set_prefix("\n");
+        entries.push(entry);
+    }
+    if entries.is_empty() {
+        table.remove("eq");
+    } else {
+        table.insert("eq", Item::ArrayOfTables(entries));
+    }
 }
 
 fn text_of<'a>(table: &'a Table, key: &str) -> Option<&'a str> {
@@ -738,7 +856,23 @@ mod tests {
         assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
         spec.inputs[0].gate = 2.5;
         spec.inputs[1].comp = 10.0;
+        assert!(!text.contains("eq"), "a flat equalizer has no line: {text}");
+        spec.buses[0].eq_on = false;
+        spec.buses[0].eq[3] = Band {
+            kind: BandKind::Peak,
+            freq_hz: 6300.0,
+            gain_db: -2.5,
+            q: 1.4,
+        };
+        spec.buses[1].eq[0].gain_db = 4.0;
         let text = render(&spec);
+        assert!(text.contains("eq_on = false\n"), "{text}");
+        assert!(
+            text.contains(
+                "[[bus.eq]]\nband = 4\nkind = \"bell\"\nfreq_hz = 6300\ngain_db = -2.5\nq = 1.4\n"
+            ),
+            "{text}"
+        );
         assert!(text.contains("gate = 2.5\n") && text.contains("comp = 10\n"));
         assert_eq!(parse(&text), Ok(spec), "{text}");
     }
@@ -797,6 +931,85 @@ mod tests {
         assert!(text.contains("# process = \"Spotify\""));
         assert!(text.contains("gain_db = -3.7\n"), "{text}");
         assert!(text.contains("latency_ms = 80\n"), "{text}");
+    }
+
+    #[test]
+    fn reads_the_bands_of_an_equalizer_and_refuses_what_does_not_fit() {
+        let bus = |extra: &str| {
+            format!(
+                "[[bus]]\nname = \"A1\"\ndevice = \"x\"\n{extra}\n\
+                 [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\n"
+            )
+        };
+        let spec = parse(&bus("eq_on = false\n[[bus.eq]]\nband = 2\ngain_db = 3\n\
+             [[bus.eq]]\nband = 4\nkind = \"bell\"\nfreq_hz = 9000\nq = 2"))
+        .expect("an equalizer");
+        assert!(!spec.buses[0].eq_on);
+        assert_eq!(spec.buses[0].eq[0], Band::at(0));
+        assert_eq!(spec.buses[0].eq[1], Band::at(1).with_gain(3.0));
+        assert_eq!(
+            spec.buses[0].eq[3],
+            Band {
+                kind: BandKind::Peak,
+                freq_hz: 9000.0,
+                gain_db: 0.0,
+                q: 2.0
+            }
+        );
+        assert!(parse(&bus("")).expect("no equalizer").buses[0].eq_on);
+
+        let band = |extra: &str| error(&bus(&format!("[[bus.eq]]\n{extra}")));
+        assert!(band("band = 5").contains("bus A1 names band 5; bands are 1 to 4"));
+        assert!(band("band = 0").contains("names band 0"));
+        assert!(band("gain_db = 3").contains("missing field `band`"));
+        assert!(band("band = 1\n[[bus.eq]]\nband = 1").contains("names band 1 twice"));
+        assert!(
+            band("band = 1\ngain_db = 30")
+                .contains("bus A1, band 1: the gain of a band must be -24 to 24 dB")
+        );
+        assert!(band("band = 1\nkind = \"notch\"").contains("unknown variant"));
+        assert!(band("band = 1\nslope = 2").contains("unknown field"));
+    }
+
+    #[test]
+    fn merge_writes_the_bands_of_an_equalizer_under_their_bus() {
+        let existing = "# two outputs\n\
+             [[bus]]\nname = \"A1\"\ndevice = \"x\" # the speakers\n\n\
+             [[bus]]\nname = \"A2\"\ndevice = \"y\"\n\n\
+             # the cable\n[[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\n";
+        let mut spec = parse(existing).expect("profile");
+        assert_eq!(merge(existing, &spec), existing, "nothing changed");
+
+        // A band of the first bus: it has to land under that bus, not at the end of the file.
+        spec.buses[0].eq[1] = Band::at(1).with_gain(6.0);
+        let text = merge(existing, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        assert!(text.contains("# two outputs"), "{text}");
+        assert!(text.contains("# the speakers"), "{text}");
+        assert!(text.contains("# the cable"), "{text}");
+        let band = text.find("[[bus.eq]]").expect("a band");
+        assert!(
+            band < text.find("\"A2\"").expect("the second bus"),
+            "{text}"
+        );
+
+        // Switched off, another band changed, the first one flat again.
+        spec.buses[0].eq_on = false;
+        spec.buses[0].eq[1] = Band::at(1);
+        spec.buses[0].eq[0].freq_hz = 80.0;
+        let text = merge(&text, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        assert!(text.contains("eq_on = false"), "{text}");
+        assert!(text.contains("freq_hz = 80\n"), "{text}");
+        assert!(text.contains("# the speakers"), "{text}");
+
+        // All back: nothing of the equalizer is left in the file.
+        spec.buses[0].eq_on = true;
+        spec.buses[0].eq = Band::all_flat();
+        let text = merge(&text, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        assert!(!text.contains("eq"), "{text}");
+        assert!(text.contains("# the cable"), "{text}");
     }
 
     #[test]

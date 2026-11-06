@@ -72,6 +72,13 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
       "sample_rate": 48000,
       "gain_db": 0.0,
       "muted": false,
+      "eq_on": true,
+      "eq": [
+        { "kind": "low", "freq_hz": 100.0, "gain_db": 0.0, "q": 0.7 },
+        { "kind": "bell", "freq_hz": 500.0, "gain_db": 3.0, "q": 0.7 },
+        { "kind": "bell", "freq_hz": 2500.0, "gain_db": 0.0, "q": 0.7 },
+        { "kind": "high", "freq_hz": 8000.0, "gain_db": 0.0, "q": 0.7 }
+      ],
       "present": true,
       "peak_db": -12.1,
       "clipped": 0
@@ -89,6 +96,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
 - `events` sind die letzten 32 Ereignisse; `seq` zählt hoch und zeigt, welche ein Client schon kennt. `type` ist `lost`,
   `back`, `refused` oder `slow`.
 - `gain_db`, `pan`, `muted` und `buses` nennen das Ziel. Läuft eine Rampe, folgt der Ton noch.
+- `eq` sind die vier Bänder des EQ eines Busses in ihrer Reihenfolge, `eq_on` sein Schalter. `kind` ist `low`, `bell`
+  oder `high`. Ein pult, das noch keinen EQ kennt, lässt beides weg: `eq` liest sich dann als leer.
 - `gate` und `comp` sind die Regler von Gate und Kompressor des Eingangs, 0 (aus) bis 10. Ein pult, das beides noch nicht
   kennt, lässt die Felder weg; sie lesen sich dann als 0.
 - `scenes` sind die Szenen des Profils in dessen Reihenfolge.
@@ -123,7 +132,11 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `input/<n>/gain`, `bus/<name>/gain` | Zahl, -96 bis 24 dB; außerhalb wird abgelehnt, nicht begrenzt |
 | `input/<n>/pan` | Zahl, -1 bis 1 |
 | `input/<n>/gate`, `input/<n>/comp` | Zahl, 0 (aus) bis 10; außerhalb wird abgelehnt |
-| `input/<n>/mute`, `input/<n>/solo`, `bus/<name>/mute` | `true` oder `false` |
+| `input/<n>/mute`, `input/<n>/solo`, `bus/<name>/mute`, `bus/<name>/eq` | `true` oder `false` |
+| `bus/<name>/eq/<band>/gain` | Zahl, -24 bis 24 dB; `<band>` zählt von 1 bis 4 |
+| `bus/<name>/eq/<band>/freq` | Zahl, 20 bis 20000 Hz |
+| `bus/<name>/eq/<band>/q` | Zahl, 0.1 bis 10 |
+| `bus/<name>/eq/<band>/kind` | `"low"`, `"bell"` oder `"high"` |
 | `matrix/<n>/<bus>` | `true` oder `false` |
 | `input/<n>/meter`, `bus/<name>/meter` | nur lesbar, im Zustand als `peak_db` |
 

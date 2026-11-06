@@ -142,6 +142,14 @@ device = "Focusrite"       # eindeutiger Teil des Gerätenamens
 label = "Boxen"            # optional: so nennt ihn das Fenster
 gain_db = 0                # optional
 mute = false               # optional
+eq_on = true               # optional: false schaltet den EQ aus, die Bänder bleiben eingestellt
+
+[[bus.eq]]                 # optional: ein Band des EQ dieses Busses
+band = 2                   # 1 bis 4
+kind = "bell"              # optional: low, bell oder high
+freq_hz = 500              # optional, 20 bis 20000
+gain_db = 3                # optional, -24 bis 24
+q = 0.7                    # optional, 0.1 bis 10: je höher, desto schmaler
 
 [[bus]]
 name = "A2"
@@ -179,6 +187,11 @@ pult run --profile meinprofil.toml --log abend.csv
   stärker das Verhältnis (bis 8:1) und desto mehr Pegel kommt danach dazu (bis 12 dB). Vollaussteuerung kommt dabei nie
   über Vollaussteuerung heraus. Beide messen den lautesten Kanal und regeln alle Kanäle gleich, das Stereobild bleibt.
   Die Eingangs-Meter zeigen den Pegel dahinter.
+- **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
+  flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
+  Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
+  steht nur, was abweicht. `eq_on = false` schaltet alle Bänder aus, ohne ihre Einstellung zu verlieren. Hebt der EQ
+  über Vollaussteuerung, begrenzt der Bus und zählt es als Clipping wie sonst auch.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
   ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
 - **Szenen:** `[[scene]]` benennt einen Zustand des Mischpults, siehe unten.
@@ -264,9 +277,11 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `solo <Eingang>`, `unsolo <Eingang>` | nur die Eingänge mit Solo hören, Solo wieder lösen. Es wird nicht gespeichert |
 | `pan <Eingang> <-1..1> [over <ms>]` | Panorama (Mono-Eingang) bzw. Balance (Stereo-Eingang) |
 | `gate <Eingang> <0..10>`, `comp <Eingang> <0..10>` | Gate bzw. Kompressor eines Eingangs einstellen (siehe 5.); `0` oder `off` schaltet aus |
+| `eq <Bus> on`, `eq <Bus> off` | den EQ eines Busses ein- oder ausschalten; die Bänder bleiben eingestellt |
+| `eq <Bus> <Band> gain <dB>`, `… freq <Hz>`, `… q <Breite>`, `… kind low\|bell\|high` | eine Einstellung eines der vier Bänder (siehe 5.), zum Beispiel `eq A1 2 gain 6` |
 | `route <Eingang> <Bus>`, `unroute <Eingang> <Bus>` | einen Eingang zusätzlich auf einen Bus legen, von ihm nehmen; der letzte Bus eines Eingangs bleibt (dafür `mute`) |
 | `scene <Name>`, `scenes` | zu einer Szene des Profils wechseln (siehe 5.), die Szenen auflisten |
-| `show` | alle Eingänge und Busse mit Gain, Pan, Gate, Kompressor und Mute |
+| `show` | alle Eingänge und Busse mit Gain, Pan, Gate, Kompressor, EQ und Mute |
 | `save <Datei>` | den aktuellen Stand als Profil schreiben, später mit `--profile` laden. Ein Profil mit denselben Bussen und Eingängen behält seine Kommentare und Reihenfolge, nur geänderte Werte werden ersetzt; jede andere Datei wird überschrieben |
 | `help` | die Befehle |
 | `quit`, Enter auf leerer Zeile, Strg+C | beenden |
@@ -276,7 +291,8 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
   Eingang und einen Bus zugleich, lehnt pult ab und nennt die Treffer. Groß- und Kleinschreibung zählen nicht.
 - **Bedienen:** Pfeil hoch und runter holen frühere Befehle zurück, Esc leert die Zeile.
 - **Ohne Knacken:** Keine Änderung springt. Gain, Pan, Mute und Solo gleiten mindestens 5 ms, ein Eingang blendet beim
-  Ein- und Ausrouten aus bzw. ein. Gate und Kompressor gehen beim Ausschalten in ihrer eigenen Zeit zurück. Anzeigen und `show` nennen schon das Ziel, der Ton folgt in der angegebenen Zeit. Geht
+  Ein- und Ausrouten aus bzw. ein. Gate und Kompressor gehen beim Ausschalten in ihrer eigenen Zeit zurück. Ein Band des EQ
+  gleitet im Gain, wandert in Frequenz und Breite und wechselt seine Art über die flache Stellung. Anzeigen und `show` nennen schon das Ziel, der Ton folgt in der angegebenen Zeit. Geht
   ein Eingang neu auf einen Bus, setzt er nach dem Füllen seines Puffers ein; rund 2 s später gleicht pult einmalig seinen
   Versatz aus, was bei einem größeren Versatz leise zu hören sein kann.
 - **Von außen:** Andere Programme auf diesem Rechner können eine laufende Route lesen und steuern, siehe
@@ -299,7 +315,7 @@ pult show
 
 | Befehl | Wirkung |
 |---|---|
-| `pult gain`, `mute`, `unmute`, `solo`, `unsolo`, `pan`, `gate`, `comp`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
+| `pult gain`, `mute`, `unmute`, `solo`, `unsolo`, `pan`, `gate`, `comp`, `eq`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
 | `pult scenes` | die Szenen, je eine Zeile |
 | `pult show` | Eingänge, Busse und Szenen; `pult show --json` den ganzen Zustand für Programme |
 | `pult save` | in das Profil speichern, aus dem die Route kam; eine andere Datei geht von außen nicht |

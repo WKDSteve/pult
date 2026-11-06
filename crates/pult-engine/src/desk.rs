@@ -192,6 +192,8 @@ impl Desk for EngineDesk {
                 sample_rate: bus.sample_rate,
                 gain_db: spec.gain_db,
                 muted: spec.muted,
+                eq_on: spec.eq_on,
+                eq: spec.eq,
                 present: bus.present,
                 peak_db: peak_db(bus.handle.stats.peak.take()),
                 clipped: bus.handle.stats.clipped.get(),
@@ -240,6 +242,14 @@ impl Desk for EngineDesk {
             Action::BusGain { bus, db, ramp_ms } => {
                 let target = Target::Bus(self.bus_index(bus)?);
                 self.running.apply(&Command::Gain(target, db, ramp_ms))
+            }
+            Action::BusEq { bus, on } => {
+                let index = self.bus_index(bus)?;
+                self.running.apply(&Command::Eq(index, on))
+            }
+            Action::BusEqBand { bus, band, change } => {
+                let index = self.bus_index(bus)?;
+                self.running.apply(&Command::EqBand(index, band, change))
             }
             Action::BusMute { bus, muted } => {
                 let target = Target::Bus(self.bus_index(bus)?);

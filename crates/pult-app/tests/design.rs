@@ -100,6 +100,8 @@ fn showcase(t: f64) -> MixerView {
             sample_rate: 48_000,
             gain_db,
             muted: false,
+            eq_on: true,
+            eq: pult_core::Band::all_flat(),
             present: true,
             peak_db: Some((-10.0 + gain_db + wobble(seed, t) * 6.0).min(0.0)),
             clipped: 0,

@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::binding::{Binding, BusParam, InputParam, Value};
+use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
+use crate::eq::{EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
 use crate::protocol::{Op, OpValue};
 use crate::scale::{fader_db, fader_pos};
 use crate::view::{AMOUNT_RANGE, GAIN_RANGE_DB, MixerView};
@@ -228,8 +229,8 @@ enum Param {
     Gain(Binding),
     /// A pan.
     Pan(Binding),
-    /// The one knob of a gate or a compressor.
-    Amount(Binding),
+    /// A number between two ends: the one knob of a gate or a compressor, a number of a band.
+    Knob(Binding, Span),
     /// A mute, a solo or a crosspoint.
     Switch(Binding),
     /// A scene.
@@ -252,9 +253,23 @@ impl Param {
                 Self::Gain(binding)
             }
             Binding::Input(_, InputParam::Pan) => Self::Pan(binding),
-            Binding::Input(_, InputParam::Gate | InputParam::Comp) => Self::Amount(binding),
+            Binding::Input(_, InputParam::Gate | InputParam::Comp) => {
+                Self::Knob(binding, Span::even(AMOUNT_RANGE))
+            }
+            Binding::Bus(_, BusParam::EqBand(_, BandParam::Gain)) => {
+                Self::Knob(binding, Span::even(EQ_GAIN_DB))
+            }
+            Binding::Bus(_, BusParam::EqBand(_, BandParam::Freq)) => {
+                Self::Knob(binding, Span::octaves(EQ_FREQ_HZ))
+            }
+            Binding::Bus(_, BusParam::EqBand(_, BandParam::Q)) => {
+                Self::Knob(binding, Span::octaves(EQ_Q))
+            }
+            Binding::Bus(_, BusParam::EqBand(_, BandParam::Kind)) => {
+                return Err(format!("{target} is a word, which no control can say"));
+            }
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq)
             | Binding::Route { .. } => Self::Switch(binding),
             Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter) => {
                 return Err(format!("{target} can only be read"));
@@ -265,6 +280,54 @@ impl Param {
     /// Whether a control of this kind can work it: a button cannot say how loud.
     fn takes(&self, kind: ControlKind) -> bool {
         kind == ControlKind::Cc || matches!(self, Self::Switch(_) | Self::Scene(_))
+    }
+}
+
+/// The two ends of a number a knob sets, and how the way between them is divided.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Span {
+    low: f32,
+    high: f32,
+    /// Divided by ratio instead of by difference: every octave gets the same turn.
+    octaves: bool,
+}
+
+impl Span {
+    fn even((low, high): (f32, f32)) -> Self {
+        Self {
+            low,
+            high,
+            octaves: false,
+        }
+    }
+
+    fn octaves((low, high): (f32, f32)) -> Self {
+        Self {
+            low,
+            high,
+            octaves: true,
+        }
+    }
+
+    /// Where `value` lies between the ends, 0 to 1.
+    fn pos(self, value: f32) -> f32 {
+        let pos = if self.octaves {
+            (value / self.low).ln() / (self.high / self.low).ln()
+        } else {
+            (value - self.low) / (self.high - self.low)
+        };
+        pos.clamp(0.0, 1.0)
+    }
+
+    /// The value at `pos`, 0 to 1; never outside the ends, whatever the rounding does.
+    fn value(self, pos: f32) -> f32 {
+        let pos = pos.clamp(0.0, 1.0);
+        let value = if self.octaves {
+            self.low * (self.high / self.low).powf(pos)
+        } else {
+            self.low + (self.high - self.low) * pos
+        };
+        value.clamp(self.low, self.high)
     }
 }
 
@@ -565,13 +628,17 @@ impl Map {
                     self.pick_up(control, pos, current, target, view, to_value)
                 }
             }
-            (Param::Amount(binding), Message::Cc { value, .. }) => {
-                let (_, most) = AMOUNT_RANGE;
+            (Param::Knob(binding, span), Message::Cc { value, .. }) => {
                 let current = match binding.read(view) {
-                    Some(Value::Amount(amount)) => amount / most,
+                    Some(
+                        Value::Amount(number)
+                        | Value::Boost(number)
+                        | Value::Freq(number)
+                        | Value::Width(number),
+                    ) => span.pos(number),
                     _ => return Step::default(),
                 };
-                let to_value = |pos: f32| OpValue::Number(pos * most);
+                let to_value = |pos: f32| OpValue::Number(span.value(pos));
                 if relative {
                     self.turn(control, value, current, target, view, to_value)
                 } else {
@@ -608,7 +675,7 @@ impl Map {
                 }
             }
             // A button bound to a level by hand in the file.
-            (Param::Gain(_) | Param::Pan(_) | Param::Amount(_), Message::Note { .. }) => {
+            (Param::Gain(_) | Param::Pan(_) | Param::Knob(..), Message::Note { .. }) => {
                 Step::default()
             }
         }
@@ -854,6 +921,40 @@ mod tests {
             }) => on,
             _ => panic!("no switch: {step:?}"),
         }
+    }
+
+    #[test]
+    fn a_knob_spans_its_range_evenly_or_by_octaves() {
+        let even = Span::even(EQ_GAIN_DB);
+        assert_eq!(even.value(0.0), -24.0);
+        assert_eq!(even.value(0.5), 0.0);
+        assert_eq!(even.value(1.0), 24.0);
+        assert_eq!(even.pos(12.0), 0.75);
+        let octaves = Span::octaves(EQ_FREQ_HZ);
+        assert_eq!(octaves.value(0.0), 20.0);
+        assert_eq!(octaves.value(1.0), 20_000.0);
+        // The middle of 20 Hz to 20 kHz by ratio: about 632 Hz.
+        assert!((octaves.value(0.5) - 632.5).abs() < 1.0);
+        assert!((octaves.pos(632.5) - 0.5).abs() < 1e-3);
+        assert_eq!(octaves.value(7.0), 20_000.0);
+        assert_eq!(octaves.pos(1.0), 0.0);
+    }
+
+    #[test]
+    fn the_numbers_of_a_band_take_a_knob_and_its_kind_does_not() {
+        let view = FakeDesk::new().view();
+        for target in ["bus/A1/eq/2/gain", "bus/A1/eq/2/freq", "bus/A1/eq/2/q"] {
+            assert!(
+                matches!(Param::of(target, &view), Ok(Param::Knob(..))),
+                "{target}"
+            );
+        }
+        assert!(matches!(
+            Param::of("bus/A1/eq", &view),
+            Ok(Param::Switch(_))
+        ));
+        let why = Param::of("bus/A1/eq/2/kind", &view).expect_err("a word");
+        assert!(why.contains("no control can say"), "{why}");
     }
 
     #[test]

@@ -3,12 +3,14 @@
 //!
 //! An address names one parameter of the mixer as a path, the way the command line names
 //! inputs and buses: inputs by their place in the route from 1 (`input/2/gain`), buses by
-//! name (`bus/A1/mute`), crosspoints by both (`matrix/2/A1`). A [`Binding`] is an address
+//! name (`bus/A1/mute`), crosspoints by both (`matrix/2/A1`), the bands of a bus's equalizer
+//! by their place from 1 (`bus/A1/eq/2/gain`). A [`Binding`] is an address
 //! resolved against a [`MixerView`]; it reads its value from the view and turns a new value
 //! into an [`Action`].
 
 use std::fmt;
 
+use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::view::{Action, BusView, GAIN_RANGE_DB, InputView, MixerView};
 
 /// A parameter of an input.
@@ -37,8 +39,36 @@ pub enum BusParam {
     Gain,
     /// Its mute.
     Mute,
+    /// The switch of its equalizer.
+    Eq,
+    /// One setting of one band of its equalizer, the band from 0.
+    EqBand(usize, BandParam),
     /// Its peak, read only.
     Meter,
+}
+
+/// A setting of a band of an equalizer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BandParam {
+    /// What it does: `low`, `bell` or `high`.
+    Kind,
+    /// Its frequency.
+    Freq,
+    /// Its gain.
+    Gain,
+    /// Its width.
+    Q,
+}
+
+impl BandParam {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Kind => "kind",
+            Self::Freq => "freq",
+            Self::Gain => "gain",
+            Self::Q => "q",
+        }
+    }
 }
 
 /// One parameter of the mixer, by index into the view's inputs and buses.
@@ -68,6 +98,14 @@ pub enum Value {
     Pan(f32),
     /// The one knob of a gate or a compressor, 0 (off) to 10.
     Amount(f32),
+    /// The gain of a band of an equalizer in dB.
+    Boost(f32),
+    /// The frequency of a band in Hz.
+    Freq(f32),
+    /// The width of a band (Q).
+    Width(f32),
+    /// What a band does.
+    Kind(BandKind),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -106,13 +144,7 @@ impl Binding {
     /// When the address is malformed or names an input, bus or parameter `view` does not have.
     pub fn parse(address: &str, view: &MixerView) -> Result<Self, AddressError> {
         let input = |number: &str| {
-            // Only the form `address` prints: digits, no sign, no leading zero.
-            let canonical = number.bytes().all(|b| b.is_ascii_digit()) && !number.starts_with('0');
-            number
-                .parse::<usize>()
-                .ok()
-                .filter(|_| canonical)
-                .and_then(|n| n.checked_sub(1))
+            place(number)
                 .filter(|&index| index < view.inputs.len())
                 .ok_or_else(|| AddressError::NoInput(number.to_owned()))
         };
@@ -125,6 +157,23 @@ impl Binding {
         let malformed = || AddressError::Malformed(address.to_owned());
         // A bus name may hold a slash: it is all between the input or kind and the parameter.
         let (kind, rest) = address.split_once('/').ok_or_else(malformed)?;
+        // A band of an equalizer, unless no bus has that name: then the words belong to a name.
+        if kind == "bus"
+            && let Some((name, number, setting)) = band_address(rest)
+            && let Ok(index) = bus(name)
+        {
+            let band = place(number)
+                .filter(|&band| band < EQ_BANDS)
+                .ok_or_else(|| AddressError::NoParam(format!("eq/{number}")))?;
+            let param = match setting {
+                "kind" => BandParam::Kind,
+                "freq" => BandParam::Freq,
+                "gain" => BandParam::Gain,
+                "q" => BandParam::Q,
+                other => return Err(AddressError::NoParam(format!("eq/{number}/{other}"))),
+            };
+            return Ok(Self::Bus(index, BusParam::EqBand(band, param)));
+        }
         let (first, last) = match kind {
             "bus" => rest.rsplit_once('/'),
             _ => rest.split_once('/'),
@@ -148,6 +197,7 @@ impl Binding {
                 let param = match param {
                     "gain" => BusParam::Gain,
                     "mute" => BusParam::Mute,
+                    "eq" => BusParam::Eq,
                     "meter" => BusParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -179,10 +229,14 @@ impl Binding {
                 };
                 format!("input/{}/{param}", input(index)?)
             }
+            Self::Bus(index, BusParam::EqBand(band, param)) => {
+                format!("bus/{}/eq/{}/{}", bus(index)?, band + 1, param.word())
+            }
             Self::Bus(index, param) => {
                 let param = match param {
                     BusParam::Gain => "gain",
                     BusParam::Mute => "mute",
+                    BusParam::Eq | BusParam::EqBand(..) => "eq",
                     BusParam::Meter => "meter",
                 };
                 format!("bus/{}/{param}", bus(index)?)
@@ -212,6 +266,16 @@ impl Binding {
                 match param {
                     BusParam::Gain => Value::Gain(bus.gain_db),
                     BusParam::Mute => Value::Switch(bus.muted),
+                    BusParam::Eq => Value::Switch(bus.eq_on),
+                    BusParam::EqBand(band, param) => {
+                        let band = bus.eq.get(band)?;
+                        match param {
+                            BandParam::Kind => Value::Kind(band.kind),
+                            BandParam::Freq => Value::Freq(band.freq_hz),
+                            BandParam::Gain => Value::Boost(band.gain_db),
+                            BandParam::Q => Value::Width(band.q),
+                        }
+                    }
                     BusParam::Meter => Value::Peak(bus.peak_db),
                 }
             }
@@ -258,6 +322,17 @@ impl Binding {
             (Self::Bus(bus, BusParam::Mute), Value::Switch(muted)) => {
                 Action::BusMute { bus, muted }
             }
+            (Self::Bus(bus, BusParam::Eq), Value::Switch(on)) => Action::BusEq { bus, on },
+            (Self::Bus(bus, BusParam::EqBand(band, param)), value) => {
+                let change = match (param, value) {
+                    (BandParam::Kind, Value::Kind(kind)) => BandChange::Kind(kind),
+                    (BandParam::Freq, Value::Freq(hz)) => BandChange::Freq(hz),
+                    (BandParam::Gain, Value::Boost(db)) => BandChange::Gain(db),
+                    (BandParam::Q, Value::Width(q)) => BandChange::Q(q),
+                    _ => return None,
+                };
+                Action::BusEqBand { bus, band, change }
+            }
             (Self::Route { input, bus }, Value::Switch(on)) => Action::Route { input, bus, on },
             _ => return None,
         })
@@ -277,10 +352,37 @@ impl Binding {
             Self::Input(index, InputParam::Comp) => format!("{} compressor", input(index)),
             Self::Input(index, _) => input(index).to_owned(),
             Self::Bus(index, BusParam::Mute) => format!("{} mute", bus(index)),
+            Self::Bus(index, BusParam::Eq) => format!("{} equalizer", bus(index)),
+            Self::Bus(index, BusParam::EqBand(band, param)) => {
+                format!(
+                    "{} equalizer band {} {}",
+                    bus(index),
+                    band + 1,
+                    param.word()
+                )
+            }
             Self::Bus(index, _) => bus(index).to_owned(),
             Self::Route { input: i, bus: b } => format!("{} to {}", input(i), bus(b)),
         }
     }
+}
+
+/// The index a number in an address names: digits only, without a sign or a leading zero (the
+/// one form [`Binding::address`] prints), counted from 1.
+fn place(number: &str) -> Option<usize> {
+    let canonical = number.bytes().all(|b| b.is_ascii_digit()) && !number.starts_with('0');
+    number
+        .parse::<usize>()
+        .ok()
+        .filter(|_| canonical)
+        .and_then(|n| n.checked_sub(1))
+}
+
+/// The bus name, the band number and the setting of `<bus>/eq/<band>/<setting>`.
+fn band_address(rest: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = rest.rsplitn(4, '/');
+    let (setting, band, eq, name) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    (eq == "eq").then_some((name, band, setting))
 }
 
 /// The gain an action asks for: the fader's off (-inf) becomes the lowest gain the mixer takes.
@@ -311,6 +413,23 @@ mod tests {
             ("bus/A1/gain", Binding::Bus(0, BusParam::Gain)),
             ("bus/A1/mute", Binding::Bus(0, BusParam::Mute)),
             ("bus/A1/meter", Binding::Bus(0, BusParam::Meter)),
+            ("bus/A1/eq", Binding::Bus(0, BusParam::Eq)),
+            (
+                "bus/A2/eq/1/kind",
+                Binding::Bus(1, BusParam::EqBand(0, BandParam::Kind)),
+            ),
+            (
+                "bus/A2/eq/2/freq",
+                Binding::Bus(1, BusParam::EqBand(1, BandParam::Freq)),
+            ),
+            (
+                "bus/A2/eq/3/gain",
+                Binding::Bus(1, BusParam::EqBand(2, BandParam::Gain)),
+            ),
+            (
+                "bus/A2/eq/4/q",
+                Binding::Bus(1, BusParam::EqBand(3, BandParam::Q)),
+            ),
             ("matrix/2/A1", Binding::Route { input: 1, bus: 0 }),
         ]
     }
@@ -340,6 +459,23 @@ mod tests {
         assert_eq!(error("bus/Z9/mute"), AddressError::NoBus("Z9".into()));
         assert_eq!(error("bus/A1/solo"), AddressError::NoParam("solo".into()));
         assert_eq!(error("matrix/2/Z9"), AddressError::NoBus("Z9".into()));
+        assert_eq!(
+            error("bus/A1/eq/5/gain"),
+            AddressError::NoParam("eq/5".into())
+        );
+        assert_eq!(
+            error("bus/A1/eq/0/gain"),
+            AddressError::NoParam("eq/0".into())
+        );
+        assert_eq!(
+            error("bus/A1/eq/2/slope"),
+            AddressError::NoParam("eq/2/slope".into())
+        );
+        // No bus of that name: the words are read as a name, and that bus is missing too.
+        assert_eq!(
+            error("bus/Z9/eq/2/gain"),
+            AddressError::NoBus("Z9/eq/2".into())
+        );
         assert_eq!(error("input/2"), AddressError::Malformed("input/2".into()));
         assert_eq!(error(""), AddressError::Malformed(String::new()));
     }
@@ -350,6 +486,11 @@ mod tests {
         view.buses[1].name = "PC/Mic".to_owned();
         for (address, binding) in [
             ("bus/PC/Mic/mute", Binding::Bus(1, BusParam::Mute)),
+            ("bus/PC/Mic/eq", Binding::Bus(1, BusParam::Eq)),
+            (
+                "bus/PC/Mic/eq/2/gain",
+                Binding::Bus(1, BusParam::EqBand(1, BandParam::Gain)),
+            ),
             ("matrix/1/PC/Mic", Binding::Route { input: 0, bus: 1 }),
         ] {
             assert_eq!(Binding::parse(address, &view), Ok(binding), "{address}");
@@ -373,7 +514,22 @@ mod tests {
         bus.gain_db = -1.5;
         bus.muted = false;
         bus.peak_db = None;
+        bus.eq_on = false;
+        bus.eq[1] = crate::eq::Band {
+            kind: BandKind::HighShelf,
+            freq_hz: 3000.0,
+            gain_db: -4.5,
+            q: 1.4,
+        };
         let read = |address| Binding::parse(address, &view).unwrap().read(&view);
+        assert_eq!(read("bus/A1/eq"), Some(Value::Switch(false)));
+        assert_eq!(
+            read("bus/A1/eq/2/kind"),
+            Some(Value::Kind(BandKind::HighShelf))
+        );
+        assert_eq!(read("bus/A1/eq/2/freq"), Some(Value::Freq(3000.0)));
+        assert_eq!(read("bus/A1/eq/2/gain"), Some(Value::Boost(-4.5)));
+        assert_eq!(read("bus/A1/eq/2/q"), Some(Value::Width(1.4)));
         assert_eq!(read("input/2/gain"), Some(Value::Gain(-3.0)));
         assert_eq!(read("input/2/mute"), Some(Value::Switch(true)));
         assert_eq!(read("input/2/solo"), Some(Value::Switch(false)));
@@ -468,6 +624,42 @@ mod tests {
     }
 
     #[test]
+    fn bindings_of_an_equalizer_write_its_actions() {
+        let write = |binding: Binding, value| binding.write(value);
+        assert_eq!(
+            write(Binding::Bus(0, BusParam::Eq), Value::Switch(false)),
+            Some(Action::BusEq { bus: 0, on: false })
+        );
+        let band = |param| Binding::Bus(1, BusParam::EqBand(2, param));
+        let change = |change| {
+            Some(Action::BusEqBand {
+                bus: 1,
+                band: 2,
+                change,
+            })
+        };
+        assert_eq!(
+            write(band(BandParam::Gain), Value::Boost(6.0)),
+            change(BandChange::Gain(6.0))
+        );
+        assert_eq!(
+            write(band(BandParam::Freq), Value::Freq(440.0)),
+            change(BandChange::Freq(440.0))
+        );
+        assert_eq!(
+            write(band(BandParam::Q), Value::Width(2.0)),
+            change(BandChange::Q(2.0))
+        );
+        assert_eq!(
+            write(band(BandParam::Kind), Value::Kind(BandKind::LowShelf)),
+            change(BandChange::Kind(BandKind::LowShelf))
+        );
+        // A value of another setting writes nothing.
+        assert_eq!(write(band(BandParam::Gain), Value::Freq(440.0)), None);
+        assert_eq!(write(band(BandParam::Kind), Value::Gain(0.0)), None);
+    }
+
+    #[test]
     fn meters_and_wrong_values_write_nothing() {
         let peak = Value::Peak(Some(0.0));
         assert_eq!(Binding::Input(0, InputParam::Meter).write(peak), None);
@@ -524,6 +716,14 @@ mod tests {
         assert_eq!(
             Binding::Route { input: 1, bus: 0 }.title(&view),
             format!("{input} to {bus}")
+        );
+        assert_eq!(
+            Binding::Bus(0, BusParam::Eq).title(&view),
+            format!("{bus} equalizer")
+        );
+        assert_eq!(
+            Binding::Bus(0, BusParam::EqBand(1, BandParam::Gain)).title(&view),
+            format!("{bus} equalizer band 2 gain")
         );
     }
 

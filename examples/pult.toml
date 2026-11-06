@@ -10,6 +10,19 @@ latency_ms = 40
 name = "A1"
 device = "Focusrite"
 
+# Its equalizer has four bands, flat to start with: a low shelf at 100 Hz, bells at 500 and
+# 2500 Hz, a high shelf at 8 kHz. Name only what differs; remove the # to try.
+# [[bus.eq]]
+# band = 1
+# gain_db = 3                # a little more bass
+#
+# [[bus.eq]]
+# band = 3
+# kind = "bell"              # low, bell or high
+# freq_hz = 3000
+# gain_db = -2
+# q = 1.4                    # higher is narrower
+
 # A second output, for example headphones on another device; remove it if you have none.
 # [[bus]]
 # name = "A2"

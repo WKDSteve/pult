@@ -7,12 +7,16 @@
 //!
 //! Indices count from zero in the order of the route (the console's `[1]` is index 0).
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::ramp::MAX_RAMP_MS;
 
-pub use crate::binding::{AddressError, Binding, BusParam, InputParam, Value, action_gain};
+pub use crate::binding::{
+    AddressError, BandParam, Binding, BusParam, InputParam, Value, action_gain,
+};
+pub use crate::eq::{Band, BandChange, BandKind, EQ_BANDS};
 
 /// A snapshot of the whole mixer, taken about 30 times a second.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +112,10 @@ pub struct BusView {
     pub gain_db: f32,
     /// Muted.
     pub muted: bool,
+    /// Whether its equalizer is switched on; off, the bands keep their settings.
+    pub eq_on: bool,
+    /// The bands of its equalizer.
+    pub eq: [Band; EQ_BANDS],
     /// Whether the device is there; false while it is gone.
     pub present: bool,
     /// Peak of the output since the previous view in dBFS; `None` for silence.
@@ -222,6 +230,22 @@ pub enum Action {
         bus: usize,
         /// Muted.
         muted: bool,
+    },
+    /// Switches a bus's equalizer on or off.
+    BusEq {
+        /// Bus index.
+        bus: usize,
+        /// On.
+        on: bool,
+    },
+    /// Changes one setting of one band of a bus's equalizer.
+    BusEqBand {
+        /// Bus index.
+        bus: usize,
+        /// Band index, from 0.
+        band: usize,
+        /// The new setting.
+        change: BandChange,
     },
     /// Routes an input to a bus or takes it off (a matrix button).
     Route {
@@ -349,6 +373,8 @@ impl FakeDesk {
             sample_rate,
             gain_db: 0.0,
             muted: false,
+            eq_on: true,
+            eq: Band::all_flat(),
             present: true,
             peak_db: None,
             clipped: 0,
@@ -431,6 +457,32 @@ impl FakeDesk {
         Ok(vec![format!("[{}] {what} {amount:.1}", input + 1)])
     }
 
+    /// Switches a bus's equalizer.
+    fn set_eq(&mut self, bus: usize, on: bool) -> Reply {
+        let bus = self.bus_mut(bus)?;
+        bus.eq_on = on;
+        let state = if on { "on" } else { "off" };
+        Ok(vec![format!("{} eq {state}", bus.name)])
+    }
+
+    /// Changes one setting of one band of a bus's equalizer.
+    fn set_band(&mut self, bus: usize, band: usize, change: BandChange) -> Reply {
+        let bus = self.bus_mut(bus)?;
+        let Some(set) = bus.eq.get_mut(band) else {
+            return Err(format!(
+                "there is no band {}; bands are 1 to {EQ_BANDS}",
+                band + 1
+            ));
+        };
+        *set = set.changed(change)?;
+        Ok(vec![format!(
+            "{} eq {}: {}",
+            bus.name,
+            band + 1,
+            band_line(*set)
+        )])
+    }
+
     fn bus_mut(&mut self, bus: usize) -> Result<&mut BusView, String> {
         let count = self.view.buses.len();
         self.view
@@ -438,6 +490,34 @@ impl FakeDesk {
             .get_mut(bus)
             .ok_or_else(|| format!("there is no bus {} (only {count})", bus + 1))
     }
+}
+
+/// A band as a line says it: `bell 1000 Hz +6.0 dB q 0.7`.
+#[must_use]
+pub fn band_line(band: Band) -> String {
+    format!(
+        "{} {} Hz {:+.1} dB q {}",
+        band.kind.word(),
+        band.freq_hz,
+        band.gain_db,
+        band.q
+    )
+}
+
+/// What a line of `show` says of an equalizer, to put behind the rest of a bus: nothing for a
+/// flat one that is on, else `  eq off` and every band that is not flat.
+#[must_use]
+pub fn eq_summary(on: bool, bands: &[Band]) -> String {
+    let mut text = String::new();
+    if !on {
+        text.push_str("  eq off");
+    }
+    for (index, band) in bands.iter().enumerate() {
+        if band.gain_db != 0.0 {
+            let _ = write!(text, "  eq {}: {}", index + 1, band_line(*band));
+        }
+    }
+    text
 }
 
 fn check_gain(db: f32) -> Result<f32, String> {
@@ -559,6 +639,8 @@ impl Desk for FakeDesk {
                     if muted { "muted" } else { "unmuted" }
                 )])
             }
+            Action::BusEq { bus, on } => self.set_eq(bus, on),
+            Action::BusEqBand { bus, band, change } => self.set_band(bus, band, change),
             Action::Route { input, bus, on } => {
                 let name = self.bus_mut(bus)?.name.clone();
                 let strip = self.input_mut(input)?;
@@ -768,6 +850,51 @@ mod tests {
         );
         let view = mixer.view();
         assert_eq!((view.inputs[0].gate, view.inputs[0].comp), (3.0, 0.0));
+    }
+
+    #[test]
+    fn the_fake_takes_an_equalizer_and_refuses_what_is_out_of_range() {
+        let mut mixer = FakeDesk::new();
+        let band = |band, change| Action::BusEqBand {
+            bus: 1,
+            band,
+            change,
+        };
+        assert_eq!(
+            mixer.act(band(1, BandChange::Gain(6.0))),
+            Ok(vec!["A2 eq 2: bell 500 Hz +6.0 dB q 0.7".to_owned()])
+        );
+        assert!(mixer.act(band(1, BandChange::Freq(1000.0))).is_ok());
+        assert!(mixer.act(band(0, BandChange::Kind(BandKind::Peak))).is_ok());
+        assert!(mixer.act(band(1, BandChange::Gain(25.0))).is_err());
+        assert!(mixer.act(band(EQ_BANDS, BandChange::Q(1.0))).is_err());
+        assert!(mixer.act(Action::BusEq { bus: 1, on: false }).is_ok());
+        assert!(mixer.act(Action::BusEq { bus: 9, on: false }).is_err());
+        let view = mixer.view();
+        assert!(view.buses[0].eq_on && !view.buses[1].eq_on);
+        assert_eq!(view.buses[1].eq[0].kind, BandKind::Peak);
+        assert_eq!(
+            view.buses[1].eq[1],
+            Band {
+                kind: BandKind::Peak,
+                freq_hz: 1000.0,
+                gain_db: 6.0,
+                q: 0.7
+            }
+        );
+        assert_eq!(view.buses[0].eq, Band::all_flat());
+    }
+
+    #[test]
+    fn a_line_lists_only_what_an_equalizer_does() {
+        let mut bands = Band::all_flat();
+        assert_eq!(eq_summary(true, &bands), "");
+        assert_eq!(eq_summary(false, &bands), "  eq off");
+        bands[2] = bands[2].with_gain(-3.0);
+        assert_eq!(
+            eq_summary(false, &bands),
+            "  eq off  eq 3: bell 2500 Hz -3.0 dB q 0.7"
+        );
     }
 
     #[test]

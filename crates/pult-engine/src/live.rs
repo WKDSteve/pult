@@ -6,8 +6,8 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use pult_core::control::{Command, HELP, Target, search_name};
-use pult_core::view::check_amount;
-use pult_core::{MAX_RAMP_MS, db_to_linear};
+use pult_core::view::{band_line, check_amount, eq_summary};
+use pult_core::{EQ_BANDS, MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
 use crate::{RouteSpec, Running, SceneSpec};
@@ -105,6 +105,29 @@ impl Running {
                     "{}: comp {}",
                     self.target_label(Target::Input(*index)),
                     knob(amount)
+                )])
+            }
+            Command::Eq(bus, on) => {
+                self.buses[*bus].handle.controls.eq.switch(*on);
+                self.spec.buses[*bus].eq_on = *on;
+                let state = if *on { "on" } else { "off" };
+                Ok(vec![format!("{}: eq {state}", self.buses[*bus].name)])
+            }
+            Command::EqBand(bus, band, change) => {
+                let Some(set) = self.spec.buses[*bus].eq.get_mut(*band) else {
+                    return Err(format!(
+                        "there is no band {}; bands are 1 to {EQ_BANDS}",
+                        band + 1
+                    ));
+                };
+                *set = set.changed(*change)?;
+                let set = *set;
+                self.buses[*bus].handle.controls.eq.set(*band, set);
+                Ok(vec![format!(
+                    "{}: eq {}: {}",
+                    self.buses[*bus].name,
+                    band + 1,
+                    band_line(set)
                 )])
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
@@ -314,6 +337,7 @@ impl Running {
         }
         for (bus, spec) in self.buses.iter().zip(&self.spec.buses) {
             let mut line = format!("{} {}  gain {:.1} dB", bus.name, bus.device, spec.gain_db);
+            line.push_str(&eq_summary(spec.eq_on, &spec.eq));
             if spec.muted {
                 line.push_str("  muted");
             }

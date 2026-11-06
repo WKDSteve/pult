@@ -158,6 +158,21 @@ fn commands_reach_the_running_pult() {
         "{}",
         stderr(&output)
     );
+    let output = pult(&folder.0, &["eq", "A2", "2", "gain", "6"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "A2 eq 2: bell 500 Hz +6.0 dB q 0.7");
+    let output = pult(&folder.0, &["eq", "A2", "2", "kind", "high"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let output = pult(&folder.0, &["eq", "A2", "off"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "A2 eq off");
+    let output = pult(&folder.0, &["eq", "A2", "2", "freq", "5"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("the freq of a band must be 20 to 20000 Hz"),
+        "{}",
+        stderr(&output)
+    );
     let output = pult(&folder.0, &["scene", "Abend"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output).trim(), "scene Abend");

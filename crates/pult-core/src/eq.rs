@@ -11,6 +11,8 @@
 use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
+use serde::{Deserialize, Serialize};
+
 use crate::level::AtomicF32;
 
 /// Bands of one equalizer.
@@ -41,19 +43,41 @@ const OCTAVE_PACE: f32 = 100.0;
 /// where the filter is still well behaved.
 const HIGHEST: f32 = 0.45;
 
-/// What a band does to the sound.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// What a band does to the sound. Profiles, commands and the control interface call the kinds
+/// `low`, `bell` and `high`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BandKind {
     /// Raises or lowers everything below its frequency.
+    #[serde(rename = "low")]
     LowShelf,
     /// Raises or lowers a bell around its frequency.
     #[default]
+    #[serde(rename = "bell")]
     Peak,
     /// Raises or lowers everything above its frequency.
+    #[serde(rename = "high")]
     HighShelf,
 }
 
 impl BandKind {
+    /// The word for it: `low`, `bell` or `high`.
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::LowShelf => "low",
+            Self::Peak => "bell",
+            Self::HighShelf => "high",
+        }
+    }
+
+    /// The kind `word` names, ignoring case.
+    #[must_use]
+    pub fn from_word(word: &str) -> Option<Self> {
+        [Self::LowShelf, Self::Peak, Self::HighShelf]
+            .into_iter()
+            .find(|kind| kind.word().eq_ignore_ascii_case(word))
+    }
+
     fn from_code(code: u8) -> Self {
         match code {
             0 => Self::LowShelf,
@@ -72,7 +96,7 @@ impl BandKind {
 }
 
 /// One band of an equalizer.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Band {
     /// What it does.
     pub kind: BandKind,
@@ -103,6 +127,38 @@ impl Band {
         }
     }
 
+    /// The bands an equalizer starts with, all flat.
+    #[must_use]
+    pub fn all_flat() -> [Self; EQ_BANDS] {
+        std::array::from_fn(Self::at)
+    }
+
+    /// The same band with `change` made.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the range when the new value is outside it.
+    pub fn changed(self, change: BandChange) -> Result<Self, String> {
+        Ok(match change.checked()? {
+            BandChange::Kind(kind) => Self { kind, ..self },
+            BandChange::Freq(freq_hz) => Self { freq_hz, ..self },
+            BandChange::Gain(gain_db) => Self { gain_db, ..self },
+            BandChange::Q(q) => Self { q, ..self },
+        })
+    }
+
+    /// The band when all its values are inside their ranges.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the first value that is not, and its range.
+    pub fn checked(self) -> Result<Self, String> {
+        BandChange::Freq(self.freq_hz).checked()?;
+        BandChange::Gain(self.gain_db).checked()?;
+        BandChange::Q(self.q).checked()?;
+        Ok(self)
+    }
+
     /// The same band at `gain_db` dB.
     #[must_use]
     pub fn with_gain(self, gain_db: f32) -> Self {
@@ -119,6 +175,42 @@ impl Band {
             freq_hz: within(self.freq_hz, EQ_FREQ_HZ, start.freq_hz),
             gain_db: within(self.gain_db, EQ_GAIN_DB, 0.0),
             q: within(self.q, EQ_Q, start.q),
+        }
+    }
+}
+
+/// One setting of a band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BandChange {
+    /// What it does.
+    Kind(BandKind),
+    /// Its frequency in Hz.
+    Freq(f32),
+    /// Its gain in dB.
+    Gain(f32),
+    /// Its width (Q).
+    Q(f32),
+}
+
+impl BandChange {
+    /// The change when its value is inside its range: nothing is clamped, as with a gain.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the range otherwise.
+    pub fn checked(self) -> Result<Self, String> {
+        let (what, value, (low, high), unit) = match self {
+            Self::Kind(_) => return Ok(self),
+            Self::Freq(hz) => ("freq", hz, EQ_FREQ_HZ, " Hz"),
+            Self::Gain(db) => ("gain", db, EQ_GAIN_DB, " dB"),
+            Self::Q(q) => ("q", q, EQ_Q, ""),
+        };
+        if (low..=high).contains(&value) {
+            Ok(self)
+        } else {
+            Err(format!(
+                "the {what} of a band must be {low} to {high}{unit}, not {value}"
+            ))
         }
     }
 }
@@ -181,6 +273,14 @@ impl EqControls {
         controls.q.store(band.q);
         // After the values: a callback that saw half of them reads them again.
         self.version.fetch_add(1, Ordering::Release);
+    }
+
+    /// Sets all bands and the switch at once: what a route starts with.
+    pub fn set_all(&self, on: bool, bands: &[Band; EQ_BANDS]) {
+        for (index, band) in bands.iter().enumerate() {
+            self.set(index, *band);
+        }
+        self.switch(on);
     }
 
     /// Band `index` (from 0) as it is set; `None` beyond [`EQ_BANDS`].
@@ -642,6 +742,44 @@ mod tests {
         // Beyond the bands: nothing, and no panic.
         controls.set(EQ_BANDS, Band::at(0));
         assert_eq!(controls.band(EQ_BANDS), None);
+    }
+
+    #[test]
+    fn a_change_outside_its_range_is_refused_not_clamped() {
+        let band = Band::at(1);
+        assert_eq!(band.changed(BandChange::Gain(6.0)), Ok(band.with_gain(6.0)));
+        assert_eq!(
+            band.changed(BandChange::Kind(BandKind::HighShelf))
+                .map(|band| band.kind),
+            Ok(BandKind::HighShelf)
+        );
+        let why = |change| band.changed(change).expect_err("refused");
+        assert_eq!(
+            why(BandChange::Gain(30.0)),
+            "the gain of a band must be -24 to 24 dB, not 30"
+        );
+        assert_eq!(
+            why(BandChange::Freq(5.0)),
+            "the freq of a band must be 20 to 20000 Hz, not 5"
+        );
+        assert_eq!(
+            why(BandChange::Q(0.0)),
+            "the q of a band must be 0.1 to 10, not 0"
+        );
+        assert!(why(BandChange::Gain(f32::NAN)).contains("not NaN"));
+        assert!(Band::at(0).checked().is_ok());
+        assert!(Band::at(0).with_gain(-25.0).checked().is_err());
+    }
+
+    #[test]
+    fn the_kinds_have_their_words() {
+        for kind in [BandKind::LowShelf, BandKind::Peak, BandKind::HighShelf] {
+            assert_eq!(BandKind::from_word(kind.word()), Some(kind));
+            let json = serde_json::to_string(&kind).expect("to JSON");
+            assert_eq!(json, format!("\"{}\"", kind.word()));
+        }
+        assert_eq!(BandKind::from_word("BELL"), Some(BandKind::Peak));
+        assert_eq!(BandKind::from_word("notch"), None);
     }
 
     #[test]
