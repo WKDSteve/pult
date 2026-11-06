@@ -385,15 +385,20 @@ impl Default for CompressorParams {
 
 impl CompressorParams {
     /// The one-knob form: `amount` from 0 (nothing) to [`SIMPLE_MAX`] lowers the threshold to
-    /// -30 dB, raises the ratio to 8 and adds up to 12 dB after it. Full scale in never comes
-    /// out above full scale.
+    /// -30 dB, raises the ratio to 8 and adds up to 12 dB after it. A steady level at full
+    /// scale never comes out above full scale; a peak can, while the compressor still turns
+    /// down or between the peaks of a wave, and the bus limits it.
     #[must_use]
     pub fn simple(amount: f32) -> Self {
         let amount = within(amount, (0.0, SIMPLE_MAX), 0.0);
+        let threshold_db = -3.0 * amount;
+        let ratio = 1.0 + 0.7 * amount;
+        // Never more than it takes from full scale; low settings take little, in the bend.
+        let taken = (1.0 - 1.0 / ratio) * bent(-threshold_db);
         Self {
-            threshold_db: -3.0 * amount,
-            ratio: 1.0 + 0.7 * amount,
-            makeup_db: 1.2 * amount,
+            threshold_db,
+            ratio,
+            makeup_db: (1.2 * amount).min(taken),
             ..Self::default()
         }
     }
@@ -845,17 +850,18 @@ mod tests {
         assert_eq!(GateParams::simple(0.0).threshold_db, -60.0);
         assert_eq!(GateParams::simple(99.0).threshold_db, -20.0);
         assert_eq!(GateParams::simple(f32::NAN), GateParams::simple(0.0));
-        for amount in 0..=10 {
-            let params = CompressorParams::simple(amount as f32);
+        // In steps of a tenth: the low settings work in the bend, where little is taken.
+        for tenth in 0..=100 {
+            let amount = tenth as f32 / 10.0;
+            let params = CompressorParams::simple(amount);
             assert_eq!(params, params.clamped(), "inside the ranges");
-            // Full scale in: what is taken above the threshold is more than what is added.
-            let taken = (1.0 - 1.0 / params.ratio) * -params.threshold_db;
-            assert!(taken >= params.makeup_db, "{amount}: {params:?}");
             let (controls, mut compressor) = compressor(params);
             let mut data = steady(1.0, 2000, 1);
             compressor.process(&controls, &mut data, 1);
-            assert!(data[data.len() - 1] <= 1.0, "{amount}");
+            let last = data[data.len() - 1];
+            assert!(last <= 1.0 + 1e-4, "{amount}: {last}");
         }
+        assert_eq!(CompressorParams::simple(10.0).makeup_db, 12.0);
     }
 
     #[test]

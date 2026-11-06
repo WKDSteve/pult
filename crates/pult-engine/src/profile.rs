@@ -578,8 +578,6 @@ pub fn merge(existing: &str, spec: &RouteSpec) -> String {
 /// The merge itself; `None` when `existing` is not a profile of these buses and inputs.
 fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
     let mut file: DocumentMut = existing.parse().ok()?;
-    // What the file says now, to leave the bands of an equalizer alone that did not change.
-    let old = parse(existing).ok()?;
 
     if file.get("latency_ms").is_some() || spec.latency_ms != DEFAULT_LATENCY_MS {
         let same =
@@ -597,7 +595,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
     if buses.len() != spec.buses.len() {
         return None;
     }
-    for ((table, bus), old) in buses.iter_mut().zip(&spec.buses).zip(&old.buses) {
+    for (table, bus) in buses.iter_mut().zip(&spec.buses) {
         if text_of(table, "name") != Some(&bus.name)
             || text_of(table, "device") != Some(&bus.device)
         {
@@ -606,16 +604,11 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_label(table, bus.label.as_ref());
         set_number(table, "gain_db", bus.gain_db);
         set_switch(table, "mute", bus.muted);
-        if old.eq_on != bus.eq_on {
-            if bus.eq_on {
-                table.remove("eq_on");
-            } else {
-                set(table, "eq_on", false.into());
-            }
+        // On unless the file says otherwise.
+        if table.get("eq_on").and_then(Item::as_bool).unwrap_or(true) != bus.eq_on {
+            set(table, "eq_on", bus.eq_on.into());
         }
-        if old.eq != bus.eq {
-            set_bands(table, &bus.eq);
-        }
+        set_bands(table, &bus.eq)?;
     }
 
     let inputs = file.get_mut("input")?.as_array_of_tables_mut()?;
@@ -658,35 +651,72 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
     })
 }
 
-/// Writes the bands of a bus anew, as [`render`] does: those that are not as they start.
-fn set_bands(table: &mut Table, bands: &[Band; EQ_BANDS]) {
-    let mut entries = ArrayOfTables::new();
-    for (index, band) in bands.iter().enumerate() {
-        if *band == Band::at(index) {
-            continue;
+/// Writes the bands of a bus into its table: an entry the file has changes in place, value by
+/// value, so its comments stay; a band without an entry gets one when it is not as it starts.
+/// `None` when the file's `eq` is no list of tables.
+fn set_bands(table: &mut Table, bands: &[Band; EQ_BANDS]) -> Option<()> {
+    if table.get("eq").is_none() {
+        if bands
+            .iter()
+            .enumerate()
+            .all(|(index, band)| *band == Band::at(index))
+        {
+            return Some(());
         }
-        let mut entry = Table::new();
-        // A whole number where it is one, so 500 does not become 500.0.
-        let number = |value: f32| {
-            let shown = value.to_string();
-            shown.parse::<i64>().map_or_else(
-                |_| shown.parse::<f64>().map_or(Value::from(0.0), Value::from),
-                Value::from,
-            )
-        };
-        let band_number = i64::try_from(index + 1).unwrap_or(1);
-        entry.insert("band", Item::Value(band_number.into()));
-        entry.insert("kind", Item::Value(band.kind.word().into()));
-        entry.insert("freq_hz", Item::Value(number(band.freq_hz)));
-        entry.insert("gain_db", Item::Value(number(band.gain_db)));
-        entry.insert("q", Item::Value(number(band.q)));
-        entry.decor_mut().set_prefix("\n");
-        entries.push(entry);
+        table.insert("eq", Item::ArrayOfTables(ArrayOfTables::new()));
     }
-    if entries.is_empty() {
-        table.remove("eq");
-    } else {
-        table.insert("eq", Item::ArrayOfTables(entries));
+    let entries = table.get_mut("eq")?.as_array_of_tables_mut()?;
+    for (index, band) in bands.iter().enumerate() {
+        let number = i64::try_from(index + 1).ok()?;
+        let start = Band::at(index);
+        let found = entries
+            .iter_mut()
+            .find(|entry| entry.get("band").and_then(Item::as_integer) == Some(number));
+        if let Some(entry) = found {
+            // What an entry does not name is as the band starts.
+            let kind = text_of(entry, "kind").map_or(start.kind.word(), |word| word);
+            if kind != band.kind.word() {
+                set(entry, "kind", band.kind.word().into());
+            }
+            set_number_from(entry, "freq_hz", band.freq_hz, start.freq_hz);
+            set_number_from(entry, "gain_db", band.gain_db, start.gain_db);
+            set_number_from(entry, "q", band.q, start.q);
+        } else if *band != start {
+            let mut entry = Table::new();
+            entry.insert("band", Item::Value(number.into()));
+            entry.insert("kind", Item::Value(band.kind.word().into()));
+            entry.insert("freq_hz", Item::Value(shortest(band.freq_hz)));
+            entry.insert("gain_db", Item::Value(shortest(band.gain_db)));
+            entry.insert("q", Item::Value(shortest(band.q)));
+            entry.decor_mut().set_prefix("\n");
+            entries.push(entry);
+        }
+    }
+    Some(())
+}
+
+/// `number` as a TOML value through its text, so -3.7 stays -3.7 and does not grow the digits
+/// of an f32, and 500 stays a whole number.
+fn shortest(number: f32) -> Value {
+    let shown = number.to_string();
+    shown.parse::<i64>().map_or_else(
+        |_| shown.parse::<f64>().map_or(Value::from(0.0), Value::from),
+        Value::from,
+    )
+}
+
+/// Sets a number that reads as `unnamed` when the table does not name it, unless it reads as
+/// `number` already.
+fn set_number_from(table: &mut Table, key: &str, number: f32, unnamed: f32) {
+    let old = table.get(key).and_then(|item| {
+        item.as_float()
+            .or_else(|| item.as_integer().map(|whole| whole as f64))
+    });
+    // Exactly: parse reads the file's number to this very f32 if it did not change.
+    #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+    let same = old.map_or(number == unnamed, |old| old as f32 == number);
+    if !same {
+        set(table, key, shortest(number));
     }
 }
 
@@ -1003,13 +1033,48 @@ mod tests {
         assert!(text.contains("freq_hz = 80\n"), "{text}");
         assert!(text.contains("# the speakers"), "{text}");
 
-        // All back: nothing of the equalizer is left in the file.
+        // All back: the entries stay, with the values of a flat start.
         spec.buses[0].eq_on = true;
         spec.buses[0].eq = Band::all_flat();
         let text = merge(&text, &spec);
         assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
-        assert!(!text.contains("eq"), "{text}");
+        assert!(text.contains("eq_on = true"), "{text}");
         assert!(text.contains("# the cable"), "{text}");
+    }
+
+    #[test]
+    fn merge_changes_a_band_in_place_and_keeps_the_comments_of_all() {
+        let existing = "[[bus]]\nname = \"A1\"\ndevice = \"x\"\n\n\
+             # warm the bass\n[[bus.eq]]\nband = 1\ngain_db = 3 # just a bit\n\n\
+             # presence\n[[bus.eq]]\nband = 3\ngain_db = 2\nq = 1.4\n\n\
+             [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\n";
+        let mut spec = parse(existing).expect("profile");
+        assert_eq!(merge(existing, &spec), existing, "nothing changed");
+
+        spec.buses[0].eq[2].gain_db = 4.0;
+        spec.buses[0].eq[2].kind = BandKind::HighShelf;
+        spec.buses[0].eq[3].freq_hz = 9000.0;
+        let text = merge(existing, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        for kept in [
+            "# warm the bass\n[[bus.eq]]\nband = 1\ngain_db = 3 # just a bit\n",
+            "# presence\n[[bus.eq]]\nband = 3\ngain_db = 4\nq = 1.4\nkind = \"high\"\n",
+            "band = 4\nkind = \"high\"\nfreq_hz = 9000\n",
+        ] {
+            assert!(text.contains(kept), "{kept:?} in\n{text}");
+        }
+    }
+
+    #[test]
+    fn merge_keeps_the_comments_of_a_file_with_a_value_out_of_range() {
+        // Changed by hand while the route ran: no profile any more, until the merge sets it.
+        let existing = "[[bus]]\nname = \"A1\"\ndevice = \"x\" # the speakers\n\
+             [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\npan = 2\n";
+        assert!(parse(existing).is_err());
+        let spec = parse(&existing.replace("pan = 2", "pan = 0.5")).expect("profile");
+        let text = merge(existing, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        assert!(text.contains("# the speakers"), "{text}");
     }
 
     #[test]

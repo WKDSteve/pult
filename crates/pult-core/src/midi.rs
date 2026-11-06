@@ -639,12 +639,17 @@ impl Map {
                     _ => return Step::default(),
                 };
                 let to_value = |pos: f32| OpValue::Number(span.value(pos));
-                if relative {
+                let mut step = if relative {
                     self.turn(control, value, current, target, view, to_value)
                 } else {
                     let pos = f32::from(value) / 127.0;
                     self.pick_up(control, pos, current, target, view, to_value)
+                };
+                // Only a gain or a pan ramps; these glide in the mixer by themselves.
+                if let Some(Op::Set { ramp_ms, .. }) = &mut step.op {
+                    *ramp_ms = None;
                 }
+                step
             }
             (Param::Switch(binding), _) => {
                 if !self.pressed(control, message) {
@@ -1242,6 +1247,12 @@ mod tests {
             (button(3), "input/1/solo"),
             (fader(48), "input/1/gain"),
             (fader(49), "input/1/pan"),
+            (fader(50), "input/1/gate"),
+            (fader(51), "input/1/comp"),
+            (fader(52), "bus/A1/eq/2/gain"),
+            (fader(53), "bus/A1/eq/2/freq"),
+            (fader(54), "bus/A1/eq/2/q"),
+            (button(4), "bus/A1/eq"),
         ]);
         let scene = map.step(press(1), &view);
         assert_eq!(
@@ -1252,9 +1263,37 @@ mod tests {
         );
         assert_eq!(map.step(release(1), &view), Step::default());
         let at_zero = AT_ZERO;
-        for message in [press(2), press(3), cc(48, at_zero), cc(49, 64)] {
+        // The faders start near where the values stand, so that they pick them up.
+        for message in [
+            press(2),
+            press(3),
+            press(4),
+            cc(48, at_zero),
+            cc(49, 64),
+            cc(50, 0),
+            cc(51, 1),
+            cc(52, 64),
+            cc(53, 59),
+            cc(54, 54),
+        ] {
             let op = map.step(message, &view).op.expect("an op");
-            assert!(op.action(&view).is_ok(), "{op:?}");
+            assert!(op.action(&view).is_ok(), "{op:?}: {:?}", op.action(&view));
+        }
+        // An endless knob too.
+        let mut turned = Map::new(
+            ["input/1/comp", "bus/A1/eq/2/freq"]
+                .iter()
+                .zip([60, 61])
+                .map(|(target, number)| Bound {
+                    control: fader(number),
+                    target: (*target).to_owned(),
+                    relative: true,
+                })
+                .collect(),
+        );
+        for number in [60, 61] {
+            let op = turned.step(cc(number, 1), &view).op.expect("an op");
+            assert!(op.action(&view).is_ok(), "{op:?}: {:?}", op.action(&view));
         }
     }
 

@@ -308,7 +308,7 @@ impl EqControls {
     }
 }
 
-/// The filter of one band: `y = b0 x + b1 x1 + b2 x2 - a1 y1 - a2 y2`.
+/// The filter of one band: `y = b0 x + b1 x1 + b2 x2 - a1 y1 - a2 y2` (direct form I).
 #[derive(Clone, Copy, Debug)]
 struct Filter {
     b0: f64,
@@ -382,8 +382,10 @@ pub struct Equalizer {
     /// Where the bands stand on their way there.
     now: [Band; EQ_BANDS],
     filters: [Filter; EQ_BANDS],
-    /// What each filter remembers, per channel and band.
-    memory: [[[f64; 2]; EQ_BANDS]; EQ_CHANNELS],
+    /// What each filter remembers, per channel and band: the two past inputs, then the two past
+    /// outputs (direct form I). Its past is sound, not a scaled state: a filter whose
+    /// coefficients move while it runs then moves with them without a step.
+    memory: [[[f64; 4]; EQ_BANDS]; EQ_CHANNELS],
 }
 
 impl Equalizer {
@@ -400,7 +402,7 @@ impl Equalizer {
             set,
             now: set,
             filters: set.map(|band| Filter::of(band, rate)),
-            memory: [[[0.0; 2]; EQ_BANDS]; EQ_CHANNELS],
+            memory: [[[0.0; 4]; EQ_BANDS]; EQ_CHANNELS],
         }
     }
 
@@ -421,18 +423,25 @@ impl Equalizer {
         }
         let filtered = channels.min(EQ_CHANNELS);
         for block in data.chunks_mut(BLOCK * channels) {
-            self.step(block.len() / channels);
+            let frames = block.len() / channels;
+            self.step(frames);
             for band in 0..EQ_BANDS {
                 #[allow(clippy::float_cmp)] // Exactly: a slide ends on its goal.
-                if self.now[band].gain_db == 0.0 {
-                    for memory in &mut self.memory {
-                        memory[band] = [0.0; 2];
+                let flat = self.now[band].gain_db == 0.0;
+                if flat && self.forgot(band) {
+                    // Nothing to do, but the past has to be there when the band comes back: the
+                    // last two frames, as they are after the bands before it.
+                    for (channel, memory) in self.memory.iter_mut().enumerate().take(filtered) {
+                        let last = f64::from(block[(frames - 1) * channels + channel]);
+                        let before =
+                            f64::from(block[frames.saturating_sub(2) * channels + channel]);
+                        memory[band] = [last, before, last, before];
                     }
                     continue;
                 }
                 let filter = self.filters[band];
                 for (channel, memory) in self.memory.iter_mut().enumerate().take(filtered) {
-                    let [mut first, mut second] = memory[band];
+                    let [mut x1, mut x2, mut y1, mut y2] = memory[band];
                     for frame in block.chunks_exact_mut(channels) {
                         // A NaN would stay in the filter for ever; the bus silences it anyway.
                         let sample = frame[channel];
@@ -441,15 +450,22 @@ impl Equalizer {
                         } else {
                             0.0
                         };
-                        let y = filter.b0 * x + first;
-                        first = filter.b1 * x - filter.a1 * y + second;
-                        second = filter.b2 * x - filter.a2 * y;
+                        let y = filter.b0 * x + filter.b1 * x1 + filter.b2 * x2
+                            - filter.a1 * y1
+                            - filter.a2 * y2;
+                        (x2, x1, y2, y1) = (x1, x, y1, y);
                         #[allow(clippy::cast_possible_truncation)]
                         let out = y as f32;
                         frame[channel] = out;
                     }
+                    if flat {
+                        // Flat, the output follows the input once what it remembers has died
+                        // away; given up once no one can hear it (240 dB down), so that it rests.
+                        y1 = settled_to(y1, x1);
+                        y2 = settled_to(y2, x2);
+                    }
                     // What fades after the sound ends would become slow, tiny numbers.
-                    memory[band] = [settled(first), settled(second)];
+                    memory[band] = [settled(x1), settled(x2), settled(y1), settled(y2)];
                 }
             }
         }
@@ -472,7 +488,7 @@ impl Equalizer {
         if std::mem::take(&mut self.fresh) {
             self.now = std::array::from_fn(|index| self.goal(index));
             self.filters = self.now.map(|band| Filter::of(band, self.rate));
-            self.memory = [[[0.0; 2]; EQ_BANDS]; EQ_CHANNELS];
+            self.memory = [[[0.0; 4]; EQ_BANDS]; EQ_CHANNELS];
         }
     }
 
@@ -485,10 +501,22 @@ impl Equalizer {
         }
     }
 
-    /// Whether every band is flat and stays so: nothing to do.
+    /// Whether every band is flat, stays so and remembers nothing: nothing to do.
     fn rests(&self) -> bool {
         #[allow(clippy::float_cmp)] // Exactly: a slide ends on its goal.
-        (0..EQ_BANDS).all(|index| self.now[index].gain_db == 0.0 && self.goal(index).gain_db == 0.0)
+        (0..EQ_BANDS).all(|index| {
+            self.now[index].gain_db == 0.0 && self.goal(index).gain_db == 0.0 && self.forgot(index)
+        })
+    }
+
+    /// Whether the filter of `band`, flat, has nothing left to let die away on any channel: its
+    /// past outputs are its past inputs.
+    fn forgot(&self, band: usize) -> bool {
+        #[allow(clippy::float_cmp)] // Exactly: what is near enough is set equal.
+        self.memory.iter().all(|memory| {
+            let [x1, x2, y1, y2] = memory[band];
+            y1 == x1 && y2 == x2
+        })
     }
 
     /// Moves every band that is not where it is to be by `frames` frames' worth.
@@ -497,13 +525,16 @@ impl Equalizer {
         let octaves = 2f32.powf(OCTAVE_PACE * seconds);
         for index in 0..EQ_BANDS {
             let goal = self.goal(index);
+            let forgot = self.forgot(index);
             let now = &mut self.now[index];
             if *now == goal {
                 continue;
             }
             #[allow(clippy::float_cmp)] // Exactly: a slide ends on its goal.
-            if now.gain_db == 0.0 {
-                // Flat sounds the same for every kind, frequency and width: change them for free.
+            if now.gain_db == 0.0 && forgot {
+                // Flat, with nothing remembered, sounds the same for every kind, frequency and
+                // width: change them for free. (What is remembered would ring on through other
+                // poles, with a step.)
                 now.kind = goal.kind;
                 now.freq_hz = goal.freq_hz;
                 now.q = goal.q;
@@ -525,6 +556,15 @@ impl Equalizer {
 /// `value`, or zero when it is too small to matter.
 fn settled(value: f64) -> f64 {
     if value.abs() < 1e-25 { 0.0 } else { value }
+}
+
+/// `value`, or `goal` when it is near enough that no one hears the difference.
+fn settled_to(value: f64, goal: f64) -> f64 {
+    if (value - goal).abs() < 1e-12 {
+        goal
+    } else {
+        value
+    }
 }
 
 /// `value` moved towards `goal` by at most `step`.
@@ -676,6 +716,73 @@ mod tests {
         let mut data = sine(50.0, 1);
         eq.process(&controls, &mut data, 1);
         assert!((level_db(&data) - 12.0).abs() < 0.3);
+    }
+
+    /// The largest step between neighbouring samples.
+    fn largest_step(data: &[f32]) -> f32 {
+        data.windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn a_band_that_arrives_at_flat_rings_out_without_a_step() {
+        // A narrow bell on a low tone remembers much: where the slide to flat ends, the filter
+        // is far from done.
+        let bell = Band {
+            q: 0.7,
+            ..band(BandKind::Peak, 50.0, 12.0)
+        };
+        let controls = EqControls::default();
+        controls.set(0, bell);
+        let mut eq = Equalizer::new(RATE);
+        let mut data = sine(50.0, 1);
+        eq.process(&controls, &mut data, 1);
+        // The tone alone steps by 0.0033 a sample, raised by 12 dB by 0.013.
+        let raised = largest_step(&data[RATE as usize / 2..]);
+        controls.switch(false);
+        let mut data = sine(50.0, 1);
+        eq.process(&controls, &mut data, 1);
+        assert!(
+            largest_step(&data) <= raised * 1.05,
+            "{} against {raised}",
+            largest_step(&data)
+        );
+        assert!(level_db(&data).abs() < 0.01);
+        assert!(eq.rests(), "and then it remembers nothing");
+
+        // Another kind goes through flat too.
+        controls.switch(true);
+        let mut data = sine(50.0, 1);
+        eq.process(&controls, &mut data, 1);
+        controls.set(0, band(BandKind::HighShelf, 50.0, 12.0));
+        let mut data = sine(50.0, 1);
+        eq.process(&controls, &mut data, 1);
+        assert!(
+            largest_step(&data) <= raised * 1.05,
+            "{} against {raised}",
+            largest_step(&data)
+        );
+    }
+
+    #[test]
+    fn a_slide_through_flat_does_not_step_where_it_lands_on_it() {
+        // At 32 kHz a slide moves by exactly 1 dB a block, so from +3 to -3 dB it stands on
+        // 0 dB for one block.
+        let controls = EqControls::default();
+        controls.set(0, band(BandKind::LowShelf, 200.0, 3.0));
+        let mut eq = Equalizer::new(32_000);
+        let mut data = vec![0.25; 32_000];
+        eq.process(&controls, &mut data, 1);
+        controls.set(0, band(BandKind::LowShelf, 200.0, -3.0));
+        let mut data = vec![0.25; 32_000];
+        eq.process(&controls, &mut data, 1);
+        assert!(largest_step(&data) < 0.002, "{}", largest_step(&data));
+        let last = data[data.len() - 1];
+        assert!(
+            (last - 0.25 * 10f32.powf(-3.0 / 20.0)).abs() < 1e-3,
+            "{last}"
+        );
     }
 
     #[test]
