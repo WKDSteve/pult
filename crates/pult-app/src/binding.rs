@@ -2,7 +2,9 @@
 
 use pult_core::view::{Action, MixerView};
 
-pub use pult_core::view::{AddressError, Binding, BusParam, InputParam, Value, action_gain};
+pub use pult_core::view::{
+    AddressError, BandParam, Binding, BusParam, InputParam, Value, action_gain,
+};
 
 /// A view and what the controls changed in this frame, so a readout drawn after its fader
 /// shows the new value at once.

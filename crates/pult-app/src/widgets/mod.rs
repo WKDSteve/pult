@@ -1,6 +1,7 @@
 //! The controls of the console, each in its own module; drawn only from theme tokens.
 
 pub mod badge;
+pub mod dial;
 pub mod fader;
 pub mod knob;
 pub mod meter;

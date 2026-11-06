@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
 use crate::eq::{EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
 use crate::protocol::{Op, OpValue};
-use crate::scale::{fader_db, fader_pos};
+use crate::scale::{Span, fader_db, fader_pos};
 use crate::view::{AMOUNT_RANGE, GAIN_RANGE_DB, MixerView};
 
 /// How long a change of a fader glides: its seven bits are steps one would hear otherwise.
@@ -280,54 +280,6 @@ impl Param {
     /// Whether a control of this kind can work it: a button cannot say how loud.
     fn takes(&self, kind: ControlKind) -> bool {
         kind == ControlKind::Cc || matches!(self, Self::Switch(_) | Self::Scene(_))
-    }
-}
-
-/// The two ends of a number a knob sets, and how the way between them is divided.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Span {
-    low: f32,
-    high: f32,
-    /// Divided by ratio instead of by difference: every octave gets the same turn.
-    octaves: bool,
-}
-
-impl Span {
-    fn even((low, high): (f32, f32)) -> Self {
-        Self {
-            low,
-            high,
-            octaves: false,
-        }
-    }
-
-    fn octaves((low, high): (f32, f32)) -> Self {
-        Self {
-            low,
-            high,
-            octaves: true,
-        }
-    }
-
-    /// Where `value` lies between the ends, 0 to 1.
-    fn pos(self, value: f32) -> f32 {
-        let pos = if self.octaves {
-            (value / self.low).ln() / (self.high / self.low).ln()
-        } else {
-            (value - self.low) / (self.high - self.low)
-        };
-        pos.clamp(0.0, 1.0)
-    }
-
-    /// The value at `pos`, 0 to 1; never outside the ends, whatever the rounding does.
-    fn value(self, pos: f32) -> f32 {
-        let pos = pos.clamp(0.0, 1.0);
-        let value = if self.octaves {
-            self.low * (self.high / self.low).powf(pos)
-        } else {
-            self.low + (self.high - self.low) * pos
-        };
-        value.clamp(self.low, self.high)
     }
 }
 

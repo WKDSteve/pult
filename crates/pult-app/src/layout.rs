@@ -30,6 +30,8 @@ pub enum Zone {
     Pan,
     /// The bus assignment buttons.
     Assign,
+    /// Gate and compressor of an input, the switch of the equalizer of a bus.
+    Dynamics,
     MuteSolo,
     /// Fader, meter and meter numbers.
     Fader,
@@ -73,6 +75,10 @@ pub enum Control {
     Knob,
     /// A pan as text.
     PanText,
+    /// A small dial with a short `text` over it and its value under it.
+    Dial {
+        text: String,
+    },
     /// A latching button with a short `text`.
     Toggle {
         text: String,
@@ -119,8 +125,8 @@ pub fn standard(view: &MixerView) -> Vec<Element> {
     inputs.chain(buses).collect()
 }
 
-/// The strip of input `index`: header, pan, a button per bus of `view`, mute and solo, fader
-/// with meter, readout.
+/// The strip of input `index`: header, pan, a button per bus of `view`, gate and compressor, mute
+/// and solo, fader with meter, readout.
 #[must_use]
 pub fn input_strip(index: usize, view: &MixerView) -> Element {
     let at = |param| Some(Binding::Input(index, param));
@@ -134,6 +140,20 @@ pub fn input_strip(index: usize, view: &MixerView) -> Element {
         Element::toggle(Zone::Assign, &b.name, Role::Assign, route)
     }));
     parts.extend([
+        Element::part(
+            Zone::Dynamics,
+            Control::Dial {
+                text: "GATE".to_owned(),
+            },
+            at(InputParam::Gate),
+        ),
+        Element::part(
+            Zone::Dynamics,
+            Control::Dial {
+                text: "COMP".to_owned(),
+            },
+            at(InputParam::Comp),
+        ),
         Element::toggle(
             Zone::MuteSolo,
             "M",
@@ -161,14 +181,20 @@ pub fn input_strip(index: usize, view: &MixerView) -> Element {
     }
 }
 
-/// The master strip of bus `index`: header, device, mute, fader with meter and numbers,
-/// readout.
+/// The master strip of bus `index`: header, device, the switch of its equalizer, mute, fader with
+/// meter and numbers, readout.
 #[must_use]
 pub fn bus_strip(index: usize) -> Element {
     let at = |param| Some(Binding::Bus(index, param));
     let parts = vec![
         Element::part(Zone::Header, Control::Header, None),
         Element::part(Zone::Info, Control::Device, None),
+        Element::toggle(
+            Zone::Dynamics,
+            "EQ",
+            Role::Assign,
+            Binding::Bus(index, BusParam::Eq),
+        ),
         Element::toggle(
             Zone::MuteSolo,
             "MUTE",
@@ -267,7 +293,8 @@ mod tests {
         let mut expected = vec!["input/2/pan".to_owned(), "input/2/pan".to_owned()];
         expected.extend(view.buses.iter().map(|b| format!("matrix/2/{}", b.name)));
         expected.extend(
-            ["mute", "solo", "gain", "meter", "gain"].map(|param| format!("input/2/{param}")),
+            ["gate", "comp", "mute", "solo", "gain", "meter", "gain"]
+                .map(|param| format!("input/2/{param}")),
         );
         assert_eq!(addresses, expected);
         assert!(
@@ -289,7 +316,13 @@ mod tests {
             .collect();
         assert_eq!(
             addresses,
-            ["bus/A1/mute", "bus/A1/gain", "bus/A1/meter", "bus/A1/gain"]
+            [
+                "bus/A1/eq",
+                "bus/A1/mute",
+                "bus/A1/gain",
+                "bus/A1/meter",
+                "bus/A1/gain"
+            ]
         );
     }
 

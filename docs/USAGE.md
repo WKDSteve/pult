@@ -186,12 +186,15 @@ pult run --profile meinprofil.toml --log abend.csv
   einen Eingang gleichmäßiger und insgesamt lauter: Je höher der Regler, desto tiefer die Schwelle (bis -30 dB), desto
   stärker das Verhältnis (bis 8:1) und desto mehr Pegel kommt danach dazu (bis 12 dB). Vollaussteuerung kommt dabei nie
   über Vollaussteuerung heraus. Beide messen den lautesten Kanal und regeln alle Kanäle gleich, das Stereobild bleibt.
-  Die Eingangs-Meter zeigen den Pegel dahinter.
+  Die Eingangs-Meter zeigen den Pegel dahinter. Im Fenster sitzen beide als kleine Regler **GATE** und **COMP** im Kanalzug.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
   steht nur, was abweicht. `eq_on = false` schaltet alle Bänder aus, ohne ihre Einstellung zu verlieren. Hebt der EQ
-  über Vollaussteuerung, begrenzt der Bus und zählt es als Clipping wie sonst auch.
+  über Vollaussteuerung, begrenzt der Bus und zählt es als Clipping wie sonst auch. Im Fenster liegen die Bänder auf dem
+  Tab **EQ**; der Schalter **EQ** steht dort und im Kanalzug des Busses.
+- **Regler im Fenster:** Ziehen dreht (mit Umschalt feiner), das Mausrad geht in Schritten, ein Doppelklick führt zurück
+  zur Grundstellung. Frequenz und Breite eines Bandes gehen oktavweise.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
   ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
 - **Szenen:** `[[scene]]` benennt einen Zustand des Mischpults, siehe unten.

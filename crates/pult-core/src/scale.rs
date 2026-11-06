@@ -10,6 +10,72 @@ pub const FADER_TOP_DB: f32 = 12.0;
 /// Lowest level a meter shows; anything quieter is an empty meter.
 pub const METER_FLOOR_DB: f32 = -60.0;
 
+/// The two ends of a number a knob or a dial sets, and how the way between them is divided.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Span {
+    low: f32,
+    high: f32,
+    /// Divided by ratio instead of by difference: every octave gets the same turn.
+    octaves: bool,
+}
+
+impl Span {
+    /// Every step of the way is the same difference.
+    #[must_use]
+    pub fn even((low, high): (f32, f32)) -> Self {
+        Self {
+            low,
+            high,
+            octaves: false,
+        }
+    }
+
+    /// Every step of the way is the same ratio; both ends are above 0.
+    #[must_use]
+    pub fn octaves((low, high): (f32, f32)) -> Self {
+        Self {
+            low,
+            high,
+            octaves: true,
+        }
+    }
+
+    /// The lower end.
+    #[must_use]
+    pub fn low(self) -> f32 {
+        self.low
+    }
+
+    /// The upper end.
+    #[must_use]
+    pub fn high(self) -> f32 {
+        self.high
+    }
+
+    /// Where `value` lies between the ends, 0 to 1.
+    #[must_use]
+    pub fn pos(self, value: f32) -> f32 {
+        let pos = if self.octaves {
+            (value / self.low).ln() / (self.high / self.low).ln()
+        } else {
+            (value - self.low) / (self.high - self.low)
+        };
+        pos.clamp(0.0, 1.0)
+    }
+
+    /// The value at `pos`, 0 to 1; never outside the ends, whatever the rounding does.
+    #[must_use]
+    pub fn value(self, pos: f32) -> f32 {
+        let pos = pos.clamp(0.0, 1.0);
+        let value = if self.octaves {
+            self.low * (self.high / self.low).powf(pos)
+        } else {
+            self.low + (self.high - self.low) * pos
+        };
+        value.clamp(self.low, self.high)
+    }
+}
+
 /// One point of a scale: a level in dB at a position from 0 (bottom) to 1 (top).
 type Point = (f32, f32);
 

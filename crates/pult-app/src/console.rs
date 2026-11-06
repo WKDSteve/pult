@@ -8,6 +8,7 @@ use eframe::egui::{
 };
 
 use crate::binding::Values;
+use crate::equalizer;
 use crate::layout::{self, Control, Meters, Place};
 use crate::log::{self, Log, Source, format_elapsed};
 use crate::matrix;
@@ -23,6 +24,7 @@ pub enum Tab {
     #[default]
     Console,
     Matrix,
+    Equalizer,
     Events,
 }
 
@@ -135,13 +137,14 @@ pub fn show(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, now: f64) -
         .show(ui, |ui| match state.tab {
             Tab::Console => console(ui, view, state, now, &mut actions),
             Tab::Matrix => matrix::show(ui, view, &mut actions),
+            Tab::Equalizer => equalizer::show(ui, view, &mut actions),
             Tab::Events => log::show(ui, &state.log),
         });
     actions
 }
 
 /// The room the header's right side takes, with the scenes, and its word mark on the left.
-const HEADER_RIGHT: f32 = 530.0;
+const HEADER_RIGHT: f32 = 556.0;
 const HEADER_MARK: f32 = 75.0;
 /// The room of what else may stand on the left.
 const HEADER_GLITCHES: f32 = 85.0;
@@ -262,10 +265,11 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
                 }));
             }
             ui.label(RichText::new("METER").size(9.5).color(p.text_faint));
-            ui.add_space(14.0);
+            ui.add_space(8.0);
             scene_menu(ui, view, actions);
             for (tab, name) in [
                 (Tab::Events, "Events"),
+                (Tab::Equalizer, "EQ"),
                 (Tab::Matrix, "Matrix"),
                 (Tab::Console, "Console"),
             ] {
@@ -321,7 +325,7 @@ fn tab_button(ui: &mut Ui, current: &mut Tab, tab: Tab, name: &str) {
                     egui::Color32::TRANSPARENT
                 },
             ))
-            .min_size(vec2(64.0, 24.0)),
+            .min_size(vec2(52.0, 24.0)),
     );
     if selected {
         let r = response.rect;

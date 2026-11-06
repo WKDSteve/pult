@@ -8,6 +8,7 @@
 
 pub mod binding;
 pub mod console;
+pub mod equalizer;
 pub mod layout;
 pub mod log;
 pub mod matrix;

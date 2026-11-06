@@ -72,8 +72,8 @@ fn showcase(t: f64) -> MixerView {
                 muted: i == 3,
                 solo: i == 1,
                 pan: [0.0, -0.35, 0.25, 0.0, 0.0, 0.0, 0.0][i],
-                gate: 0.0,
-                comp: 0.0,
+                gate: [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
+                comp: [4.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 buses: buses.to_vec(),
                 present: i != 6,
                 peak_db: (i != 3 && i != 6)
@@ -100,8 +100,15 @@ fn showcase(t: f64) -> MixerView {
             sample_rate: 48_000,
             gain_db,
             muted: false,
-            eq_on: true,
-            eq: pult_core::Band::all_flat(),
+            eq_on: j != 1,
+            eq: if j == 0 {
+                let mut bands = pult_core::Band::all_flat();
+                bands[0] = bands[0].with_gain(3.0);
+                bands[2] = bands[2].with_gain(-4.5);
+                bands
+            } else {
+                pult_core::Band::all_flat()
+            },
             present: true,
             peak_db: Some((-10.0 + gain_db + wobble(seed, t) * 6.0).min(0.0)),
             clipped: 0,
@@ -222,6 +229,15 @@ fn console_overview() {
 )]
 fn matrix_view() {
     console_shot(Tab::Matrix, "matrix_view");
+}
+
+#[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "the pictures are of Windows: its fonts, its renderer"
+)]
+fn equalizer_view() {
+    console_shot(Tab::Equalizer, "equalizer_view");
 }
 
 #[test]

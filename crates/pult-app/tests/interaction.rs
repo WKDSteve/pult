@@ -193,6 +193,92 @@ fn a_screen_reader_sets_the_pan() {
 }
 
 #[test]
+fn a_screen_reader_sets_gate_and_compressor_in_their_range() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    let gate = harness.get_by_label("Spotify.exe gate");
+    assert_eq!(gate.accesskit_node().min_numeric_value(), Some(0.0));
+    assert_eq!(gate.accesskit_node().max_numeric_value(), Some(10.0));
+    gate.set_value_accesskit(3.5);
+    harness
+        .get_by_label("Spotify.exe compressor")
+        .set_value_accesskit(99.0);
+    harness.run_steps(2);
+    let view = desk_view(&mut harness);
+    assert!((view.inputs[SPOTIFY].gate - 3.5).abs() < 1e-3);
+    assert_eq!(view.inputs[SPOTIFY].comp, 10.0, "it stays in its range");
+    assert_eq!(view.inputs[0].gate, 0.0, "the others stay as they are");
+}
+
+#[test]
+fn dragging_a_dial_turns_it_and_a_double_click_takes_it_home() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    let center = harness.get_by_label("Spotify.exe gate").rect().center();
+    harness.hover_at(center);
+    harness.drag_at(center);
+    harness.run_steps(1);
+    harness.hover_at(center - vec2(0.0, 40.0));
+    harness.run_steps(1);
+    harness.drop_at(center - vec2(0.0, 40.0));
+    let gate = desk_view(&mut harness).inputs[SPOTIFY].gate;
+    assert!((gate - 2.5).abs() < 1e-3, "gate {gate}");
+
+    harness.get_by_label("Spotify.exe gate").click();
+    harness.step();
+    harness.get_by_label("Spotify.exe gate").click();
+    assert_eq!(desk_view(&mut harness).inputs[SPOTIFY].gate, 0.0);
+}
+
+#[test]
+fn a_bus_strip_switches_its_equalizer() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    assert!(desk_view(&mut harness).buses[0].eq_on);
+    harness.get_by_label("A1 equalizer").click();
+    let view = desk_view(&mut harness);
+    assert!(!view.buses[0].eq_on);
+    assert!(view.buses[1].eq_on);
+}
+
+#[test]
+fn the_equalizer_view_sets_its_bands() {
+    use pult_core::view::BandKind;
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("EQ").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state_mut().state.tab, Tab::Equalizer);
+
+    harness
+        .get_by_label("A2 equalizer band 2 gain")
+        .set_value_accesskit(6.0);
+    harness
+        .get_by_label("A2 equalizer band 2 freq")
+        .set_value_accesskit(1000.0);
+    harness
+        .get_by_label("A2 equalizer band 2 q")
+        .set_value_accesskit(2.0);
+    harness.run_steps(2);
+    harness
+        .get_by_label("A2 equalizer band 2 kind high")
+        .click();
+    harness.run_steps(2);
+    // The kind it has already: one of them is always on, and nothing changes.
+    harness.get_by_label("A2 equalizer band 1 kind low").click();
+    harness.get_by_label("A1 equalizer").click();
+    let view = desk_view(&mut harness);
+    let band = view.buses[1].eq[1];
+    assert!((band.gain_db - 6.0).abs() < 1e-3, "{band:?}");
+    assert!((band.freq_hz - 1000.0).abs() < 0.01, "{band:?}");
+    assert!((band.q - 2.0).abs() < 1e-3, "{band:?}");
+    assert_eq!(band.kind, BandKind::HighShelf);
+    assert_eq!(view.buses[1].eq[0].kind, BandKind::LowShelf);
+    assert!(!view.buses[0].eq_on && view.buses[1].eq_on);
+    assert_eq!(view.buses[0].eq, pult_core::Band::all_flat());
+}
+
+#[test]
 fn keys_step_a_focused_fader() {
     let mut harness = harness();
     harness.run_steps(2);
