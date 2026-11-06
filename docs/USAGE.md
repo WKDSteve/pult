@@ -192,7 +192,8 @@ pult run --profile meinprofil.toml --log abend.csv
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
   steht nur, was abweicht. `eq_on = false` schaltet alle Bänder aus, ohne ihre Einstellung zu verlieren. Hebt der EQ
   über Vollaussteuerung, begrenzt der Bus und zählt es als Clipping wie sonst auch. Im Fenster liegen die Bänder auf dem
-  Tab **EQ**; der Schalter **EQ** steht dort und im Kanalzug des Busses.
+  Tab **EQ**; der Schalter **EQ** steht dort und im Kanalzug des Busses. Die Fernbedienung im Browser hat den Schalter
+  und die Regler von Gate und Kompressor, die Bänder nicht.
 - **Regler im Fenster:** Ziehen dreht (mit Umschalt feiner), das Mausrad geht in Schritten, ein Doppelklick führt zurück
   zur Grundstellung. Frequenz und Breite eines Bandes gehen oktavweise.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten

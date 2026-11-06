@@ -131,6 +131,28 @@ try {
   );
   check("gain arrives", true);
 
+  // The one knob of a compressor, through its slider; off is said in a word.
+  const comp = page.getByRole("slider", { name: "Compressor of CABLE" });
+  check("the compressor starts off", (await comp.inputValue()) === "0");
+  await comp.fill("4");
+  await page.waitForFunction(() =>
+    document.getElementById("notice").textContent.includes("comp 4.0"),
+  );
+  check("the compressor arrives", true);
+
+  // The switch of an equalizer comes back through the state too.
+  const eq = page.getByRole("button", { name: "EQ of A1" });
+  check("the equalizer starts on", (await eq.getAttribute("aria-pressed")) === "true");
+  await eq.click();
+  await page.waitForFunction(
+    () => document.querySelector("#buses .strip .eq").getAttribute("aria-pressed") === "false",
+  );
+  check("the equalizer switches", true);
+  await eq.click();
+  await page.waitForFunction(
+    () => document.querySelector("#buses .strip .eq").getAttribute("aria-pressed") === "true",
+  );
+
   // A scene.
   await page.getByRole("button", { name: "Abend", exact: true }).click();
   await page.waitForFunction(() =>

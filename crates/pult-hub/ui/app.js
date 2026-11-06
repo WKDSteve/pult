@@ -133,9 +133,46 @@ function make(tag, className, text) {
   return node;
 }
 
+// A small slider for the one knob of a gate or a compressor, 0 (off) to 10. Its `update` leaves it
+// alone while it is in the hand.
+function makeKnob(address, word, what) {
+  const label = make("label", "knob");
+  const name = make("span", "level", word);
+  const slider = make("input");
+  slider.type = "range";
+  slider.min = 0;
+  slider.max = 10;
+  slider.step = 0.5;
+  const value = make("span", "level");
+  label.append(name, slider, value);
+  const says = (amount) => (amount > 0 ? amount.toFixed(1) : "off");
+
+  let held = false;
+  slider.addEventListener("input", () => {
+    held = true;
+    value.textContent = says(Number(slider.value));
+  });
+  slider.addEventListener("change", () => {
+    ask({ op: "set", address, value: Number(slider.value) }).finally(() => {
+      held = false;
+    });
+  });
+
+  return {
+    node: label,
+    update(amount, called) {
+      slider.setAttribute("aria-label", `${what} of ${called}`);
+      if (!held) {
+        slider.value = amount;
+        value.textContent = says(amount);
+      }
+    },
+  };
+}
+
 // A strip of an input or a bus; `update` fills it from each new state, so focus and a slider in
 // the hand survive.
-function makeStrip(address, title) {
+function makeStrip(address, title, isInput) {
   const li = make("li", "strip");
   const name = make("span", "name");
   const mute = make("button");
@@ -154,7 +191,23 @@ function makeStrip(address, title) {
   const gain = make("span", "level");
   li.append(name, mute, detail, meter, level, slider, gain);
 
-  let shown = { muted: false, gain_db: 0 };
+  // What an input has before its fader, and a bus behind its sum.
+  const gate = isInput ? makeKnob(`${address}/gate`, "Gate", "Gate") : null;
+  const comp = isInput ? makeKnob(`${address}/comp`, "Comp", "Compressor") : null;
+  const eq = isInput ? null : make("button");
+  if (isInput) {
+    li.append(gate.node, comp.node);
+  } else {
+    eq.type = "button";
+    eq.className = "eq";
+    eq.textContent = "EQ";
+    li.append(eq);
+    eq.addEventListener("click", () => {
+      ask({ op: "set", address: `${address}/eq`, value: !shown.eq_on });
+    });
+  }
+
+  let shown = { muted: false, gain_db: 0, eq_on: false };
   let held = false;
   mute.addEventListener("click", () => {
     ask({ op: "set", address: `${address}/mute`, value: !shown.muted });
@@ -181,6 +234,14 @@ function makeStrip(address, title) {
       mute.setAttribute("aria-label", `Mute ${called}`);
       meter.setAttribute("aria-label", `Level of ${called}`);
       slider.setAttribute("aria-label", `Gain of ${called}`);
+      if (isInput) {
+        // A pult older than these says nothing of them: they read as off.
+        gate.update(state.gate ?? 0, called);
+        comp.update(state.comp ?? 0, called);
+      } else {
+        eq.setAttribute("aria-pressed", String(Boolean(state.eq_on)));
+        eq.setAttribute("aria-label", `EQ of ${called}`);
+      }
       meter.value = state.peak_db === null ? METER_FLOOR : state.peak_db;
       level.textContent = state.peak_db === null ? "silence" : `${state.peak_db.toFixed(1)} dB`;
       if (!held) {
@@ -199,7 +260,7 @@ function showStrips(list, strips, wanted) {
     strips.clear();
     list.replaceChildren();
     for (const entry of wanted) {
-      const strip = makeStrip(entry.address, (state) => state.title);
+      const strip = makeStrip(entry.address, (state) => state.title, entry.isInput);
       strips.set(entry.key, strip);
       list.append(strip.node);
     }
@@ -251,6 +312,7 @@ function show(state) {
     state.inputs.map((input) => ({
       key: `${input.number}/${input.name}`,
       address: `input/${input.number}`,
+      isInput: true,
       state: {
         ...input,
         title: input.label ?? input.name,
@@ -266,6 +328,7 @@ function show(state) {
     state.buses.map((bus) => ({
       key: bus.name,
       address: `bus/${bus.name}`,
+      isInput: false,
       state: {
         ...bus,
         title: bus.label ?? bus.name,
