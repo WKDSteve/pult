@@ -1203,6 +1203,22 @@ mod tests {
         assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
         assert!(text.contains("eq_on = true"), "{text}");
         assert!(text.contains("# the cable"), "{text}");
+
+        // The limiter goes in only once it differs, and stays where the file named it.
+        assert!(!text.contains("limit"), "{text}");
+        spec.buses[1].limit_on = false;
+        spec.buses[1].limit_db = -6.0;
+        spec.buses[1].limit_lookahead_ms = 2.5;
+        let text = merge(&text, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
+        assert!(text.contains("limit_on = false"), "{text}");
+        assert!(text.contains("limit_db = -6"), "{text}");
+        assert!(text.contains("# the cable"), "{text}");
+        spec.buses[1].limit_on = true;
+        spec.buses[1].limit_db = DEFAULT_CEILING_DB;
+        spec.buses[1].limit_lookahead_ms = DEFAULT_LOOKAHEAD_MS;
+        let text = merge(&text, &spec);
+        assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
     }
 
     #[test]

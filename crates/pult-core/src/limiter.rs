@@ -49,6 +49,10 @@ const OUT_OF_THE_WAY_DB: f32 = 24.0;
 /// Milliseconds of the crossfade between two delays.
 const FADE_MS: f64 = 5.0;
 
+/// The most a limiter reports having turned down, in dB. Without this an infinite sample would
+/// report infinity, which JSON cannot say: a client would not read the state any more.
+const MOST_REPORTED_DB: f32 = 120.0;
+
 /// How close to 1 the follower counts as back: no one hears the rest, and from there on the gain
 /// is exactly 1 again.
 const BACK: f64 = 1.0 - 1e-6;
@@ -310,7 +314,7 @@ impl Limiter {
         let lowest = lowest as f32;
         // Not `-0.0`, and nothing to do with a gain of exactly 1.
         if lowest < 1.0 {
-            -linear_to_db(lowest)
+            (-linear_to_db(lowest)).min(MOST_REPORTED_DB)
         } else {
             0.0
         }
@@ -719,7 +723,8 @@ mod tests {
     #[test]
     fn an_infinite_sample_turns_it_down_and_it_recovers() {
         let (mut limiter, controls) = limiter(-6.0, 0.0, 1);
-        limiter.process(&controls, &mut [f32::INFINITY], 1);
+        let reported = limiter.process(&controls, &mut [f32::INFINITY], 1);
+        assert_eq!(reported, MOST_REPORTED_DB, "a number JSON can say");
         let mut quiet = vec![0.1; 96_000];
         limiter.process(&controls, &mut quiet, 1);
         assert!(quiet[95_999].is_finite());

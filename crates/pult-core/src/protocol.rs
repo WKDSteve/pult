@@ -685,6 +685,18 @@ mod tests {
     }
 
     #[test]
+    fn what_a_limiter_reports_survives_json() {
+        let mut limiter = crate::limiter::Limiter::new(48_000, 1);
+        let controls = crate::limiter::LimiterControls::default();
+        controls.set_all(true, -6.0, 0.0);
+        let mut view = view();
+        view.buses[0].limited_db = limiter.process(&controls, &mut [f32::INFINITY], 1);
+        let text = serde_json::to_string(&State::new(&view, Vec::new())).expect("to JSON");
+        let read: State = serde_json::from_str(&text).expect("from JSON");
+        assert!(read.buses[0].limited_db.is_finite());
+    }
+
+    #[test]
     fn a_command_of_a_limiter_becomes_the_op_for_its_address() {
         let view = view();
         let state = State::new(&view, Vec::new());

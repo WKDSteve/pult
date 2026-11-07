@@ -277,7 +277,7 @@ fn shown(state: &State) -> Vec<String> {
             line.push_str(&pult_core::view::eq_summary(bus.eq_on, &bus.eq));
         }
         // A run older than limiters has no ceiling: nothing to say of it either.
-        if bus.limit_db != 0.0 || bus.limit_on {
+        if bus.limit_on || bus.limit_db != 0.0 || bus.limit_lookahead_ms != 0.0 {
             line.push_str(&pult_core::view::limit_summary(
                 bus.limit_on,
                 bus.limit_db,
