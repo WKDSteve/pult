@@ -239,6 +239,9 @@ try {
 
     # 8. The unpacked zip installs (Windows PowerShell 5.1 runs it: the one Windows has).
     $places = @('-InstallDir', $install, '-StartMenuDir', $startMenu, '-RegistryRoot', $regRoot)
+    # Never the real desktop: the installer and the uninstaller take it from here.
+    $desktopDir = Join-Path $tmp 'desktop'
+    $env:PULT_DESKTOP_DIR = $desktopDir
     $installer = Join-Path $dir1 'install.ps1'
     $r = Invoke-Child $installer $places -Shell $windowsPowerShell
     Write-Check ($r.Code -eq 0) 'install.ps1 of the unpacked zip installs'
@@ -252,6 +255,10 @@ try {
     Write-Check ($null -ne $entry -and $entry.UninstallString -match [regex]::Escape("-InstallDir `"$install`"") -and $entry.UninstallString -match 'PauseOnError') 'and its command names the places of this install'
     $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startMenu 'pult.lnk'))
     Write-Check ($link.TargetPath -eq (Join-Path $install 'pult-app.exe')) 'the Start menu entry opens the window'
+    Write-Check (-not (Test-Path -LiteralPath (Join-Path $desktopDir 'pult.lnk'))) 'no desktop shortcut without -DesktopShortcut'
+    $r = Invoke-Child $installer ($places + '-DesktopShortcut') -Shell $windowsPowerShell
+    $deskLink = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $desktopDir 'pult.lnk'))
+    Write-Check ($r.Code -eq 0 -and $deskLink.TargetPath -eq (Join-Path $install 'pult-app.exe')) 'with -DesktopShortcut the desktop shortcut opens the window'
     $runKey = "$regRoot\Microsoft\Windows\CurrentVersion\Run"
     Write-Check (-not (Test-Path -LiteralPath $runKey)) 'the start with Windows is not turned on by an install'
 
@@ -357,7 +364,7 @@ try {
     New-ItemProperty -LiteralPath $runKey -Name 'pult' -Value "`"$app`" --tray" -PropertyType String -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $install 'pult.exe.new') -Value 'cut short'
     $r = Invoke-Child (Join-Path $install 'uninstall.ps1') $places
-    Write-Check ($r.Code -eq 0 -and -not (Test-Path -LiteralPath $install) -and -not (Test-Path -LiteralPath (Join-Path $startMenu 'pult.lnk'))) 'the installed uninstall.ps1 removes it all, with the rest of a cut short install'
+    Write-Check ($r.Code -eq 0 -and -not (Test-Path -LiteralPath $install) -and -not (Test-Path -LiteralPath (Join-Path $startMenu 'pult.lnk')) -and -not (Test-Path -LiteralPath (Join-Path $desktopDir 'pult.lnk'))) 'the installed uninstall.ps1 removes it all, with the rest of a cut short install'
     if ($r.Code -ne 0) { Write-Output $r.Text }
     Write-Check (-not (Test-Path -LiteralPath $entryKey)) 'and the Settings > Apps entry'
     Write-Check ($null -eq (Get-ItemProperty -LiteralPath $runKey -Name 'pult' -ErrorAction SilentlyContinue)) 'and the start with Windows of this install'

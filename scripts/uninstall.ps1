@@ -40,6 +40,7 @@ param(
     [switch] $PauseOnError,
     [string] $InstallDir = '',
     [string] $StartMenuDir = '',
+    [string] $DesktopDir = '',
     [string] $RegistryRoot = ''
 )
 
@@ -164,6 +165,17 @@ if (Test-Path -LiteralPath $link -PathType Leaf) {
     }
     else {
         Write-Output "kept $link (it starts $target, not this install)"
+    }
+}
+
+# 2b. The desktop shortcut, when it leads into the install folder.
+if ($DesktopDir -eq '') { $DesktopDir = $(if ($env:PULT_DESKTOP_DIR) { $env:PULT_DESKTOP_DIR } else { [Environment]::GetFolderPath('Desktop') }) }
+$deskLink = Join-Path $DesktopDir 'pult.lnk'
+if (Test-Path -LiteralPath $deskLink -PathType Leaf) {
+    $deskTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($deskLink).TargetPath
+    if ($deskTarget -and (Test-Under $deskTarget $InstallDir)) {
+        Invoke-Removal $deskLink
+        $removed += 'the desktop shortcut'
     }
 }
 
