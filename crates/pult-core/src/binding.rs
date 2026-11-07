@@ -4,13 +4,15 @@
 //! An address names one parameter of the mixer as a path, the way the command line names
 //! inputs and buses: inputs by their place in the route from 1 (`input/2/gain`), buses by
 //! name (`bus/A1/mute`), crosspoints by both (`matrix/2/A1`), the bands of a bus's equalizer
-//! by their place from 1 (`bus/A1/eq/2/gain`). A [`Binding`] is an address
+//! by their place from 1 (`bus/A1/eq/2/gain`), the settings of its limiter by name
+//! (`bus/A1/limit/ceiling`). A [`Binding`] is an address
 //! resolved against a [`MixerView`]; it reads its value from the view and turns a new value
 //! into an [`Action`].
 
 use std::fmt;
 
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
+use crate::limiter::LimitChange;
 use crate::view::{Action, BusView, GAIN_RANGE_DB, InputView, MixerView};
 
 /// A parameter of an input.
@@ -43,6 +45,12 @@ pub enum BusParam {
     Eq,
     /// One setting of one band of its equalizer, the band from 0.
     EqBand(usize, BandParam),
+    /// The switch of its limiter.
+    Limit,
+    /// The ceiling of its limiter.
+    LimitCeiling,
+    /// The lookahead of its limiter.
+    LimitLookahead,
     /// Its peak, read only.
     Meter,
 }
@@ -106,6 +114,10 @@ pub enum Value {
     Width(f32),
     /// What a band does.
     Kind(BandKind),
+    /// The ceiling of a limiter in dB.
+    Ceiling(f32),
+    /// The lookahead of a limiter in milliseconds.
+    Lookahead(f32),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -174,6 +186,19 @@ impl Binding {
             };
             return Ok(Self::Bus(index, BusParam::EqBand(band, param)));
         }
+        // A setting of a limiter, unless no bus has that name.
+        if kind == "bus"
+            && let Some((before, setting)) = rest.rsplit_once('/')
+            && let Some(name) = before.strip_suffix("/limit")
+            && let Ok(index) = bus(name)
+        {
+            let param = match setting {
+                "ceiling" => BusParam::LimitCeiling,
+                "lookahead" => BusParam::LimitLookahead,
+                other => return Err(AddressError::NoParam(format!("limit/{other}"))),
+            };
+            return Ok(Self::Bus(index, param));
+        }
         let (first, last) = match kind {
             "bus" => rest.rsplit_once('/'),
             _ => rest.split_once('/'),
@@ -198,6 +223,7 @@ impl Binding {
                     "gain" => BusParam::Gain,
                     "mute" => BusParam::Mute,
                     "eq" => BusParam::Eq,
+                    "limit" => BusParam::Limit,
                     "meter" => BusParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -237,6 +263,9 @@ impl Binding {
                     BusParam::Gain => "gain",
                     BusParam::Mute => "mute",
                     BusParam::Eq | BusParam::EqBand(..) => "eq",
+                    BusParam::Limit => "limit",
+                    BusParam::LimitCeiling => "limit/ceiling",
+                    BusParam::LimitLookahead => "limit/lookahead",
                     BusParam::Meter => "meter",
                 };
                 format!("bus/{}/{param}", bus(index)?)
@@ -276,6 +305,9 @@ impl Binding {
                             BandParam::Q => Value::Width(band.q),
                         }
                     }
+                    BusParam::Limit => Value::Switch(bus.limit_on),
+                    BusParam::LimitCeiling => Value::Ceiling(bus.limit_db),
+                    BusParam::LimitLookahead => Value::Lookahead(bus.limit_lookahead_ms),
                     BusParam::Meter => Value::Peak(bus.peak_db),
                 }
             }
@@ -333,6 +365,18 @@ impl Binding {
                 };
                 Action::BusEqBand { bus, band, change }
             }
+            (Self::Bus(bus, BusParam::Limit), Value::Switch(on)) => Action::BusLimit {
+                bus,
+                change: LimitChange::Switch(on),
+            },
+            (Self::Bus(bus, BusParam::LimitCeiling), Value::Ceiling(db)) => Action::BusLimit {
+                bus,
+                change: LimitChange::Ceiling(db),
+            },
+            (Self::Bus(bus, BusParam::LimitLookahead), Value::Lookahead(ms)) => Action::BusLimit {
+                bus,
+                change: LimitChange::Lookahead(ms),
+            },
             (Self::Route { input, bus }, Value::Switch(on)) => Action::Route { input, bus, on },
             _ => return None,
         })
@@ -360,6 +404,11 @@ impl Binding {
                     band + 1,
                     param.word()
                 )
+            }
+            Self::Bus(index, BusParam::Limit) => format!("{} limiter", bus(index)),
+            Self::Bus(index, BusParam::LimitCeiling) => format!("{} limiter ceiling", bus(index)),
+            Self::Bus(index, BusParam::LimitLookahead) => {
+                format!("{} limiter lookahead", bus(index))
             }
             Self::Bus(index, _) => bus(index).to_owned(),
             Self::Route { input: i, bus: b } => format!("{} to {}", input(i), bus(b)),
@@ -430,6 +479,15 @@ mod tests {
                 "bus/A2/eq/4/q",
                 Binding::Bus(1, BusParam::EqBand(3, BandParam::Q)),
             ),
+            ("bus/A1/limit", Binding::Bus(0, BusParam::Limit)),
+            (
+                "bus/A2/limit/ceiling",
+                Binding::Bus(1, BusParam::LimitCeiling),
+            ),
+            (
+                "bus/A2/limit/lookahead",
+                Binding::Bus(1, BusParam::LimitLookahead),
+            ),
             ("matrix/2/A1", Binding::Route { input: 1, bus: 0 }),
         ]
     }
@@ -476,6 +534,14 @@ mod tests {
             error("bus/Z9/eq/2/gain"),
             AddressError::NoBus("Z9/eq/2".into())
         );
+        assert_eq!(
+            error("bus/A1/limit/slope"),
+            AddressError::NoParam("limit/slope".into())
+        );
+        assert_eq!(
+            error("bus/Z9/limit/ceiling"),
+            AddressError::NoParam("ceiling".into())
+        );
         assert_eq!(error("input/2"), AddressError::Malformed("input/2".into()));
         assert_eq!(error(""), AddressError::Malformed(String::new()));
     }
@@ -487,6 +553,11 @@ mod tests {
         for (address, binding) in [
             ("bus/PC/Mic/mute", Binding::Bus(1, BusParam::Mute)),
             ("bus/PC/Mic/eq", Binding::Bus(1, BusParam::Eq)),
+            ("bus/PC/Mic/limit", Binding::Bus(1, BusParam::Limit)),
+            (
+                "bus/PC/Mic/limit/ceiling",
+                Binding::Bus(1, BusParam::LimitCeiling),
+            ),
             (
                 "bus/PC/Mic/eq/2/gain",
                 Binding::Bus(1, BusParam::EqBand(1, BandParam::Gain)),
@@ -657,6 +728,34 @@ mod tests {
         // A value of another setting writes nothing.
         assert_eq!(write(band(BandParam::Gain), Value::Freq(440.0)), None);
         assert_eq!(write(band(BandParam::Kind), Value::Gain(0.0)), None);
+    }
+
+    #[test]
+    fn bindings_of_a_limiter_read_the_view_and_write_its_action() {
+        let mut view = crate::view::FakeDesk::new().view();
+        view.buses[0].limit_on = false;
+        view.buses[0].limit_db = -3.0;
+        view.buses[0].limit_lookahead_ms = 2.0;
+        let read = |param| Binding::Bus(0, param).read(&view);
+        assert_eq!(read(BusParam::Limit), Some(Value::Switch(false)));
+        assert_eq!(read(BusParam::LimitCeiling), Some(Value::Ceiling(-3.0)));
+        assert_eq!(read(BusParam::LimitLookahead), Some(Value::Lookahead(2.0)));
+        let write = |param, value| Binding::Bus(1, param).write(value);
+        let action = |change| Some(Action::BusLimit { bus: 1, change });
+        assert_eq!(
+            write(BusParam::Limit, Value::Switch(true)),
+            action(LimitChange::Switch(true))
+        );
+        assert_eq!(
+            write(BusParam::LimitCeiling, Value::Ceiling(-6.0)),
+            action(LimitChange::Ceiling(-6.0))
+        );
+        assert_eq!(
+            write(BusParam::LimitLookahead, Value::Lookahead(1.5)),
+            action(LimitChange::Lookahead(1.5))
+        );
+        // A value of another setting writes nothing.
+        assert_eq!(write(BusParam::LimitCeiling, Value::Lookahead(1.5)), None);
     }
 
     #[test]

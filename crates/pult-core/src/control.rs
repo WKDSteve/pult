@@ -12,6 +12,10 @@
 //! eq <bus> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
 //!                        kind low|bell|high (eq A1 2 gain 6)
+//! limit <bus> on|off     switch the limiter of a bus
+//! limit <bus> <dB>       its ceiling, -20 to 0 (limit A1 -3)
+//! limit <bus> look <ms>  its lookahead, 0 to 5: how gently it turns down, and how much later the
+//!                        sound leaves the bus
 //! route <input> <bus>    send an input to a bus too; unroute <input> <bus> takes it off
 //! scene <name>           change to a scene of the profile; scenes lists them
 //! learn <target>         the next movement on the MIDI controller binds it; unlearn takes it off
@@ -30,6 +34,7 @@
 use std::fmt;
 
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
+use crate::limiter::LimitChange;
 use crate::select::{SelectError, select};
 
 /// An input or a bus of the running route.
@@ -60,6 +65,8 @@ pub enum Command {
     Eq(usize, bool),
     /// Changes one setting of one band (second index, from 0) of the equalizer of a bus.
     EqBand(usize, usize, BandChange),
+    /// Changes one setting of the limiter of a bus.
+    Limit(usize, LimitChange),
     /// Routes an input (first index) to a bus (second index), or takes it off.
     Route(usize, usize, bool),
     /// Changes to the scene of this name.
@@ -92,6 +99,10 @@ eq <bus> on|off      switch the equalizer of a bus
 eq <bus> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
                      kind low|bell|high (eq A1 2 gain 6, eq A1 1 kind bell)
+limit <bus> on|off   switch the limiter of a bus
+limit <bus> <dB>     its ceiling, -20 to 0 (limit A1 -3)
+limit <bus> look <ms>
+                     its lookahead, 0 to 5: gentler, and the sound leaves that much later
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
 scene <name>         change to a scene of the profile; scenes lists them
 learn <address>      the next movement on the MIDI controller binds it (learn input/1/gain,
@@ -228,6 +239,7 @@ pub fn parse<S: AsRef<str>>(
             }
         }
         "eq" => equalizer(rest, names),
+        "limit" => limiter(rest, names),
         "route" | "unroute" => {
             let on = keyword.eq_ignore_ascii_case("route");
             let (input, bus) = route(rest, names)?;
@@ -286,6 +298,39 @@ fn equalizer<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Comman
         }
     };
     Ok(Command::EqBand(only_bus(bus)?, band, change))
+}
+
+/// `limit <bus> on|off`, `limit <bus> <dB>` or `limit <bus> look <ms>`; the bus may have several
+/// words.
+fn limiter<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let usage = "usage: limit <bus> on|off, limit <bus> <dB>, or limit <bus> look <ms>";
+    let only_bus = |words: &[&str]| match target(&words.join(" "), names)? {
+        Target::Bus(index) => Ok(index),
+        Target::Input(_) => error("limit works on buses only"),
+    };
+    let number = |value: &str, what: &str| match value.parse::<f32>() {
+        Ok(number) if number.is_finite() => Ok(number),
+        _ => error(format!("\"{value}\" is no {what}; {usage}")),
+    };
+    if let [bus @ .., look, value] = rest
+        && !bus.is_empty()
+        && (look.eq_ignore_ascii_case("look") || look.eq_ignore_ascii_case("lookahead"))
+    {
+        let ms = number(value, "lookahead in ms")?;
+        return Ok(Command::Limit(only_bus(bus)?, LimitChange::Lookahead(ms)));
+    }
+    let [bus @ .., last] = rest else {
+        return error(usage);
+    };
+    if bus.is_empty() {
+        return error(usage);
+    }
+    let change = if last.eq_ignore_ascii_case("on") || last.eq_ignore_ascii_case("off") {
+        LimitChange::Switch(last.eq_ignore_ascii_case("on"))
+    } else {
+        LimitChange::Ceiling(number(last, "ceiling in dB")?)
+    };
+    Ok(Command::Limit(only_bus(bus)?, change))
 }
 
 fn no_arguments(rest: &[&str], command: Command) -> Result<Command, ParseError> {
@@ -509,6 +554,26 @@ mod tests {
         assert_eq!(ok("gate Analogue 1 off"), Command::Gate(1, 0.0));
         assert_eq!(ok("comp 3 4"), Command::Comp(2, 4.0));
         assert_eq!(ok("compressor spotify OFF"), Command::Comp(2, 0.0));
+        assert_eq!(
+            ok("limit A1 off"),
+            Command::Limit(0, LimitChange::Switch(false))
+        );
+        assert_eq!(
+            ok("LIMIT b2 ON"),
+            Command::Limit(1, LimitChange::Switch(true))
+        );
+        assert_eq!(
+            ok("limit A1 -3.5"),
+            Command::Limit(0, LimitChange::Ceiling(-3.5))
+        );
+        assert_eq!(
+            ok("limit A1 look 2"),
+            Command::Limit(0, LimitChange::Lookahead(2.0))
+        );
+        assert_eq!(
+            ok("limit B2 lookahead 0"),
+            Command::Limit(1, LimitChange::Lookahead(0.0))
+        );
         assert_eq!(ok("eq A1 off"), Command::Eq(0, false));
         assert_eq!(ok("EQ b2 ON"), Command::Eq(1, true));
         assert_eq!(

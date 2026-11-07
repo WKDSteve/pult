@@ -17,6 +17,8 @@ pub use crate::binding::{
     AddressError, BandParam, Binding, BusParam, InputParam, Value, action_gain,
 };
 pub use crate::eq::{Band, BandChange, BandKind, EQ_BANDS};
+pub use crate::limiter::LimitChange;
+use crate::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS};
 
 /// A snapshot of the whole mixer, taken about 30 times a second.
 #[derive(Debug, Clone, PartialEq)]
@@ -99,6 +101,7 @@ impl InputView {
 
 /// One bus as its master strip shows it.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // Switches of a console, each on its own.
 pub struct BusView {
     /// The short name (`A1`), which commands and addresses use.
     pub name: String,
@@ -116,6 +119,14 @@ pub struct BusView {
     pub eq_on: bool,
     /// The bands of its equalizer.
     pub eq: [Band; EQ_BANDS],
+    /// Whether its limiter is switched on; off, it keeps its settings.
+    pub limit_on: bool,
+    /// The ceiling of its limiter in dB.
+    pub limit_db: f32,
+    /// The lookahead of its limiter in milliseconds.
+    pub limit_lookahead_ms: f32,
+    /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
+    pub limited_db: f32,
     /// Whether the device is there; false while it is gone.
     pub present: bool,
     /// Peak of the output since the previous view in dBFS; `None` for silence.
@@ -247,6 +258,13 @@ pub enum Action {
         /// The new setting.
         change: BandChange,
     },
+    /// Changes one setting of a bus's limiter.
+    BusLimit {
+        /// Bus index.
+        bus: usize,
+        /// The new setting.
+        change: LimitChange,
+    },
     /// Routes an input to a bus or takes it off (a matrix button).
     Route {
         /// Input index.
@@ -375,6 +393,10 @@ impl FakeDesk {
             muted: false,
             eq_on: true,
             eq: Band::all_flat(),
+            limit_on: true,
+            limit_db: DEFAULT_CEILING_DB,
+            limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
+            limited_db: 0.0,
             present: true,
             peak_db: None,
             clipped: 0,
@@ -483,12 +505,67 @@ impl FakeDesk {
         )])
     }
 
+    /// Changes one setting of a bus's limiter.
+    fn set_limit(&mut self, bus: usize, change: LimitChange) -> Reply {
+        let change = change.checked()?;
+        let bus = self.bus_mut(bus)?;
+        apply_limit(
+            &mut bus.limit_on,
+            &mut bus.limit_db,
+            &mut bus.limit_lookahead_ms,
+            change,
+        );
+        Ok(vec![format!(
+            "{} {}",
+            bus.name,
+            limit_line(bus.limit_on, bus.limit_db, bus.limit_lookahead_ms)
+        )])
+    }
+
     fn bus_mut(&mut self, bus: usize) -> Result<&mut BusView, String> {
         let count = self.view.buses.len();
         self.view
             .buses
             .get_mut(bus)
             .ok_or_else(|| format!("there is no bus {} (only {count})", bus + 1))
+    }
+}
+
+/// Makes `change` in the three settings of a limiter, wherever they are kept.
+pub fn apply_limit(
+    on: &mut bool,
+    ceiling_db: &mut f32,
+    lookahead_ms: &mut f32,
+    change: LimitChange,
+) {
+    match change {
+        LimitChange::Switch(new) => *on = new,
+        LimitChange::Ceiling(db) => *ceiling_db = db,
+        LimitChange::Lookahead(ms) => *lookahead_ms = ms,
+    }
+}
+
+/// A limiter as a line says it: `limit off`, or `limit -0.3 dB, 1 ms`.
+#[must_use]
+pub fn limit_line(on: bool, ceiling_db: f32, lookahead_ms: f32) -> String {
+    if on {
+        format!("limit {ceiling_db:.1} dB, {lookahead_ms} ms")
+    } else {
+        "limit off".to_owned()
+    }
+}
+
+/// What a line of `show` says of a limiter, to put behind the rest of a bus: nothing for one that
+/// stands as it starts.
+#[must_use]
+pub fn limit_summary(on: bool, ceiling_db: f32, lookahead_ms: f32) -> String {
+    #[allow(clippy::float_cmp)] // Exactly: as set, or not.
+    let as_it_starts =
+        on && ceiling_db == DEFAULT_CEILING_DB && lookahead_ms == DEFAULT_LOOKAHEAD_MS;
+    if as_it_starts {
+        String::new()
+    } else {
+        format!("  {}", limit_line(on, ceiling_db, lookahead_ms))
     }
 }
 
@@ -641,6 +718,7 @@ impl Desk for FakeDesk {
             }
             Action::BusEq { bus, on } => self.set_eq(bus, on),
             Action::BusEqBand { bus, band, change } => self.set_band(bus, band, change),
+            Action::BusLimit { bus, change } => self.set_limit(bus, change),
             Action::Route { input, bus, on } => {
                 let name = self.bus_mut(bus)?.name.clone();
                 let strip = self.input_mut(input)?;
@@ -850,6 +928,43 @@ mod tests {
         );
         let view = mixer.view();
         assert_eq!((view.inputs[0].gate, view.inputs[0].comp), (3.0, 0.0));
+    }
+
+    #[test]
+    fn the_fake_takes_a_limiter_and_refuses_what_is_out_of_range() {
+        let mut mixer = FakeDesk::new();
+        let limit = |change| Action::BusLimit { bus: 1, change };
+        assert_eq!(
+            mixer.act(limit(LimitChange::Ceiling(-6.0))),
+            Ok(vec!["A2 limit -6.0 dB, 1 ms".to_owned()])
+        );
+        assert_eq!(
+            mixer.act(limit(LimitChange::Lookahead(2.5))),
+            Ok(vec!["A2 limit -6.0 dB, 2.5 ms".to_owned()])
+        );
+        assert_eq!(
+            mixer.act(limit(LimitChange::Switch(false))),
+            Ok(vec!["A2 limit off".to_owned()])
+        );
+        let view = mixer.view();
+        assert!(!view.buses[1].limit_on);
+        assert!(view.buses[0].limit_on);
+        assert!(mixer.act(limit(LimitChange::Ceiling(3.0))).is_err());
+        assert!(mixer.act(limit(LimitChange::Lookahead(6.0))).is_err());
+        assert!(mixer.act(limit(LimitChange::Ceiling(f32::NAN))).is_err());
+    }
+
+    #[test]
+    fn a_line_names_a_limiter_only_when_it_differs_from_its_start() {
+        assert_eq!(
+            limit_summary(true, DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS),
+            ""
+        );
+        assert_eq!(
+            limit_summary(false, DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS),
+            "  limit off"
+        );
+        assert_eq!(limit_summary(true, -6.0, 0.0), "  limit -6.0 dB, 0 ms");
     }
 
     #[test]

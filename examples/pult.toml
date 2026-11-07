@@ -10,6 +10,12 @@ latency_ms = 40
 name = "A1"
 device = "Focusrite"
 
+# Its limiter is on from the start and keeps what leaves the bus below -0.3 dB, and the sound
+# leaves 1 ms later for it. Remove the # to change that.
+# limit_on = false
+# limit_db = -3              # -20 to 0
+# limit_lookahead_ms = 0     # 0 to 5: 0 adds no delay, but meets a peak with a step
+
 # Its equalizer has four bands, flat to start with: a low shelf at 100 Hz, bells at 500 and
 # 2500 Hz, a high shelf at 8 kHz. Name only what differs; remove the # to try.
 # [[bus.eq]]

@@ -194,6 +194,10 @@ impl Desk for EngineDesk {
                 muted: spec.muted,
                 eq_on: spec.eq_on,
                 eq: spec.eq,
+                limit_on: spec.limit_on,
+                limit_db: spec.limit_db,
+                limit_lookahead_ms: spec.limit_lookahead_ms,
+                limited_db: bus.handle.stats.limited_db.take(),
                 present: bus.present,
                 peak_db: peak_db(bus.handle.stats.peak.take()),
                 clipped: bus.handle.stats.clipped.get(),
@@ -250,6 +254,10 @@ impl Desk for EngineDesk {
             Action::BusEqBand { bus, band, change } => {
                 let index = self.bus_index(bus)?;
                 self.running.apply(&Command::EqBand(index, band, change))
+            }
+            Action::BusLimit { bus, change } => {
+                let index = self.bus_index(bus)?;
+                self.running.apply(&Command::Limit(index, change))
             }
             Action::BusMute { bus, muted } => {
                 let target = Target::Bus(self.bus_index(bus)?);

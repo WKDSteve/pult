@@ -276,6 +276,14 @@ fn shown(state: &State) -> Vec<String> {
         if !bus.eq.is_empty() {
             line.push_str(&pult_core::view::eq_summary(bus.eq_on, &bus.eq));
         }
+        // A run older than limiters has no ceiling: nothing to say of it either.
+        if bus.limit_db != 0.0 || bus.limit_on {
+            line.push_str(&pult_core::view::limit_summary(
+                bus.limit_on,
+                bus.limit_db,
+                bus.limit_lookahead_ms,
+            ));
+        }
         if bus.muted {
             line.push_str("  muted");
         }

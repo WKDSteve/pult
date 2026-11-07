@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
 use crate::control::{Command, Target};
 use crate::eq::{Band, BandChange, BandKind};
+use crate::limiter::LimitChange;
 use crate::view::{Action, BusView, EventKind, EventView, GAIN_RANGE_DB, InputView, MeterPoint};
 use crate::view::{MixerView, SourceKind, check_amount};
 
@@ -108,6 +109,7 @@ pub struct InputState {
 
 /// One bus.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Switches of a console, each on its own.
 pub struct BusState {
     /// The short name, as in the addresses (`bus/A1/mute`).
     pub name: String,
@@ -128,6 +130,18 @@ pub struct BusState {
     /// a run older than equalizers.
     #[serde(default)]
     pub eq: Vec<Band>,
+    /// Whether its limiter is switched on; off from a run older than limiters.
+    #[serde(default)]
+    pub limit_on: bool,
+    /// The ceiling of its limiter in dB.
+    #[serde(default)]
+    pub limit_db: f32,
+    /// The lookahead of its limiter in milliseconds: this much later the sound leaves the bus.
+    #[serde(default)]
+    pub limit_lookahead_ms: f32,
+    /// How far its limiter turned down at most since the previous state, in dB; 0 when it did not.
+    #[serde(default)]
+    pub limited_db: f32,
     /// Whether the device is there.
     pub present: bool,
     /// The highest peak since the previous state in dBFS; `None` for silence.
@@ -252,6 +266,10 @@ impl BusState {
             muted: bus.muted,
             eq_on: bus.eq_on,
             eq: bus.eq.to_vec(),
+            limit_on: bus.limit_on,
+            limit_db: bus.limit_db,
+            limit_lookahead_ms: bus.limit_lookahead_ms,
+            limited_db: bus.limited_db,
             present: bus.present,
             peak_db: bus.peak_db,
             clipped: bus.clipped,
@@ -363,6 +381,19 @@ impl Op {
                 let address = format!("bus/{}/eq/{}/{setting}", bus(*to)?, band + 1);
                 set(address, value, 0)
             }
+            Command::Limit(to, change) => {
+                let bus = bus(*to)?;
+                let (address, value) = match change {
+                    LimitChange::Switch(on) => (format!("bus/{bus}/limit"), OpValue::Switch(*on)),
+                    LimitChange::Ceiling(db) => {
+                        (format!("bus/{bus}/limit/ceiling"), OpValue::Number(*db))
+                    }
+                    LimitChange::Lookahead(ms) => {
+                        (format!("bus/{bus}/limit/lookahead"), OpValue::Number(*ms))
+                    }
+                };
+                set(address, value, 0)
+            }
             Command::Route(input, to, on) => set(
                 format!("matrix/{}/{}", input + 1, bus(*to)?),
                 OpValue::Switch(*on),
@@ -431,6 +462,7 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         }
     };
     let band = |change: BandChange| change.checked().map_err(|why| format!("{address}: {why}"));
+    let limit = |change: LimitChange| change.checked().map_err(|why| format!("{address}: {why}"));
     match (binding, value) {
         (Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter), _) => {
             Err(format!("{address} can only be read"))
@@ -465,6 +497,12 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         (Binding::Bus(_, EqBand(_, BandParam::Q)), OpValue::Number(q)) => {
             band(BandChange::Q(wants_number(*q)?)).map(|_| Value::Width(*q))
         }
+        (Binding::Bus(_, BusParam::LimitCeiling), OpValue::Number(db)) => {
+            limit(LimitChange::Ceiling(wants_number(*db)?)).map(|_| Value::Ceiling(*db))
+        }
+        (Binding::Bus(_, BusParam::LimitLookahead), OpValue::Number(ms)) => {
+            limit(LimitChange::Lookahead(wants_number(*ms)?)).map(|_| Value::Lookahead(*ms))
+        }
         (Binding::Bus(_, EqBand(_, BandParam::Kind)), OpValue::Word(word)) => {
             BandKind::from_word(word)
                 .map(Value::Kind)
@@ -475,13 +513,13 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         }
         (
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit)
             | Binding::Route { .. },
             OpValue::Switch(on),
         ) => Ok(Value::Switch(*on)),
         (
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit)
             | Binding::Route { .. },
             _,
         ) => Err(format!("{address} takes true or false")),
@@ -588,6 +626,19 @@ mod tests {
                 amount: 0.0
             })
         );
+        let limit = |change| Ok(Action::BusLimit { bus: 1, change });
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A2/limit","value":false}"#),
+            limit(LimitChange::Switch(false))
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A2/limit/ceiling","value":-6}"#),
+            limit(LimitChange::Ceiling(-6.0))
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A2/limit/lookahead","value":2.5}"#),
+            limit(LimitChange::Lookahead(2.5))
+        );
         assert_eq!(
             action(r#"{"op":"set","address":"bus/A2/eq","value":false}"#),
             Ok(Action::BusEq { bus: 1, on: false })
@@ -631,6 +682,20 @@ mod tests {
             action(r#"{"op":"save"}"#),
             Ok(Action::SaveProfile { path: None })
         );
+    }
+
+    #[test]
+    fn a_command_of_a_limiter_becomes_the_op_for_its_address() {
+        let view = view();
+        let state = State::new(&view, Vec::new());
+        for change in [
+            LimitChange::Switch(false),
+            LimitChange::Ceiling(-6.0),
+            LimitChange::Lookahead(2.0),
+        ] {
+            let op = Op::of_command(&Command::Limit(1, change), &state).expect("an op");
+            assert_eq!(op.action(&view), Ok(Action::BusLimit { bus: 1, change }));
+        }
     }
 
     #[test]
@@ -817,10 +882,14 @@ mod tests {
         let bus = older["buses"][0].as_object_mut().expect("a bus");
         bus.remove("eq_on");
         bus.remove("eq");
+        for key in ["limit_on", "limit_db", "limit_lookahead_ms", "limited_db"] {
+            bus.remove(key);
+        }
         let read: State = serde_json::from_value(older).expect("from JSON");
         assert_eq!(read.scenes, Vec::<String>::new());
         assert_eq!((read.inputs[0].gate, read.inputs[0].comp), (0.0, 0.0));
         assert!(!read.buses[0].eq_on && read.buses[0].eq.is_empty());
+        assert!(!read.buses[0].limit_on);
         assert!(state.buses[0].eq_on);
         assert_eq!(state.buses[0].eq.len(), crate::eq::EQ_BANDS);
     }
@@ -847,6 +916,25 @@ mod tests {
         assert!(refused(r#"{"op":"set","address":"input/1/gain","value":60}"#).contains("outside"));
         assert!(
             refused(r#"{"op":"set","address":"input/1/gain","value":-200}"#).contains("outside")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/limit/ceiling","value":3}"#)
+                .contains("the ceiling of a limiter must be -20 to 0 dB")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/limit/lookahead","value":6}"#)
+                .contains("the lookahead of a limiter must be 0 to 5 ms")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/limit","value":1}"#).contains("true or false")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/limit/ceiling","value":true}"#)
+                .contains("takes a number")
+        );
+        assert!(
+            refused(r#"{"op":"set","address":"bus/A1/limit/ceiling","value":-3,"ramp_ms":100}"#)
+                .contains("only a gain or a pan")
         );
         assert!(
             refused(r#"{"op":"set","address":"bus/A1/eq/2/gain","value":30}"#)

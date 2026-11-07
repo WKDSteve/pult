@@ -54,7 +54,7 @@ pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.).
 | `lost` | an der Aufnahme verlorene Frames: der Puffer war voll, weil der Ausgang länger als eine Sekunde nichts abgenommen hat |
 | `drift` | Korrektur des Resamplers gegen die Takt-Drift zwischen Eingang und Bus, in ppm (Millionstel): `+12` heißt, der Eingang liefert 12 Frames pro Million mehr, als der Ausgang abnimmt. Echte Takte liegen meist innerhalb weniger zehn ppm; nach dem Start pendelt der Wert ein bis zwei Minuten lang ein. Bei mehreren Bussen steht der größte Wert da |
 | `resync` | harte Sprünge zurück auf die Ziel-Pufferung, wenn der Puffer weit überlief; sollte 0 bleiben. Der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
-| `A1 … dB` / `clipped` | je Bus: Spitzenpegel der Summe nach dem Bus-Gain, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit `--to` heißt der eine Bus `A1` |
+| `A1 … dB` / `clipped` | je Bus: Spitzenpegel dessen, was den Bus verlässt, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit dem Limiter (siehe 5.) bleibt `clipped` normalerweise bei 0. Mit `--to` heißt der eine Bus `A1` |
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
 | `dropouts/h` | Aussetzer pro Stunde Laufzeit, hochgerechnet. Gezählt wird, was man hört: `out`, `resync` und `glitches`, die innerhalb einer Sekunde zusammenkommen (etwa wenn ein stockendes Ausgabegerät beide Eingänge zugleich neu ausrichtet), sind ein Aussetzer; hält eine Störung an, zählt sie einmal pro Sekunde. In den ersten Minuten springt der Wert, weil schon ein einzelner Aussetzer stark zählt |
 | `missing` | statt des Pegels: das Gerät ist gerade weg (siehe unten, Geräte ab- und anstecken) |
@@ -143,6 +143,9 @@ label = "Boxen"            # optional: so nennt ihn das Fenster
 gain_db = 0                # optional
 mute = false               # optional
 eq_on = true               # optional: false schaltet den EQ aus, die Bänder bleiben eingestellt
+limit_on = true            # optional: false schaltet den Limiter aus
+limit_db = -0.3            # optional: seine Decke, -20 bis 0
+limit_lookahead_ms = 1     # optional: seine Vorschau, 0 bis 5; um so viel später verlässt der Ton den Bus
 
 [[bus.eq]]                 # optional: ein Band des EQ dieses Busses
 band = 2                   # 1 bis 4
@@ -192,9 +195,16 @@ pult run --profile meinprofil.toml --log abend.csv
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
   steht nur, was abweicht. `eq_on = false` schaltet alle Bänder aus, ohne ihre Einstellung zu verlieren. Hebt der EQ
-  über Vollaussteuerung, begrenzt der Bus und zählt es als Clipping wie sonst auch. Im Fenster liegen die Bänder auf dem
+  über Vollaussteuerung, fängt das der Limiter ab. Im Fenster liegen die Bänder auf dem
   Tab **EQ**; der Schalter **EQ** steht dort und im Kanalzug des Busses. Die Fernbedienung im Browser hat den Schalter
   und die Regler von Gate und Kompressor, die Bänder nicht.
+- **Limiter:** Jeder Bus hat hinter seinem Fader einen Limiter, von Anfang an eingeschaltet: Was den Bus verlässt, bleibt
+  unter der Decke `limit_db` (Standard -0,3 dB, möglich -20 bis 0), für jedes Signal. Alle Kanäle werden gleich geregelt,
+  das Stereobild bleibt. `limit_lookahead_ms` (Standard 1 ms, möglich 0 bis 5) ist die Vorschau: Er sieht eine Spitze
+  so viel früher und dreht sanfter zurück, und um genau diese Zeit verlässt der Ton den Bus später. Mit 0 kommt keine
+  Latenz dazu, eine Spitze trifft dann aber auf einen harten Sprung im Pegel. Unter der Decke ändert er nichts am Ton.
+  `limit_on = false` schaltet ihn aus; dann begrenzt nur noch der Bus selbst hart auf Vollaussteuerung und zählt das als
+  `clipped`. Szenen ändern den Limiter nicht.
 - **Regler im Fenster:** Ziehen dreht (mit Umschalt feiner), das Mausrad geht in Schritten, ein Doppelklick führt zurück
   zur Grundstellung. Frequenz und Breite eines Bandes gehen oktavweise.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
@@ -294,7 +304,9 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `eq <Bus> <Band> gain <dB>`, `… freq <Hz>`, `… q <Breite>`, `… kind low\|bell\|high` | eine Einstellung eines der vier Bänder (siehe 5.), zum Beispiel `eq A1 2 gain 6` |
 | `route <Eingang> <Bus>`, `unroute <Eingang> <Bus>` | einen Eingang zusätzlich auf einen Bus legen, von ihm nehmen; der letzte Bus eines Eingangs bleibt (dafür `mute`) |
 | `scene <Name>`, `scenes` | zu einer Szene des Profils wechseln (siehe 5.), die Szenen auflisten |
-| `show` | alle Eingänge und Busse mit Gain, Pan, Gate, Kompressor, EQ und Mute |
+| `limit <Bus> on`, `limit <Bus> off` | den Limiter eines Busses ein- oder ausschalten |
+| `limit <Bus> <dB>`, `limit <Bus> look <ms>` | seine Decke (`limit A1 -3`) und seine Vorschau (`limit A1 look 2`, siehe 5.) |
+| `show` | alle Eingänge und Busse mit Gain, Pan, Gate, Kompressor, EQ, Limiter und Mute; der Limiter nur, wenn er vom Standard abweicht |
 | `save <Datei>` | den aktuellen Stand als Profil schreiben, später mit `--profile` laden. Ein Profil mit denselben Bussen und Eingängen behält seine Kommentare und Reihenfolge, nur geänderte Werte werden ersetzt; jede andere Datei wird überschrieben |
 | `help` | die Befehle |
 | `quit`, Enter auf leerer Zeile, Strg+C | beenden |
@@ -328,7 +340,7 @@ pult show
 
 | Befehl | Wirkung |
 |---|---|
-| `pult gain`, `mute`, `unmute`, `solo`, `unsolo`, `pan`, `gate`, `comp`, `eq`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
+| `pult gain`, `mute`, `unmute`, `solo`, `unsolo`, `pan`, `gate`, `comp`, `eq`, `limit`, `route`, `unroute`, `scene` | wie in der Eingabezeile (siehe 7.) |
 | `pult scenes` | die Szenen, je eine Zeile |
 | `pult show` | Eingänge, Busse und Szenen; `pult show --json` den ganzen Zustand für Programme |
 | `pult save` | in das Profil speichern, aus dem die Route kam; eine andere Datei geht von außen nicht |

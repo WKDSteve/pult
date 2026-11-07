@@ -158,6 +158,22 @@ fn commands_reach_the_running_pult() {
         "{}",
         stderr(&output)
     );
+    let output = pult(&folder.0, &["limit", "A2", "-6"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "A2 limit -6.0 dB, 1 ms");
+    let output = pult(&folder.0, &["limit", "A2", "look", "2.5"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "A2 limit -6.0 dB, 2.5 ms");
+    let output = pult(&folder.0, &["limit", "A2", "off"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "A2 limit off");
+    let output = pult(&folder.0, &["limit", "A2", "3"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("the ceiling of a limiter must be -20 to 0 dB"),
+        "{}",
+        stderr(&output)
+    );
     let output = pult(&folder.0, &["eq", "A2", "2", "gain", "6"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output).trim(), "A2 eq 2: bell 500 Hz +6.0 dB q 0.7");

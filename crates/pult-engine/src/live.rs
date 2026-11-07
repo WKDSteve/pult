@@ -6,13 +6,31 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use pult_core::control::{Command, HELP, Target, search_name};
-use pult_core::view::{band_line, check_amount, eq_summary};
+use pult_core::limiter::LimitChange;
+use pult_core::view::{
+    apply_limit, band_line, check_amount, eq_summary, limit_line, limit_summary,
+};
 use pult_core::{EQ_BANDS, EqControls, InputControls, MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
 use crate::{BusSpec, InputSpec, RouteSpec, Running, SceneBus, SceneInput, SceneSpec};
 
 impl Running {
+    /// Makes one change to the limiter of `bus`, and returns what to show for it.
+    fn change_limit(&mut self, bus: usize, change: LimitChange) -> Result<Vec<String>, String> {
+        let change = change.checked()?;
+        let spec = &mut self.spec.buses[bus];
+        apply_limit(
+            &mut spec.limit_on,
+            &mut spec.limit_db,
+            &mut spec.limit_lookahead_ms,
+            change,
+        );
+        let line = limit_line(spec.limit_on, spec.limit_db, spec.limit_lookahead_ms);
+        self.buses[bus].handle.controls.limiter.change(change);
+        Ok(vec![format!("{}: {line}", self.buses[bus].name)])
+    }
+
     /// The input names a command may name, labels included, in route order.
     #[must_use]
     pub fn input_names(&self) -> Vec<String> {
@@ -113,6 +131,7 @@ impl Running {
                 let state = if *on { "on" } else { "off" };
                 Ok(vec![format!("{}: eq {state}", self.buses[*bus].name)])
             }
+            Command::Limit(bus, change) => self.change_limit(*bus, *change),
             Command::EqBand(bus, band, change) => {
                 let Some(set) = self.spec.buses[*bus].eq.get_mut(*band) else {
                     return Err(format!(
@@ -349,6 +368,11 @@ impl Running {
         for (bus, spec) in self.buses.iter().zip(&self.spec.buses) {
             let mut line = format!("{} {}  gain {:.1} dB", bus.name, bus.device, spec.gain_db);
             line.push_str(&eq_summary(spec.eq_on, &spec.eq));
+            line.push_str(&limit_summary(
+                spec.limit_on,
+                spec.limit_db,
+                spec.limit_lookahead_ms,
+            ));
             if spec.muted {
                 line.push_str("  muted");
             }

@@ -38,7 +38,7 @@ pub use dynamics::{
 };
 pub use eq::{Band, BandKind, EQ_BANDS, EqControls, Equalizer};
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
-pub use limiter::{Limiter, LimiterControls};
+pub use limiter::{LimitChange, Limiter, LimiterControls};
 pub use mixer::{
     BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,
     Mixer, MixerInput, connect, connect_with,

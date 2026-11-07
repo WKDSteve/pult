@@ -39,6 +39,7 @@ USAGE:
     pult pan <INPUT> <-1..1> [over <MS>]
     pult gate <INPUT> <0..10|off>   pult comp <INPUT> <0..10|off>
     pult eq <BUS> on|off    pult eq <BUS> <BAND> gain|freq|q|kind <VALUE>
+    pult limit <BUS> on|off    pult limit <BUS> <DB>    pult limit <BUS> look <MS>
     pult route <INPUT> <BUS>      pult unroute <INPUT> <BUS>
     pult scene <NAME>       pult scenes
     pult show [--json]
@@ -242,7 +243,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
             Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
         },
         "gain" | "mute" | "unmute" | "solo" | "unsolo" | "pan" | "gate" | "comp" | "compressor"
-        | "eq" | "route" | "unroute" | "scene" => {
+        | "eq" | "limit" | "route" | "unroute" | "scene" => {
             // Quoted or not: the input line reads a name of several words either way.
             let rest: Vec<String> = args.collect();
             Ok(Command::Remote(Remote::Line(format!(

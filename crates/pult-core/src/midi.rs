@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
 use crate::eq::{EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
+use crate::limiter::{LIMIT_CEILING_DB, LIMIT_LOOKAHEAD_MS};
 use crate::protocol::{Op, OpValue};
 use crate::scale::{Span, fader_db, fader_pos};
 use crate::view::{AMOUNT_RANGE, GAIN_RANGE_DB, MixerView};
@@ -265,11 +266,17 @@ impl Param {
             Binding::Bus(_, BusParam::EqBand(_, BandParam::Q)) => {
                 Self::Knob(binding, Span::octaves(EQ_Q))
             }
+            Binding::Bus(_, BusParam::LimitCeiling) => {
+                Self::Knob(binding, Span::even(LIMIT_CEILING_DB))
+            }
+            Binding::Bus(_, BusParam::LimitLookahead) => {
+                Self::Knob(binding, Span::even(LIMIT_LOOKAHEAD_MS))
+            }
             Binding::Bus(_, BusParam::EqBand(_, BandParam::Kind)) => {
                 return Err(format!("{target} is a word, which no control can say"));
             }
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit)
             | Binding::Route { .. } => Self::Switch(binding),
             Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter) => {
                 return Err(format!("{target} can only be read"));
@@ -586,7 +593,9 @@ impl Map {
                         Value::Amount(number)
                         | Value::Boost(number)
                         | Value::Freq(number)
-                        | Value::Width(number),
+                        | Value::Width(number)
+                        | Value::Ceiling(number)
+                        | Value::Lookahead(number),
                     ) => span.pos(number),
                     _ => return Step::default(),
                 };
@@ -906,6 +915,18 @@ mod tests {
                 "{target}"
             );
         }
+        assert!(matches!(
+            Param::of("bus/A1/limit", &view),
+            Ok(Param::Switch(Binding::Bus(0, BusParam::Limit)))
+        ));
+        assert!(matches!(
+            Param::of("bus/A1/limit/ceiling", &view),
+            Ok(Param::Knob(..))
+        ));
+        assert!(matches!(
+            Param::of("bus/A1/limit/lookahead", &view),
+            Ok(Param::Knob(..))
+        ));
         assert!(matches!(
             Param::of("bus/A1/eq", &view),
             Ok(Param::Switch(_))

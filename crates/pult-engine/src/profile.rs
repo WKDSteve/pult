@@ -10,6 +10,9 @@
 //! gain_db = 0                  # optional
 //! mute = false                 # optional
 //! eq_on = true                 # optional: false switches the equalizer off, keeping its bands
+//! limit_on = true              # optional: false switches the limiter off
+//! limit_db = -0.3              # optional: the ceiling of the limiter, -20 to 0
+//! limit_lookahead_ms = 1       # optional: how much later the sound leaves, 0 to 5
 //!
 //! [[bus.eq]]                   # optional: one band of this bus's equalizer
 //! band = 2                     # 1 to 4: low shelf, two bells, high shelf to start with
@@ -60,6 +63,7 @@ use serde::Deserialize;
 use std::fmt::Write as _;
 
 use pult_core::eq::BandChange;
+use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
 use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
@@ -150,6 +154,9 @@ struct BusEntry {
     #[serde(default)]
     mute: bool,
     eq_on: Option<bool>,
+    limit_on: Option<bool>,
+    limit_db: Option<f32>,
+    limit_lookahead_ms: Option<f32>,
     #[serde(default)]
     eq: Vec<EqEntry>,
 }
@@ -424,6 +431,16 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
         check_gain(&format!("bus {}", entry.name), entry.gain_db)?;
         check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
         let eq = bands(&format!("bus {}", entry.name), entry.eq)?;
+        let limit_db = entry.limit_db.unwrap_or(DEFAULT_CEILING_DB);
+        let limit_lookahead_ms = entry.limit_lookahead_ms.unwrap_or(DEFAULT_LOOKAHEAD_MS);
+        for change in [
+            LimitChange::Ceiling(limit_db),
+            LimitChange::Lookahead(limit_lookahead_ms),
+        ] {
+            if let Err(why) = change.checked() {
+                return fail(format!("bus {}: {why}", entry.name));
+            }
+        }
         buses.push(BusSpec {
             name: entry.name,
             device: entry.device,
@@ -432,7 +449,9 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             muted: entry.mute,
             eq_on: entry.eq_on.unwrap_or(true),
             eq,
-            ..BusSpec::new("", "")
+            limit_on: entry.limit_on.unwrap_or(true),
+            limit_db,
+            limit_lookahead_ms,
         });
     }
     Ok(buses)
@@ -537,6 +556,21 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
     Ok(spec)
 }
 
+/// The limiter of `bus` in a profile: only what differs from how it starts.
+fn render_limit(text: &mut String, bus: &BusSpec) {
+    if !bus.limit_on {
+        text.push_str("limit_on = false\n");
+    }
+    #[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+    if bus.limit_db != DEFAULT_CEILING_DB {
+        let _ = writeln!(text, "limit_db = {}", bus.limit_db);
+    }
+    #[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+    if bus.limit_lookahead_ms != DEFAULT_LOOKAHEAD_MS {
+        let _ = writeln!(text, "limit_lookahead_ms = {}", bus.limit_lookahead_ms);
+    }
+}
+
 /// Writes `spec` as a profile that [`parse`] reads back to the same spec.
 #[must_use]
 pub fn render(spec: &RouteSpec) -> String {
@@ -556,6 +590,7 @@ pub fn render(spec: &RouteSpec) -> String {
         if !bus.eq_on {
             text.push_str("eq_on = false\n");
         }
+        render_limit(&mut text, bus);
         // Only the bands that are not as they start: most buses have none.
         for (index, band) in bus.eq.iter().enumerate() {
             if *band != Band::at(index) {
@@ -700,6 +735,21 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         if table.get("eq_on").and_then(Item::as_bool).unwrap_or(true) != bus.eq_on {
             set(table, "eq_on", bus.eq_on.into());
         }
+        if table
+            .get("limit_on")
+            .and_then(Item::as_bool)
+            .unwrap_or(true)
+            != bus.limit_on
+        {
+            set(table, "limit_on", bus.limit_on.into());
+        }
+        set_number_from(table, "limit_db", bus.limit_db, DEFAULT_CEILING_DB);
+        set_number_from(
+            table,
+            "limit_lookahead_ms",
+            bus.limit_lookahead_ms,
+            DEFAULT_LOOKAHEAD_MS,
+        );
         set_bands(table, &bus.eq)?;
     }
 
@@ -1063,6 +1113,27 @@ mod tests {
                  [[input]]\ndevice = \"m\"\nbuses = [\"A1\"]\n"
             )
         };
+        let default = parse(&bus("")).expect("no limiter named");
+        assert!(default.buses[0].limit_on);
+        assert_eq!(default.buses[0].limit_db, DEFAULT_CEILING_DB);
+        assert_eq!(default.buses[0].limit_lookahead_ms, DEFAULT_LOOKAHEAD_MS);
+        let named = parse(&bus(
+            "limit_on = false\nlimit_db = -6\nlimit_lookahead_ms = 2.5\n",
+        ))
+        .expect("a limiter");
+        assert!(!named.buses[0].limit_on);
+        assert_eq!(named.buses[0].limit_db, -6.0);
+        assert_eq!(named.buses[0].limit_lookahead_ms, 2.5);
+        // What it wrote, it reads back; what stands as it starts, it does not write.
+        assert_eq!(parse(&render(&named)).expect("itself"), named);
+        assert!(!render(&default).contains("limit"));
+        for wrong in [
+            "limit_db = 3\n",
+            "limit_db = -21\n",
+            "limit_lookahead_ms = 6\n",
+        ] {
+            assert!(parse(&bus(wrong)).is_err(), "{wrong}");
+        }
         let spec = parse(&bus("eq_on = false\n[[bus.eq]]\nband = 2\ngain_db = 3\n\
              [[bus.eq]]\nband = 4\nkind = \"bell\"\nfreq_hz = 9000\nq = 2"))
         .expect("an equalizer");

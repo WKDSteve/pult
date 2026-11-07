@@ -53,6 +53,39 @@ const FADE_MS: f64 = 5.0;
 /// is exactly 1 again.
 const BACK: f64 = 1.0 - 1e-6;
 
+/// One setting of a limiter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LimitChange {
+    /// Its switch.
+    Switch(bool),
+    /// Its ceiling in dB.
+    Ceiling(f32),
+    /// Its lookahead in milliseconds.
+    Lookahead(f32),
+}
+
+impl LimitChange {
+    /// The change when its value is inside its range: nothing is clamped, as with a gain.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the range otherwise.
+    pub fn checked(self) -> Result<Self, String> {
+        let (what, value, (low, high), unit) = match self {
+            Self::Switch(_) => return Ok(self),
+            Self::Ceiling(db) => ("ceiling", db, LIMIT_CEILING_DB, "dB"),
+            Self::Lookahead(ms) => ("lookahead", ms, LIMIT_LOOKAHEAD_MS, "ms"),
+        };
+        if (low..=high).contains(&value) {
+            Ok(self)
+        } else {
+            Err(format!(
+                "the {what} of a limiter must be {low} to {high} {unit}, not {value}"
+            ))
+        }
+    }
+}
+
 /// The limiter of one bus as the control thread sets it. Off at first; a route switches it on.
 #[derive(Debug)]
 pub struct LimiterControls {
@@ -72,6 +105,15 @@ impl Default for LimiterControls {
 }
 
 impl LimiterControls {
+    /// Makes one change.
+    pub fn change(&self, change: LimitChange) {
+        match change {
+            LimitChange::Switch(on) => self.switch(on),
+            LimitChange::Ceiling(db) => self.set_ceiling(db),
+            LimitChange::Lookahead(ms) => self.set_lookahead(ms),
+        }
+    }
+
     /// Sets everything at once: what a route starts with.
     pub fn set_all(&self, on: bool, ceiling_db: f32, lookahead_ms: f32) {
         self.set_ceiling(ceiling_db);

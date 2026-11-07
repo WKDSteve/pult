@@ -38,7 +38,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SupportedStreamConfig};
 use pult_core::EQ_BANDS;
 use pult_core::eq::BandChange;
-use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS};
+use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
 use pult_core::{
     Band, BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
     MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
@@ -468,6 +468,14 @@ impl RouteSpec {
             }
         }
         for bus in &self.buses {
+            for change in [
+                LimitChange::Ceiling(bus.limit_db),
+                LimitChange::Lookahead(bus.limit_lookahead_ms),
+            ] {
+                if let Err(why) = change.checked() {
+                    return invalid(format!("bus {}: {why}", bus.name));
+                }
+            }
             for (index, band) in bus.eq.iter().enumerate() {
                 if let Err(why) = band.checked() {
                     return invalid(format!("bus {}, band {}: {why}", bus.name, index + 1));
