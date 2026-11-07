@@ -224,7 +224,7 @@ $link.WorkingDirectory = $InstallDir
 $link.IconLocation = "$app,0"
 $link.Description = 'pult: the personal virtual audio mixer'
 $link.Save()
-if ($DesktopDir -eq '') { $DesktopDir = $(if ($env:PULT_DESKTOP_DIR) { $env:PULT_DESKTOP_DIR } else { [Environment]::GetFolderPath('Desktop') }) }
+$DesktopDir = Get-Place $(if ($DesktopDir) { $DesktopDir } elseif ($env:PULT_DESKTOP_DIR) { $env:PULT_DESKTOP_DIR } else { [Environment]::GetFolderPath('Desktop') })
 if ($DesktopShortcut) {
     Write-Output "==> Desktop shortcut in $DesktopDir"
     New-Item -ItemType Directory -Force -Path $DesktopDir | Out-Null
