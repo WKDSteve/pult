@@ -137,10 +137,19 @@ button {
   cursor: pointer;
 }
 
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
 button[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-text);
+}
+
+button[aria-pressed="true"]:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
 }
 
 :focus-visible {

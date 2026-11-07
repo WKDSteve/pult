@@ -275,6 +275,23 @@ try {
     await axe(colorScheme);
     await page.locator("#inputs .strip button").first().hover();
     await axe(`${colorScheme}, hover`);
+    // Axe is content with a button that does not react, so the colours are compared here.
+    await page.mouse.move(0, 0);
+    const plain = page.getByRole("button", { name: "Laut", exact: true });
+    const filled = page.getByRole("button", { name: "EQ of A1" });
+    const look = (button, property) =>
+      button.evaluate((node, name) => getComputedStyle(node)[name], property);
+    const plainBorder = await look(plain, "borderTopColor");
+    const filledFill = await look(filled, "backgroundColor");
+    await plain.hover();
+    check(`${colorScheme}: a button shows the pointer`,
+      (await look(plain, "borderTopColor")) !== plainBorder);
+    await filled.hover();
+    check(`${colorScheme}: a pressed button shows the pointer`,
+      (await look(filled, "backgroundColor")) !== filledFill);
+    await axe(`${colorScheme}, hover on a pressed button`);
+    await filled.focus();
+    await axe(`${colorScheme}, hover and focus on a pressed button`);
     await page.mouse.move(0, 0);
     await page.locator("#inputs .strip button").first().focus();
     await page.keyboard.press("Shift+Tab");
