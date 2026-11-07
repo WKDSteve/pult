@@ -186,17 +186,18 @@ impl Binding {
             };
             return Ok(Self::Bus(index, BusParam::EqBand(band, param)));
         }
-        // A setting of a limiter, unless no bus has that name.
+        // A setting of a limiter, unless no bus has that name. Anything else is read as a
+        // parameter of a bus whose name ends in `limit`.
         if kind == "bus"
             && let Some((before, setting)) = rest.rsplit_once('/')
             && let Some(name) = before.strip_suffix("/limit")
             && let Ok(index) = bus(name)
+            && let Some(param) = match setting {
+                "ceiling" => Some(BusParam::LimitCeiling),
+                "lookahead" => Some(BusParam::LimitLookahead),
+                _ => None,
+            }
         {
-            let param = match setting {
-                "ceiling" => BusParam::LimitCeiling,
-                "lookahead" => BusParam::LimitLookahead,
-                other => return Err(AddressError::NoParam(format!("limit/{other}"))),
-            };
             return Ok(Self::Bus(index, param));
         }
         let (first, last) = match kind {
@@ -536,7 +537,7 @@ mod tests {
         );
         assert_eq!(
             error("bus/A1/limit/slope"),
-            AddressError::NoParam("limit/slope".into())
+            AddressError::NoParam("slope".into())
         );
         assert_eq!(
             error("bus/Z9/limit/ceiling"),
@@ -544,6 +545,22 @@ mod tests {
         );
         assert_eq!(error("input/2"), AddressError::Malformed("input/2".into()));
         assert_eq!(error(""), AddressError::Malformed(String::new()));
+    }
+
+    #[test]
+    fn only_its_settings_belong_to_a_limiter_when_a_bus_ends_in_limit() {
+        let mut view = view();
+        view.buses[0].name = "PC".to_owned();
+        view.buses[1].name = "PC/limit".to_owned();
+        let parse = |address| Binding::parse(address, &view);
+        assert_eq!(
+            parse("bus/PC/limit/mute"),
+            Ok(Binding::Bus(1, BusParam::Mute))
+        );
+        assert_eq!(
+            parse("bus/PC/limit/ceiling"),
+            Ok(Binding::Bus(0, BusParam::LimitCeiling))
+        );
     }
 
     #[test]

@@ -481,8 +481,8 @@ impl<'v> Draw<'_, 'v> {
     }
 
     /// The gain as text, with a note on the owner under it: dropouts or drift of an input, the
-    /// clip lamp of a bus.
-    fn readout(&self, ui: &Ui, zone: Rect, part: &Element) {
+    /// clip lamp or the limiter of a bus.
+    fn readout(&mut self, ui: &Ui, zone: Rect, part: &Element) {
         let p = &Theme::current().palette;
         let (Control::Readout, Some(binding)) = (&part.control, part.bind) else {
             return;
@@ -500,15 +500,20 @@ impl<'v> Draw<'_, 'v> {
                     None
                 }
             }),
-            Owner::Bus(index) => self
-                .meters
-                .bus(index)
-                .and_then(clip_note)
-                .map(|text| (text, p.meter_high))
-                .or_else(|| {
-                    let bus = self.view().buses.get(index)?;
-                    limit_note(bus.limited_db).map(|text| (text, p.text_faint))
-                }),
+            Owner::Bus(index) => {
+                let limited_db = self
+                    .view()
+                    .buses
+                    .get(index)
+                    .map_or(0.0, |bus| bus.limited_db);
+                let now = self.now;
+                self.meters.buses_mut().get_mut(index).and_then(|meter| {
+                    let limit = meter.held_limit(limited_db, now);
+                    clip_note(meter)
+                        .map(|text| (text, p.meter_high))
+                        .or_else(|| limit_note(limit).map(|text| (text, p.text_faint)))
+                })
+            }
         };
         readout(ui, zone, shown_gain(gain), note);
     }

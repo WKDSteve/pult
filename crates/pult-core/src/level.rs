@@ -56,6 +56,15 @@ pub fn linear_to_db(linear: f32) -> f32 {
     }
 }
 
+/// `value` inside `range`, or `fallback` for a NaN.
+pub(crate) fn within(value: f32, range: (f32, f32), fallback: f32) -> f32 {
+    if value.is_nan() {
+        fallback
+    } else {
+        value.clamp(range.0, range.1)
+    }
+}
+
 /// The highest absolute sample since the last [`take`](Self::take).
 ///
 /// The audio thread records, the control thread takes; NaN samples are ignored.
@@ -78,6 +87,11 @@ impl PeakMeter {
         if value > 0.0 {
             self.0.fetch_max(value.to_bits(), Ordering::Relaxed);
         }
+    }
+
+    /// The peak so far, without starting a new measurement.
+    pub fn peek(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
     }
 
     /// The peak since the last call, and starts a new measurement.

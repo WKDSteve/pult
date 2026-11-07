@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::level::AtomicF32;
+use crate::level::{AtomicF32, within};
 
 /// Bands of one equalizer.
 pub const EQ_BANDS: usize = 4;
@@ -212,15 +212,6 @@ impl BandChange {
                 "the {what} of a band must be {low} to {high}{unit}, not {value}"
             ))
         }
-    }
-}
-
-/// `value` inside `range`, or `fallback` for a NaN.
-fn within(value: f32, range: (f32, f32), fallback: f32) -> f32 {
-    if value.is_nan() {
-        fallback
-    } else {
-        value.clamp(range.0, range.1)
     }
 }
 

@@ -12,7 +12,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::level::{AtomicF32, db_to_linear};
+use crate::level::{AtomicF32, db_to_linear, within};
 
 /// Lowest and highest threshold of a gate in dB.
 pub const GATE_THRESHOLD_DB: (f32, f32) = (-80.0, 0.0);
@@ -71,15 +71,6 @@ const MAKEUP_MS: f32 = 10.0;
 
 /// The level a compressor takes for silence, in dB: the logarithm of nothing has no value.
 const SILENCE_DB: f32 = -120.0;
-
-/// `value` inside `range`, or `fallback` for a NaN.
-fn within(value: f32, range: (f32, f32), fallback: f32) -> f32 {
-    if value.is_nan() {
-        fallback
-    } else {
-        value.clamp(range.0, range.1)
-    }
-}
 
 /// The part of the distance to a goal a value covers per frame, for a time constant of `ms`
 /// milliseconds at `rate` frames per second.

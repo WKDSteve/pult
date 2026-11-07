@@ -156,6 +156,8 @@ pub struct BusStats {
     pub clipped: Counter,
     /// How far the limiter turned down at most since the last look, in dB.
     pub limited_db: PeakMeter,
+    /// The same over the whole run; nobody takes it.
+    pub most_limited_db: PeakMeter,
 }
 
 /// The control thread's side of one input ring.
@@ -628,6 +630,7 @@ impl Mixer {
             .limiter
             .process(&self.controls.limiter, out, self.out_channels);
         self.stats.limited_db.record(reduced);
+        self.stats.most_limited_db.record(reduced);
         let clipped: u64 = out.iter_mut().map(limited).sum();
         if clipped > 0 {
             self.stats.clipped.add(clipped);

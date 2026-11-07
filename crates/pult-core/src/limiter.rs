@@ -21,7 +21,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::level::{AtomicF32, linear_to_db};
+use crate::level::{AtomicF32, linear_to_db, within};
 
 /// Lowest and highest ceiling in dB.
 pub const LIMIT_CEILING_DB: (f32, f32) = (-20.0, 0.0);
@@ -161,15 +161,6 @@ impl LimiterControls {
     }
 }
 
-/// `value` inside `range`, or `fallback` for a NaN.
-fn within(value: f32, range: (f32, f32), fallback: f32) -> f32 {
-    if value.is_nan() {
-        fallback
-    } else {
-        value.clamp(range.0, range.1)
-    }
-}
-
 /// A frame's own gain that still counts for the frames after it.
 #[derive(Clone, Copy, Debug, Default)]
 struct Hold {
@@ -266,26 +257,15 @@ impl Limiter {
         }
     }
 
-    /// Gets ready for a new layout (a device may come back with another); not for the callback,
-    /// since it may allocate. It stands at what it sees next.
+    /// Gets ready for a device that opens, maybe with another layout; not for the callback, since
+    /// it may allocate. It stands at what it sees next, with nothing remembered: nothing played
+    /// for a while, so nothing can click.
     pub fn prepare(&mut self, channels: usize) {
         if channels != self.channels {
             self.channels = channels;
             self.line = vec![0.0; self.capacity * channels];
         }
         self.fresh = true;
-    }
-
-    /// Stands at what it sees next, with nothing remembered: nothing played for a while, so
-    /// nothing can click.
-    pub fn start_over(&mut self) {
-        self.fresh = true;
-    }
-
-    /// The delay in frames it is heading for.
-    #[must_use]
-    pub fn lookahead_frames(&self) -> usize {
-        self.goal_look
     }
 
     /// Limits `data` (interleaved, `channels` per frame) in place as `controls` say. Returns how
@@ -384,13 +364,15 @@ impl Limiter {
         let gain = self.gain_for(frame);
         let new = self.tap(self.look);
         #[allow(clippy::cast_precision_loss)]
-        let old_share = self.fade_left as f64 / self.fade_frames as f64;
-        let old = (self.fade_left > 0).then(|| self.tap(self.fading_from));
+        let old = (self.fade_left > 0).then(|| {
+            let share = self.fade_left as f64 / self.fade_frames as f64;
+            (self.tap(self.fading_from), share)
+        });
         for (channel, sample) in frame.iter_mut().enumerate() {
             let delayed = f64::from(self.line[new + channel]);
             let sound = match old {
-                Some(old) => {
-                    delayed * (1.0 - old_share) + f64::from(self.line[old + channel]) * old_share
+                Some((old, share)) => {
+                    delayed * (1.0 - share) + f64::from(self.line[old + channel]) * share
                 }
                 None => delayed,
             };
@@ -577,7 +559,7 @@ mod tests {
         let mut data = input.clone();
         assert_eq!(limiter.process(&controls, &mut data, 2), 0.0);
         let look = 48;
-        assert_eq!(limiter.lookahead_frames(), look);
+        assert_eq!(limiter.look, look);
         assert!(data[..look * 2].iter().all(|&s| s == 0.0));
         for (out, original) in data[look * 2..].iter().zip(&input) {
             assert!((out - original).abs() < 1e-6, "{out} against {original}");
@@ -633,24 +615,33 @@ mod tests {
         assert_eq!(quiet[95_999], 0.1);
     }
 
+    /// The largest step the tone takes when a spike at 2.0 passes through a tone at 0.4: the spike
+    /// itself left out, so that the frames on either side of it count as neighbours.
+    fn largest_step_around_a_spike(lookahead_ms: f32) -> f32 {
+        let (mut limiter, controls) = limiter(-6.0, lookahead_ms, 1);
+        let spike = 2400;
+        let mut data = vec![0.4; 4800];
+        data[spike] = 2.0;
+        limiter.process(&controls, &mut data, 1);
+        let look = limiter.look;
+        let at = spike + look;
+        assert!(data[at] <= linear(-6.0) * (1.0 + 1e-6));
+        let across = (data[at + 1] - data[at - 1]).abs();
+        // From where the sound starts: before it, the delay line was silent.
+        data[look..at]
+            .windows(2)
+            .chain(data[at + 1..].windows(2))
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(across, f32::max)
+    }
+
     #[test]
     fn the_gain_moves_without_a_step_given_lookahead() {
-        let (mut limiter, controls) = limiter(-6.0, 5.0, 1);
-        // A constant tone, then a jump to 12 dB above the ceiling.
-        let mut data = vec![0.1; 2400];
-        data.extend(vec![1.0; 2400]);
-        limiter.process(&controls, &mut data, 1);
-        // The gain falls over the whole lookahead, so that no two frames differ much; a step
-        // would jump by the whole reduction.
-        let gains: Vec<f32> = data
-            .windows(2)
-            .map(|pair| (pair[1] - pair[0]).abs())
-            .collect();
-        let jump_at = 2400 + 240;
-        let around = &gains[2400..jump_at + 10];
-        // Only the frame where the loud part arrives moves by the loud part's own step.
-        let steps = around.iter().filter(|&&step| step > 0.05).count();
-        assert!(steps <= 1, "{steps} steps above 0.05");
+        // Without lookahead the tone drops at once from 0.4 to 0.1.
+        assert!(largest_step_around_a_spike(0.0) > 0.25);
+        // With it the same way takes 240 frames.
+        let gentle = largest_step_around_a_spike(5.0);
+        assert!(gentle < 0.3 / 240.0 * 1.5, "{gentle}");
     }
 
     #[test]
@@ -747,7 +738,7 @@ mod tests {
         let (mut limiter, controls) = limiter(-6.0, 1.0, 1);
         let mut data = vec![1.0; 480];
         limiter.process(&controls, &mut data, 1);
-        limiter.start_over();
+        limiter.prepare(1);
         controls.set_all(true, -12.0, 2.0);
         // No slide, no crossfade, and the old sound is gone.
         let mut data = vec![0.1; 96];

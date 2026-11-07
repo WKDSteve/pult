@@ -23,6 +23,8 @@ pub struct MeterState {
     held_db: f32,
     held_at: f64,
     clipped: bool,
+    limited_db: f32,
+    limited_at: f64,
 }
 
 impl Default for MeterState {
@@ -31,6 +33,8 @@ impl Default for MeterState {
             held_db: f32::NEG_INFINITY,
             held_at: 0.0,
             clipped: false,
+            limited_db: 0.0,
+            limited_at: 0.0,
         }
     }
 }
@@ -71,6 +75,16 @@ impl MeterState {
     #[must_use]
     pub fn clipped(&self) -> bool {
         self.clipped
+    }
+
+    /// What the note of a limiter shows at `now`, given how far it turned down right now: the most
+    /// of the last moments, like the peak line. A value of a single view could not be read.
+    pub fn held_limit(&mut self, limited_db: f32, now: f64) -> f32 {
+        if limited_db >= self.limited_db || now - self.limited_at > HOLD_SECONDS {
+            self.limited_db = limited_db;
+            self.limited_at = now;
+        }
+        self.limited_db
     }
 
     /// Lights the clip lamp for a clip the mixer counted (a bus clips after its meter).
@@ -196,6 +210,15 @@ pub fn meter_scale(ui: &mut Ui, size: Vec2) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_note_of_a_limiter_holds_its_most_and_then_follows() {
+        let mut meter = MeterState::default();
+        assert_eq!(meter.held_limit(3.0, 10.0), 3.0);
+        assert_eq!(meter.held_limit(0.0, 10.5), 3.0);
+        assert_eq!(meter.held_limit(5.0, 11.0), 5.0);
+        assert_eq!(meter.held_limit(0.0, 11.0 + HOLD_SECONDS + 0.1), 0.0);
+    }
 
     #[test]
     fn peak_holds_then_falls() {

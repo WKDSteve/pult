@@ -46,6 +46,10 @@ pub struct BusSnapshot {
     pub peak: f32,
     /// Clipped or invalid output samples so far.
     pub clipped: u64,
+    /// How far its limiter turned down at most since the previous snapshot, in dB.
+    pub limited_db: f32,
+    /// How far its limiter turned down at most so far, in dB.
+    pub most_limited_db: f32,
     /// Whether the device is playing.
     pub present: bool,
     /// Whether it is muted.
@@ -103,6 +107,8 @@ impl Snapshot {
             .map(|bus| BusSnapshot {
                 peak: bus.handle.stats.peak.take(),
                 clipped: bus.handle.stats.clipped.get(),
+                limited_db: bus.handle.stats.limited_db.take(),
+                most_limited_db: bus.handle.stats.most_limited_db.peek(),
                 present: bus.present,
                 muted: bus.handle.controls.muted.load(Ordering::Relaxed),
                 outages: bus.outages,
@@ -205,6 +211,10 @@ pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
             level(bus.present, bus.muted, bus.peak),
             bus.clipped
         );
+        // While it works: `clipped` stays 0 then, and nothing else would say the bus is too hot.
+        if bus.limited_db >= 0.05 {
+            let _ = write!(line, " limit -{:.1} dB", bus.limited_db);
+        }
     }
     let _ = write!(
         line,
@@ -220,12 +230,21 @@ pub fn status_line(snap: &Snapshot, bus_names: &[String]) -> String {
 pub fn summary(snap: &Snapshot) -> String {
     let lost: u64 = snap.inputs.iter().map(|i| i.lost).sum();
     let clipped: u64 = snap.buses.iter().map(|b| b.clipped).sum();
-    format!(
+    let limited = snap
+        .buses
+        .iter()
+        .map(|b| b.most_limited_db)
+        .fold(0.0, f32::max);
+    let mut line = format!(
         "ran {}: {} dropouts ({:.1} per hour), {lost} frames lost, {clipped} samples clipped",
         clock(snap.elapsed),
         snap.dropouts,
         snap.dropouts_per_hour()
-    )
+    );
+    if limited >= 0.05 {
+        let _ = write!(line, ", limiter down by up to {limited:.1} dB");
+    }
+    line
 }
 
 fn csv_db(linear: f32) -> String {
@@ -257,7 +276,7 @@ pub fn csv_header(inputs: usize, bus_names: &[String]) -> String {
     for name in bus_names {
         let _ = write!(
             line,
-            ",{name}_peak_db,{name}_clipped,{name}_present,{name}_outages"
+            ",{name}_peak_db,{name}_clipped,{name}_limited_db,{name}_present,{name}_outages"
         );
     }
     line.push_str(",glitches,dropouts,dropouts_per_hour");
@@ -284,9 +303,10 @@ pub fn csv_row(snap: &Snapshot) -> String {
     for bus in &snap.buses {
         let _ = write!(
             line,
-            ",{},{},{},{}",
+            ",{},{},{:.1},{},{}",
             csv_db(bus.peak),
             bus.clipped,
+            bus.limited_db,
             u8::from(bus.present),
             bus.outages
         );
@@ -409,6 +429,8 @@ mod tests {
             buses: vec![BusSnapshot {
                 peak,
                 clipped: 0,
+                limited_db: 0.0,
+                most_limited_db: 0.0,
                 present: true,
                 muted: false,
                 outages: 0,
@@ -428,6 +450,8 @@ mod tests {
         two.buses.push(BusSnapshot {
             peak: 0.0,
             clipped: 4,
+            limited_db: 3.25,
+            most_limited_db: 9.0,
             present: true,
             muted: false,
             outages: 0,
@@ -436,12 +460,13 @@ mod tests {
         assert!(line.starts_with("1:02:03 [1]   -6.0 dB"), "{line}");
         assert!(
             line.contains(
-                "drift -7 ppm resync 0 | A1   -6.0 dB clipped 0 | B1   -inf dB clipped 4"
+                "drift -7 ppm resync 0 | A1   -6.0 dB clipped 0 | B1   -inf dB clipped 4 limit -3.2 dB"
             ),
             "{line}"
         );
         // One glitch in 1:02:03.
         assert!(line.ends_with(" | glitches 1 | 1.0 dropouts/h"), "{line}");
+        assert!(summary(&two).ends_with(", limiter down by up to 9.0 dB"));
     }
 
     #[test]
@@ -463,12 +488,12 @@ mod tests {
         assert_eq!(header.split(',').count(), row.split(',').count());
         assert!(header.starts_with("elapsed_s,in1_peak_db,in1_dropouts"));
         assert!(header.ends_with(
-            ",in2_aligned,in2_present,in2_outages,A1_peak_db,A1_clipped,A1_present,A1_outages,\
+            ",in2_aligned,in2_present,in2_outages,A1_peak_db,A1_clipped,A1_limited_db,A1_present,A1_outages,\
              glitches,dropouts,dropouts_per_hour"
         ));
         assert_eq!(
             row,
-            "10.0,-inf,0,0,12.3,0,0,1,0,-inf,0,0,0.0,0,0,0,0,-inf,0,1,0,1,1,360.00"
+            "10.0,-inf,0,0,12.3,0,0,1,0,-inf,0,0,0.0,0,0,0,0,-inf,0,0.0,1,0,1,1,360.00"
         );
     }
 
@@ -532,7 +557,10 @@ mod tests {
         std::fs::remove_file(&path).expect("remove log");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1], "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,1,0,1,1,360.00");
+        assert_eq!(
+            lines[1],
+            "10.0,-6.0,0,0,2.0,0,0,1,0,-6.0,0,0.0,1,0,1,1,360.00"
+        );
     }
 
     #[test]

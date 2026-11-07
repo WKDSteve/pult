@@ -54,7 +54,7 @@ pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.).
 | `lost` | an der Aufnahme verlorene Frames: der Puffer war voll, weil der Ausgang länger als eine Sekunde nichts abgenommen hat |
 | `drift` | Korrektur des Resamplers gegen die Takt-Drift zwischen Eingang und Bus, in ppm (Millionstel): `+12` heißt, der Eingang liefert 12 Frames pro Million mehr, als der Ausgang abnimmt. Echte Takte liegen meist innerhalb weniger zehn ppm; nach dem Start pendelt der Wert ein bis zwei Minuten lang ein. Bei mehreren Bussen steht der größte Wert da |
 | `resync` | harte Sprünge zurück auf die Ziel-Pufferung, wenn der Puffer weit überlief; sollte 0 bleiben. Der einmalige Abgleich beim Start zählt hier nicht mit (siehe Protokoll) |
-| `A1 … dB` / `clipped` | je Bus: Spitzenpegel dessen, was den Bus verlässt, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit dem Limiter (siehe 5.) bleibt `clipped` normalerweise bei 0. Mit `--to` heißt der eine Bus `A1` |
+| `A1 … dB` / `clipped` | je Bus: Spitzenpegel dessen, was den Bus verlässt, Samples über Vollaussteuerung (auf ±1 begrenzt) oder ungültig (NaN, durch Stille ersetzt). Mit dem Limiter (siehe 5.) bleibt `clipped` normalerweise bei 0; solange er arbeitet, steht dahinter `limit -2.5 dB`. Mit `--to` heißt der eine Bus `A1` |
 | `glitches` | Unter- oder Überläufe, die Windows selbst meldet |
 | `dropouts/h` | Aussetzer pro Stunde Laufzeit, hochgerechnet. Gezählt wird, was man hört: `out`, `resync` und `glitches`, die innerhalb einer Sekunde zusammenkommen (etwa wenn ein stockendes Ausgabegerät beide Eingänge zugleich neu ausrichtet), sind ein Aussetzer; hält eine Störung an, zählt sie einmal pro Sekunde. In den ersten Minuten springt der Wert, weil schon ein einzelner Aussetzer stark zählt |
 | `missing` | statt des Pegels: das Gerät ist gerade weg (siehe unten, Geräte ab- und anstecken) |
@@ -87,7 +87,7 @@ Nach dem Start (und nach jedem Aussetzer) misst pult zwei Sekunden lang, wo sich
 `aligned` zählt diese übersprungenen Frames; typisch sind einige hundert (ein paar Millisekunden).
 
 Geht ein Eingang auf mehrere Busse, zählen Statuszeile und Protokoll seine Werte über alle Busse zusammen. Je Bus gibt
-es die Spalten `<Bus>_peak_db` und `<Bus>_clipped`. Für jedes Gerät stehen außerdem `present` (1 spielt, 0 ist weg) und
+es die Spalten `<Bus>_peak_db`, `<Bus>_clipped` und `<Bus>_limited_db` (wie weit der Limiter zurückgedreht hat). Für jedes Gerät stehen außerdem `present` (1 spielt, 0 ist weg) und
 `outages` (wie oft es bisher weg war) im Protokoll.
 
 ### Geräte ab- und anstecken
@@ -381,7 +381,7 @@ pult learn scene/abend
 ```
 
 Nach `pult learn` wartet pult bis zu 30 Sekunden auf die nächste Bewegung am Gerät und bindet sie; das geht auch als `learn …` in
-der Eingabezeile von `pult run`. Eine Taste kann Mute, Solo, Matrix und Szenen schalten, aber keinen Pegel setzen. Solange eine
+der Eingabezeile von `pult run`. Eine Taste kann Mute, Solo, Matrix und Szenen schalten, auch die Schalter von EQ und Limiter (`bus/A1/eq`, `bus/A1/limit`), aber keinen Pegel setzen. Regler gehen auch auf Decke und Vorschau des Limiters (`bus/A1/limit/ceiling`, `bus/A1/limit/lookahead`). Solange eine
 Route läuft, leuchten die gebundenen Tasten: Mute rot, Solo gelb, Matrix grün, Szenen gelb. Beim Beenden gehen sie aus.
 
 | Befehl | Wirkung |
