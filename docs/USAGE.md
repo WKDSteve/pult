@@ -204,7 +204,9 @@ pult run --profile meinprofil.toml --log abend.csv
   so viel früher und dreht sanfter zurück, und um genau diese Zeit verlässt der Ton den Bus später. Mit 0 kommt keine
   Latenz dazu, eine Spitze trifft dann aber auf einen harten Sprung im Pegel. Unter der Decke ändert er nichts am Ton.
   `limit_on = false` schaltet ihn aus; dann begrenzt nur noch der Bus selbst hart auf Vollaussteuerung und zählt das als
-  `clipped`. Szenen ändern den Limiter nicht.
+  `clipped`. Szenen ändern den Limiter nicht. Im Fenster steht der Schalter **LIM** im Kanalzug des Busses, darunter unter
+  dem Fader `LIM -2.5`, solange er zurückdreht; Decke und Vorschau (**CEIL**, **LOOK**) liegen auf dem Tab **EQ**. Die
+  Fernbedienung im Browser hat den Schalter.
 - **Regler im Fenster:** Ziehen dreht (mit Umschalt feiner), das Mausrad geht in Schritten, ein Doppelklick führt zurück
   zur Grundstellung. Frequenz und Breite eines Bandes gehen oktavweise.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten

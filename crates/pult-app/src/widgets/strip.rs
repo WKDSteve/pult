@@ -294,9 +294,15 @@ impl<'v> Draw<'_, 'v> {
                 rect.shrink2(vec2(0.0, 2.0)),
                 Layout::left_to_right(Align::Center),
                 |ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
+                    // Dials stand apart by their own width; buttons need a gap.
+                    let buttons = parts
+                        .iter()
+                        .any(|part| matches!(part.control, Control::Toggle { .. }));
+                    let gap = if buttons { 4.0 } else { 0.0 };
+                    ui.spacing_mut().item_spacing.x = gap;
                     #[allow(clippy::cast_precision_loss)]
-                    let width = rect.width() / parts.len() as f32;
+                    let count = parts.len() as f32;
+                    let width = (rect.width() - gap * (count - 1.0)) / count;
                     for part in parts {
                         match (&part.control, part.bind) {
                             (Control::Dial { text }, Some(binding)) => {
@@ -498,7 +504,11 @@ impl<'v> Draw<'_, 'v> {
                 .meters
                 .bus(index)
                 .and_then(clip_note)
-                .map(|text| (text, p.meter_high)),
+                .map(|text| (text, p.meter_high))
+                .or_else(|| {
+                    let bus = self.view().buses.get(index)?;
+                    limit_note(bus.limited_db).map(|text| (text, p.text_faint))
+                }),
         };
         readout(ui, zone, shown_gain(gain), note);
     }
@@ -509,6 +519,12 @@ impl<'v> Draw<'_, 'v> {
 #[must_use]
 pub fn clip_note(meter: &MeterState) -> Option<String> {
     meter.clipped().then(|| "CLIP".to_owned())
+}
+
+/// The note under a bus fader while its limiter turns down: `LIM -3.2`.
+#[must_use]
+pub fn limit_note(limited_db: f32) -> Option<String> {
+    (limited_db >= 0.05).then(|| format!("LIM {:.1}", -limited_db))
 }
 
 /// The gain a readout shows: the desk's lowest gain, where an off fader lands, is off.
@@ -543,6 +559,13 @@ mod tests {
         assert_eq!(clip_note(&meter).as_deref(), Some("CLIP"));
         meter.reset_clip();
         assert_eq!(clip_note(&meter), None);
+    }
+
+    #[test]
+    fn a_limit_note_only_while_it_turns_down() {
+        assert_eq!(limit_note(0.0), None);
+        assert_eq!(limit_note(0.01), None);
+        assert_eq!(limit_note(3.24).as_deref(), Some("LIM -3.2"));
     }
 
     #[test]

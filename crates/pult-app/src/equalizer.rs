@@ -1,5 +1,6 @@
 //! The equalizer view: a row per bus with its switch and its bands, each band with its kind, gain,
-//! frequency and width. A strip has no room for that; it only has the switch.
+//! frequency and width, and behind them its limiter with ceiling and lookahead. A strip has no room
+//! for that; it only has the switches.
 
 use eframe::egui::{
     Align, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Stroke, Ui, vec2,
@@ -17,6 +18,7 @@ const DIAL_SIZE: f32 = 30.0;
 const DIAL_ROW_HEIGHT: f32 = 58.0;
 const KIND_HEIGHT: f32 = 20.0;
 const SWITCH_SIZE: [f32; 2] = [48.0, 22.0];
+const LIMIT_WIDTH: f32 = 112.0;
 
 /// The kinds a band can have, with what their buttons say.
 const KINDS: [(BandKind, &str); 3] = [
@@ -38,7 +40,7 @@ pub fn show(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
     let (p, m) = (&theme.palette, &theme.metrics);
     let mut values = Values::new(view);
     ui.label(
-        RichText::new("EQUALIZER  behind the sum of a bus, before its fader; double click a dial for its start")
+        RichText::new("EQUALIZER  behind the sum of a bus, before its fader; LIMITER  behind the fader, the lookahead delays the bus; double click a dial for its start")
             .size(10.0)
             .color(p.text_faint),
     );
@@ -96,7 +98,45 @@ fn bus_row(
                 },
             );
         }
+        ui.allocate_ui_with_layout(
+            vec2(LIMIT_WIDTH, KIND_HEIGHT + DIAL_ROW_HEIGHT + 22.0),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(LIMIT_WIDTH);
+                limit_column(ui, index, values, actions);
+            },
+        );
     });
+}
+
+/// The limiter of a bus: its switch, what it is at now, ceiling and lookahead.
+fn limit_column(ui: &mut Ui, bus: usize, values: &mut Values<'_>, actions: &mut Vec<Action>) {
+    let p = &Theme::current().palette;
+    ui.label(RichText::new("LIMITER").size(9.5).color(p.text_faint));
+    let switch = Binding::Bus(bus, BusParam::Limit);
+    if let Some(Value::Switch(mut on)) = values.read(switch) {
+        let title = switch.title(values.view());
+        let size = vec2(LIMIT_WIDTH, KIND_HEIGHT);
+        if toggle(ui, &mut on, "LIM", &title, Role::Assign, size).changed() {
+            actions.extend(values.write(switch, Value::Switch(on)));
+        }
+    }
+    ui.add_space(4.0);
+    ui.allocate_ui_with_layout(
+        vec2(LIMIT_WIDTH, DIAL_ROW_HEIGHT),
+        Layout::left_to_right(Align::Min),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let width = LIMIT_WIDTH / 2.0;
+            for (param, text) in [
+                (BusParam::LimitCeiling, "CEIL"),
+                (BusParam::LimitLookahead, "LOOK"),
+            ] {
+                let dial = Binding::Bus(bus, param);
+                actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, width));
+            }
+        },
+    );
 }
 
 fn band_column(

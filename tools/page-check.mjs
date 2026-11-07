@@ -189,6 +189,19 @@ try {
   await setOutside("input/1/comp", 0);
   await follows(knob, "0");
 
+  // The switch of a limiter comes back through the state too.
+  const limit = page.getByRole("button", { name: "LIM of A1" });
+  check("the limiter starts on", (await limit.getAttribute("aria-pressed")) === "true");
+  await limit.click();
+  await page.waitForFunction(
+    () => document.querySelector("#buses .strip .limit").getAttribute("aria-pressed") === "false",
+  );
+  check("the limiter switches", true);
+  await limit.click();
+  await page.waitForFunction(
+    () => document.querySelector("#buses .strip .limit").getAttribute("aria-pressed") === "true",
+  );
+
   // The switch of an equalizer comes back through the state too.
   const eq = page.getByRole("button", { name: "EQ of A1" });
   check("the equalizer starts on", (await eq.getAttribute("aria-pressed")) === "true");

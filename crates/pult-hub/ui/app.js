@@ -219,19 +219,26 @@ function makeStrip(address, title, isInput) {
   const gate = isInput ? makeKnob(`${address}/gate`, "Gate", "Gate") : null;
   const comp = isInput ? makeKnob(`${address}/comp`, "Comp", "Compressor") : null;
   const eq = isInput ? null : make("button");
+  const limit = isInput ? null : make("button");
   if (isInput) {
     li.append(gate.node, comp.node);
   } else {
     eq.type = "button";
     eq.className = "eq";
     eq.textContent = "EQ";
-    li.append(eq);
+    limit.type = "button";
+    limit.className = "limit";
+    limit.textContent = "LIM";
+    li.append(eq, limit);
     eq.addEventListener("click", () => {
       ask({ op: "set", address: `${address}/eq`, value: !shown.eq_on });
     });
+    limit.addEventListener("click", () => {
+      ask({ op: "set", address: `${address}/limit`, value: !shown.limit_on });
+    });
   }
 
-  let shown = { muted: false, gain_db: 0, eq_on: false };
+  let shown = { muted: false, gain_db: 0, eq_on: false, limit_on: false };
   mute.addEventListener("click", () => {
     ask({ op: "set", address: `${address}/mute`, value: !shown.muted });
   });
@@ -260,6 +267,8 @@ function makeStrip(address, title, isInput) {
       } else {
         eq.setAttribute("aria-pressed", String(Boolean(state.eq_on)));
         eq.setAttribute("aria-label", `EQ of ${called}`);
+        limit.setAttribute("aria-pressed", String(Boolean(state.limit_on)));
+        limit.setAttribute("aria-label", `LIM of ${called}`);
       }
       meter.value = state.peak_db === null ? METER_FLOOR : state.peak_db;
       level.textContent = state.peak_db === null ? "silence" : `${state.peak_db.toFixed(1)} dB`;

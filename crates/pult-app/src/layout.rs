@@ -30,7 +30,7 @@ pub enum Zone {
     Pan,
     /// The bus assignment buttons.
     Assign,
-    /// Gate and compressor of an input, the switch of the equalizer of a bus.
+    /// Gate and compressor of an input, the switches of equalizer and limiter of a bus.
     Dynamics,
     MuteSolo,
     /// Fader, meter and meter numbers.
@@ -196,6 +196,12 @@ pub fn bus_strip(index: usize) -> Element {
             Binding::Bus(index, BusParam::Eq),
         ),
         Element::toggle(
+            Zone::Dynamics,
+            "LIM",
+            Role::Assign,
+            Binding::Bus(index, BusParam::Limit),
+        ),
+        Element::toggle(
             Zone::MuteSolo,
             "MUTE",
             Role::Mute,
@@ -318,6 +324,7 @@ mod tests {
             addresses,
             [
                 "bus/A1/eq",
+                "bus/A1/limit",
                 "bus/A1/mute",
                 "bus/A1/gain",
                 "bus/A1/meter",

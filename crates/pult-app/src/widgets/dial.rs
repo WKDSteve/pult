@@ -1,5 +1,6 @@
 //! A small rotary control for a number between two ends: the one knob of a gate or a compressor,
-//! the gain, frequency and width of a band of an equalizer. What it does comes from the parameter
+//! the gain, frequency and width of a band of an equalizer, the ceiling and the lookahead of a
+//! limiter. What it does comes from the parameter
 //! it is bound to.
 
 use std::f32::consts::PI;
@@ -8,6 +9,9 @@ use eframe::egui::{
     Align, Layout, Response, RichText, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, vec2,
 };
 use pult_core::eq::{Band, EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
+use pult_core::limiter::{
+    DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LIMIT_CEILING_DB, LIMIT_LOOKAHEAD_MS,
+};
 use pult_core::scale::Span;
 use pult_core::view::{AMOUNT_RANGE, Action};
 
@@ -42,6 +46,16 @@ impl Dial {
             Binding::Input(_, InputParam::Gate | InputParam::Comp) => Some(Self {
                 span: Span::even(AMOUNT_RANGE),
                 home: 0.0,
+                both_ways: false,
+            }),
+            Binding::Bus(_, BusParam::LimitCeiling) => Some(Self {
+                span: Span::even(LIMIT_CEILING_DB),
+                home: DEFAULT_CEILING_DB,
+                both_ways: false,
+            }),
+            Binding::Bus(_, BusParam::LimitLookahead) => Some(Self {
+                span: Span::even(LIMIT_LOOKAHEAD_MS),
+                home: DEFAULT_LOOKAHEAD_MS,
                 both_ways: false,
             }),
             Binding::Bus(_, BusParam::EqBand(band, param)) => {
@@ -103,7 +117,9 @@ pub fn number(value: Value) -> Option<f32> {
         Value::Amount(number)
         | Value::Boost(number)
         | Value::Freq(number)
-        | Value::Width(number) => Some(number),
+        | Value::Width(number)
+        | Value::Ceiling(number)
+        | Value::Lookahead(number) => Some(number),
         _ => None,
     }
 }
@@ -116,6 +132,8 @@ fn with_number(value: Value, number: f32) -> Value {
         Value::Boost(_) => Value::Boost(number),
         Value::Freq(_) => Value::Freq(number),
         Value::Width(_) => Value::Width(number),
+        Value::Ceiling(_) => Value::Ceiling(number),
+        Value::Lookahead(_) => Value::Lookahead(number),
         other => other,
     }
 }
@@ -131,6 +149,8 @@ pub fn format_value(value: Value) -> String {
         Value::Freq(hz) if hz >= 1000.0 => format!("{:.1}k", hz / 1000.0),
         Value::Freq(hz) => format!("{hz:.0}"),
         Value::Width(q) => format!("{q:.2}"),
+        Value::Ceiling(db) => format!("{db:.1} dB"),
+        Value::Lookahead(ms) => format!("{ms:.1} ms"),
         _ => String::new(),
     }
 }
@@ -307,6 +327,11 @@ mod tests {
         assert!(Dial::of(band(BandParam::Gain)).is_some_and(|dial| dial.both_ways));
         assert!(Dial::of(band(BandParam::Q)).is_some());
         assert_eq!(Dial::of(band(BandParam::Kind)), None);
+        let ceiling = Dial::of(Binding::Bus(0, BusParam::LimitCeiling)).expect("a dial");
+        assert_eq!(ceiling.home, DEFAULT_CEILING_DB);
+        let lookahead = Dial::of(Binding::Bus(0, BusParam::LimitLookahead)).expect("a dial");
+        assert_eq!(lookahead.home, DEFAULT_LOOKAHEAD_MS);
+        assert_eq!(Dial::of(Binding::Bus(0, BusParam::Limit)), None);
         assert_eq!(Dial::of(Binding::Input(0, InputParam::Pan)), None);
     }
 

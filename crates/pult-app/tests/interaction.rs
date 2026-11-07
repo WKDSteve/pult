@@ -333,6 +333,35 @@ fn a_bus_strip_switches_its_equalizer() {
 }
 
 #[test]
+fn a_bus_strip_switches_its_limiter() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    assert!(desk_view(&mut harness).buses[0].limit_on);
+    harness.get_by_label("A1 limiter").click();
+    let view = desk_view(&mut harness);
+    assert!(!view.buses[0].limit_on);
+    assert!(view.buses[1].limit_on);
+}
+
+#[test]
+fn the_equalizer_view_sets_the_limiter() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("EQ").click();
+    harness.run_steps(2);
+    harness
+        .get_by_label("A2 limiter ceiling")
+        .set_value_accesskit(-6.0);
+    harness
+        .get_by_label("A2 limiter lookahead")
+        .set_value_accesskit(2.5);
+    let view = desk_view(&mut harness);
+    assert_eq!(view.buses[1].limit_db, -6.0);
+    assert_eq!(view.buses[1].limit_lookahead_ms, 2.5);
+    assert_eq!(view.buses[0].limit_lookahead_ms, 1.0);
+}
+
+#[test]
 fn the_equalizer_view_sets_its_bands() {
     let mut harness = harness();
     harness.run_steps(2);

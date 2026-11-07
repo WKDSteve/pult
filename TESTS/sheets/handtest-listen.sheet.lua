@@ -17,5 +17,7 @@ return {
     { ask = "The same with a compressor (comp <input> 4): more even and louder, no pumping, no clip on a shout?" },
     { ask = "The equalizer on the speakers (tab EQ): each band sounds as it says, and moving it or switching it off does not click?" },
     { ask = "A scene that changes gate, compressor and equalizer: without a click?" },
+    { ask = "The limiter on the speakers (bus fader far up, loud music): no distortion from clipping, LIM under the fader shows it working, and the pumping is bearable?" },
+    { ask = "Changing its lookahead (limit <bus> look 5) and switching it off and on while music plays: without a click?" },
   },
 }

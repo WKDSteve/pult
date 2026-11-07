@@ -111,7 +111,12 @@ p {
 }
 
 .strip .eq {
-  grid-column: 1 / -1;
+  grid-column: 1;
+  justify-self: start;
+}
+
+.strip .limit {
+  grid-column: 2;
   justify-self: start;
 }
 
