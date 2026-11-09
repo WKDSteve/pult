@@ -21,6 +21,7 @@ mod desk;
 #[allow(unsafe_code)]
 mod ffi;
 mod live;
+mod offline;
 mod presence;
 mod process;
 pub mod profile;
@@ -45,6 +46,7 @@ use pult_core::{
 };
 
 pub use desk::EngineDesk;
+pub use offline::Offline;
 pub use presence::{APP_INSTANCE, Presence};
 use process::PROCESS_CHANNELS;
 pub use process::program_names;
@@ -631,7 +633,8 @@ const NO_REALTIME: &str = if cfg!(windows) {
 
 /// A started route; dropping it stops all streams.
 pub struct Running {
-    host: cpal::Host,
+    /// The audio system; none for a route rendered without devices (see [`Offline`]).
+    host: Option<cpal::Host>,
     /// The inputs' slots, then the buses'.
     slots: Vec<Slot>,
     /// The inputs, in the order of the spec.
@@ -724,7 +727,12 @@ impl Running {
             };
             return self.slots[index].open(&source, &self.xruns);
         }
-        let (device, name, config) = find_device(&self.host, slot.role, &slot.wanted)?;
+        let Some(host) = &self.host else {
+            return Err(Error::InvalidRoute(
+                "a route without devices opens none".to_owned(),
+            ));
+        };
+        let (device, name, config) = find_device(host, slot.role, &slot.wanted)?;
         if config.sample_rate() != expected {
             return Err(Error::RateChanged {
                 device: name,
@@ -989,6 +997,23 @@ fn find_input(
             (opening, found.name, PROCESS_CHANNELS, rate)
         }
     };
+    let (captures, running) = make_rings(input, name, channels, sample_rate, rings);
+    Ok(FoundInput {
+        opening,
+        captures,
+        running,
+    })
+}
+
+/// Makes the rings of one input whose device delivers `channels` at `sample_rate`: one per bus,
+/// with the controls the spec sets.
+fn make_rings(
+    input: &InputSpec,
+    name: String,
+    channels: u16,
+    sample_rate: u32,
+    rings: &mut Rings<'_>,
+) -> (Vec<Capture>, RunningInput) {
     let controls = Arc::new(InputControls::default());
     controls.gain.store(db_to_linear(input.gain_db));
     controls.pan.store(input.pan);
@@ -1030,18 +1055,26 @@ fn find_input(
             routed: handle.routed,
         });
     }
-    Ok(FoundInput {
-        opening,
-        captures,
-        running: RunningInput {
-            name,
-            controls,
-            routes,
-            sample_rate,
-            present: false,
-            outages: 0,
-        },
-    })
+    let running = RunningInput {
+        name,
+        controls,
+        routes,
+        sample_rate,
+        present: false,
+        outages: 0,
+    };
+    (captures, running)
+}
+
+/// Sets the controls of a bus as the spec says.
+fn set_up_bus(handle: &BusHandle, bus: &BusSpec) {
+    handle.controls.gain.store(db_to_linear(bus.gain_db));
+    handle.controls.muted.store(bus.muted, Ordering::Relaxed);
+    handle.controls.eq.set_all(bus.eq_on, &bus.eq);
+    handle
+        .controls
+        .limiter
+        .set_all(bus.limit_on, bus.limit_db, bus.limit_lookahead_ms);
 }
 
 /// Opens every device of `spec` and starts mixing.
@@ -1088,13 +1121,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         // The input streams open first; nothing may pile up until this bus's stream calls back.
         mixer.suspend();
         let sample_rate = found.config.sample_rate();
-        handle.controls.gain.store(db_to_linear(bus.gain_db));
-        handle.controls.muted.store(bus.muted, Ordering::Relaxed);
-        handle.controls.eq.set_all(bus.eq_on, &bus.eq);
-        handle
-            .controls
-            .limiter
-            .set_all(bus.limit_on, bus.limit_db, bus.limit_lookahead_ms);
+        set_up_bus(&handle, bus);
         slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
         opening.push(Opening::Device(found.device, found.config));
         buses.push(RunningBus {
@@ -1108,7 +1135,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     }
 
     let mut running = Running {
-        host,
+        host: Some(host),
         slots,
         inputs,
         buses,

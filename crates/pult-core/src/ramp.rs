@@ -6,7 +6,7 @@
 //! nothing in a callback allocates or waits. A change without a time still takes
 //! [`MIN_RAMP_MS`]: a jump in the gain is a click in the sound.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// The shortest change: long enough to take the click out of a step, too short to hear as a
 /// fade.
@@ -14,6 +14,17 @@ pub const MIN_RAMP_MS: u32 = 5;
 
 /// The longest ramp anyone may ask for.
 pub const MAX_RAMP_MS: u32 = 60_000;
+
+/// Set only by the sabotage probe of the click test (`pult-engine/tests/clicks_sabotage.rs`):
+/// every ramp jumps to its goal at once, as if there were no smoothing. Nothing else sets it.
+static UNSMOOTHED: AtomicBool = AtomicBool::new(false);
+
+/// Switches the smoothing of all ramps in this process off (`true`) or on again: for the sabotage
+/// probe of the click test only, which shows that its detector hears what a missing ramp does.
+#[doc(hidden)]
+pub fn sabotage_smoothing(off: bool) {
+    UNSMOOTHED.store(off, Ordering::Relaxed);
+}
 
 /// A target and the time to reach it, as one word: the audio thread never sees a new value with
 /// the time of an old one.
@@ -105,6 +116,10 @@ impl Ramp {
     pub fn aim(&mut self, goal: f32, ms: u32) {
         #[allow(clippy::float_cmp)] // Exactly: a ramp ends on its goal.
         if self.is_steady() && self.current == f64::from(goal) {
+            return;
+        }
+        if UNSMOOTHED.load(Ordering::Relaxed) {
+            self.snap(goal);
             return;
         }
         let frames = (f64::from(ms.max(MIN_RAMP_MS)) * self.frames_per_ms).round();

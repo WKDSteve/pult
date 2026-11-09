@@ -64,6 +64,8 @@ cargo audit --deny warnings
 
 Die Programme liegen danach unter `target\release\pult.exe` (Kommandozeile) und `target\release\pult-app.exe` (Fenster).
 
+Knackser prüft `cargo test` ohne Audiogerät: `crates/pult-engine/tests/clicks.rs` rechnet ein Profil mit zwei Bussen durch eine Folge von Änderungen (Rampen, Szenenwechsel, Mute, Matrix, EQ und Limiter-Vorschau an/aus) mit der Engine (`pult_engine::Offline`) und sucht in der Ableitung des Ausgangs nach Sprüngen, die steiler sind, als der Testton bei seinem Pegel sein kann (`pult_core::clicks`). Die Sabotage-Probe `clicks_sabotage.rs` schaltet die Rampen ab und muss dann bei jeder Änderung einen Knackser finden.
+
 Die Toolchain gibt `rust-toolchain.toml` vor, die CI läuft auf einem Self-hosted-Windows-Runner (`.github/workflows/ci.yml`). `scripts\test-release.ps1` prüft Zip, Installation und Deinstallation ohne Build und ohne echte Installation.
 
 ## Installieren
