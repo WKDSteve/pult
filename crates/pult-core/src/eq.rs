@@ -360,6 +360,38 @@ impl Filter {
     }
 }
 
+impl Filter {
+    /// Its gain at `turn` radians per frame (the frequency over the rate times a full turn), in
+    /// dB: the magnitude of `(b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2)` at `z = e^(i turn)`.
+    fn gain_db(&self, turn: f64) -> f64 {
+        let (sin1, cos1) = turn.sin_cos();
+        let (sin2, cos2) = (2.0 * turn).sin_cos();
+        let squared = |c0: f64, c1: f64, c2: f64| {
+            let re = c0 + c1 * cos1 + c2 * cos2;
+            let im = c1 * sin1 + c2 * sin2;
+            re * re + im * im
+        };
+        10.0 * (squared(self.b0, self.b1, self.b2) / squared(1.0, self.a1, self.a2)).log10()
+    }
+}
+
+/// What `bands` do together to a sine of `freq_hz` at `rate` frames per second, in dB: the
+/// frequency response of the equalizer once its bands stand where they are set, the same filters
+/// its callback runs. For the control thread (a curve to draw); a flat band adds nothing.
+#[must_use]
+pub fn response_db(bands: &[Band], rate: u32, freq_hz: f32) -> f32 {
+    let rate = rate.max(1) as f32;
+    let turn = TAU * f64::from(freq_hz) / f64::from(rate);
+    let total: f64 = bands
+        .iter()
+        .filter(|band| band.gain_db != 0.0)
+        .map(|band| Filter::of(*band, rate).gain_db(turn))
+        .sum();
+    #[allow(clippy::cast_possible_truncation)]
+    let total = total as f32;
+    total
+}
+
 /// The equalizer inside a bus's callback.
 #[derive(Debug)]
 pub struct Equalizer {
@@ -939,5 +971,64 @@ mod tests {
                 eq.process(&controls, block, 2);
             }
         });
+    }
+
+    /// How much louder a sine of `freq` comes out, in dB, once `bands` stand and the filters have
+    /// settled.
+    fn measured_db(bands: [Band; EQ_BANDS], rate: u32, freq: f64) -> f32 {
+        let controls = EqControls::default();
+        controls.set_all(true, &bands);
+        let mut eq = Equalizer::new(rate);
+        let frames = rate as usize;
+        let turn = TAU * freq / f64::from(rate);
+        #[allow(clippy::cast_possible_truncation)]
+        let mut data: Vec<f32> = (0..frames)
+            .map(|frame| (0.5 * (turn * frame as f64).sin()) as f32)
+            .collect();
+        eq.process(&controls, &mut data, 1);
+        // The effective value over the settled half: a peak of the samples misses the crest of a
+        // high tone, which has only a few samples per period.
+        let settled = &data[frames / 2..];
+        let power: f64 =
+            settled.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / settled.len() as f64;
+        let amplitude = (2.0 * power).sqrt();
+        #[allow(clippy::cast_possible_truncation)]
+        let db = (20.0 * (amplitude / 0.5).log10()) as f32;
+        db
+    }
+
+    #[test]
+    fn the_response_is_what_a_sine_comes_out_with() {
+        let mut bands = Band::all_flat();
+        bands[0] = bands[0].with_gain(6.0);
+        bands[1] = Band {
+            kind: BandKind::Peak,
+            freq_hz: 1000.0,
+            gain_db: -9.0,
+            q: 2.0,
+        };
+        bands[3] = bands[3].with_gain(4.5);
+        for rate in [44_100, 48_000] {
+            for freq in [40.0, 100.0, 700.0, 1000.0, 1400.0, 5000.0, 12_000.0] {
+                let measured = measured_db(bands, rate, freq);
+                #[allow(clippy::cast_possible_truncation)]
+                let computed = response_db(&bands, rate, freq as f32);
+                assert!(
+                    (measured - computed).abs() < 0.05,
+                    "{rate} Hz, {freq} Hz: measured {measured}, computed {computed}"
+                );
+            }
+        }
+        // Where the bands stand at their frequencies: a shelf's own frequency is half its gain.
+        assert!((response_db(&bands, 48_000, 1000.0) + 9.0).abs() < 0.2);
+        assert!((response_db(&bands, 48_000, 20.0) - 6.0).abs() < 0.2);
+    }
+
+    #[test]
+    fn flat_bands_respond_with_nothing() {
+        let flat = Band::all_flat();
+        for freq in [20.0, 1000.0, 20_000.0] {
+            assert_eq!(response_db(&flat, 48_000, freq), 0.0);
+        }
     }
 }

@@ -196,7 +196,7 @@ pult run --profile meinprofil.toml --log abend.csv
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
   steht nur, was abweicht. `eq_on = false` schaltet alle Bänder aus, ohne ihre Einstellung zu verlieren. Hebt der EQ
   über Vollaussteuerung, fängt das der Limiter ab. Im Fenster liegen die Bänder auf dem
-  Tab **EQ**; der Schalter **EQ** steht dort und im Kanalzug des Busses. Die Fernbedienung im Browser hat den Schalter
+  Tab **EQ**, darunter je Bus die Kurve aller Bänder zusammen (20 Hz bis 20 kHz, ausgegraut bei ausgeschaltetem EQ); der Schalter **EQ** steht dort und im Kanalzug des Busses. Die Fernbedienung im Browser hat den Schalter
   und die Regler von Gate und Kompressor, die Bänder nicht.
 - **Limiter:** Jeder Bus hat hinter seinem Fader einen Limiter, von Anfang an eingeschaltet: Was den Bus verlässt, bleibt
   unter der Decke `limit_db` (Standard -0,3 dB, möglich -20 bis 0), für jedes Signal. Alle Kanäle werden gleich geregelt,

@@ -1,10 +1,12 @@
 //! The equalizer view: a row per bus with its switch and its bands, each band with its kind, gain,
-//! frequency and width, and behind them its limiter with ceiling and lookahead. A strip has no room
-//! for that; it only has the switches.
+//! frequency and width, and behind them its limiter with ceiling and lookahead; under the bands the
+//! curve of all of them together. A strip has no room for that; it only has the switches.
 
 use eframe::egui::{
-    Align, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Stroke, Ui, vec2,
+    Align, Align2, CornerRadius, FontId, Frame, Layout, Margin, Pos2, RichText, ScrollArea, Sense,
+    Stroke, Ui, pos2, vec2,
 };
+use pult_core::response_db;
 use pult_core::view::{Action, BandKind, BusView, EQ_BANDS, MixerView};
 
 use crate::binding::{BandParam, Binding, BusParam, Value, Values};
@@ -19,6 +21,15 @@ const DIAL_ROW_HEIGHT: f32 = 58.0;
 const KIND_HEIGHT: f32 = 20.0;
 const SWITCH_SIZE: [f32; 2] = [48.0, 22.0];
 const LIMIT_WIDTH: f32 = 112.0;
+const CURVE_HEIGHT: f32 = 72.0;
+/// Decibels at the upper and lower edge of the curve, unless the curve goes further.
+const CURVE_DB: f32 = 12.0;
+/// The most the curve shows up and down, in dB: the bands together can go beyond.
+const CURVE_MOST_DB: f32 = 36.0;
+/// Points the curve is drawn through.
+const CURVE_POINTS: usize = 200;
+/// The ends of the frequency axis in Hz.
+const CURVE_HZ: (f32, f32) = (20.0, 20_000.0);
 
 /// The kinds a band can have, with what their buttons say.
 const KINDS: [(BandKind, &str); 3] = [
@@ -107,6 +118,91 @@ fn bus_row(
             },
         );
     });
+    ui.add_space(6.0);
+    curve(ui, bus);
+}
+
+/// The frequency response of a bus's bands together, under the bands: frequency on a logarithmic
+/// axis from 20 Hz to 20 kHz, 0 dB marked, faint while the equalizer is switched off (the bands
+/// keep their settings, the sound passes flat).
+fn curve(ui: &mut Ui, bus: &BusView) {
+    let theme = Theme::current();
+    let (p, m) = (&theme.palette, &theme.metrics);
+    #[allow(clippy::cast_precision_loss)]
+    let width = BAND_WIDTH * EQ_BANDS as f32 + BAND_GAP * (EQ_BANDS - 1) as f32;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, CURVE_HEIGHT), Sense::hover());
+    response.on_hover_text(format!(
+        "{}: what the bands do together, 20 Hz to 20 kHz",
+        bus.shown_name()
+    ));
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, CornerRadius::same(m.radius), p.well);
+
+    let (low, high) = CURVE_HZ;
+    // Above half the rate there is no sound to shape.
+    #[allow(clippy::cast_precision_loss)]
+    let top_hz = high.min(bus.sample_rate as f32 * 0.5);
+    let span = (high / low).ln();
+    let x_of = |hz: f32| rect.left() + rect.width() * (hz / low).ln() / span;
+    #[allow(clippy::cast_precision_loss)]
+    let points: Vec<(f32, f32)> = (0..CURVE_POINTS)
+        .map(|i| {
+            let hz = low * (top_hz / low).powf(i as f32 / (CURVE_POINTS - 1) as f32);
+            (hz, response_db(&bus.eq, bus.sample_rate, hz))
+        })
+        .collect();
+    let furthest = points
+        .iter()
+        .fold(0.0_f32, |most, (_, db)| most.max(db.abs()));
+    // In steps of 6 dB, so the scale does not twitch while a gain is turned.
+    let range = (furthest / 6.0)
+        .ceil()
+        .mul_add(6.0, 0.0)
+        .clamp(CURVE_DB, CURVE_MOST_DB);
+    let middle = rect.center().y;
+    let reach = rect.height() / 2.0 - 4.0;
+    let y_of = |db: f32| middle - db.clamp(-range, range) / range * reach;
+
+    let faint = Stroke::new(1.0, p.line);
+    for hz in [100.0, 1000.0, 10_000.0] {
+        let x = x_of(hz);
+        painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], faint);
+    }
+    painter.line_segment(
+        [pos2(rect.left(), middle), pos2(rect.right(), middle)],
+        Stroke::new(1.0, p.line_strong),
+    );
+    let small = FontId::proportional(9.0);
+    for (hz, text) in [(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+        painter.text(
+            pos2(x_of(hz) + 3.0, rect.bottom() - 2.0),
+            Align2::LEFT_BOTTOM,
+            text,
+            small.clone(),
+            p.text_faint,
+        );
+    }
+    painter.text(
+        pos2(rect.left() + 4.0, rect.top() + 2.0),
+        Align2::LEFT_TOP,
+        format!("+{range:.0} dB"),
+        small.clone(),
+        p.text_faint,
+    );
+    painter.text(
+        pos2(rect.right() - 4.0, middle + 1.0),
+        Align2::RIGHT_TOP,
+        "0 dB",
+        small,
+        p.text_faint,
+    );
+
+    let line: Vec<Pos2> = points
+        .iter()
+        .map(|&(hz, db)| pos2(x_of(hz), y_of(db)))
+        .collect();
+    let color = if bus.eq_on { p.accent } else { p.text_faint };
+    painter.line(line, Stroke::new(1.5, color));
 }
 
 /// The limiter of a bus: its switch, what it is at now, ceiling and lookahead.

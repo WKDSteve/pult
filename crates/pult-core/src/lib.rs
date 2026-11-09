@@ -38,7 +38,7 @@ pub use dropouts::Dropouts;
 pub use dynamics::{
     Compressor, CompressorControls, CompressorParams, Gate, GateControls, GateParams,
 };
-pub use eq::{Band, BandKind, EQ_BANDS, EqControls, Equalizer};
+pub use eq::{Band, BandKind, EQ_BANDS, EqControls, Equalizer, response_db};
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
 pub use limiter::{LimitChange, Limiter, LimiterControls};
 pub use mixer::{
