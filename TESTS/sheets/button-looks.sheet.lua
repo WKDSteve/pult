@@ -35,10 +35,7 @@ return {
       note = "the focus ring shows",
     },
     { shot = "filled-focus-light" },
-    {
-      expect = "(document.activeElement.blur(), document.activeElement === document.body)",
-      note = "the focus off again",
-    },
+    { blur = true, note = "the focus off again" },
 
     { scheme = "dark" },
     { expect = "matchMedia('(prefers-color-scheme: dark)').matches", note = "the page sees the dark scheme" },
