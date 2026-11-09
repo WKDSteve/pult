@@ -13,6 +13,7 @@
 static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 mod binding;
+pub mod clicks;
 pub mod control;
 pub mod drift;
 pub mod dropouts;
@@ -31,6 +32,7 @@ pub mod select;
 pub mod tone;
 pub mod view;
 
+pub use clicks::{Click, Clicks};
 pub use drift::{DriftControl, Event, Plan};
 pub use dropouts::Dropouts;
 pub use dynamics::{
