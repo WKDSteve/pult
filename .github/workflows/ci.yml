@@ -66,6 +66,9 @@ jobs:
           cargo audit --deny warnings
           --ignore RUSTSEC-2026-0370 --ignore RUSTSEC-2026-0371 --ignore RUSTSEC-2026-0372
       - run: cargo deny check
+      # No crate version younger than a week (a hijacked release is caught within hours, usually); one request a
+      # second to crates.io, some minutes. A bump of appkit (its tools/bump-apps.py --hold-back) runs it too.
+      - run: python tools/check-lock-age.py --min-days 7
 
   # pult is meant to work on Linux and macOS as on Windows. Linux runs for real in the WSL of this
   # machine (its tests need no audio device; the build stays in the home of the WSL, off the slow
