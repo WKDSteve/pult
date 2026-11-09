@@ -320,7 +320,8 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 - **Ohne Knacken:** Keine Änderung springt. Gain, Pan, Mute und Solo gleiten mindestens 5 ms, ein Eingang blendet beim
   Ein- und Ausrouten aus bzw. ein. Gate und Kompressor gehen beim Ausschalten in ihrer eigenen Zeit zurück. Ein Band des EQ
   gleitet im Gain, wandert in Frequenz und Breite und wechselt seine Art über die flache Stellung. Anzeigen und `show` nennen schon das Ziel, der Ton folgt in der angegebenen Zeit. Geht
-  ein Eingang neu auf einen Bus, setzt er nach dem Füllen seines Puffers ein; rund 2 s später gleicht pult einmalig seinen
+  ein Eingang neu auf einen Bus (oder spielt er nach einem Aussetzer wieder), blendet er nach dem Füllen seines Puffers
+  in 5 ms ein; rund 2 s später gleicht pult einmalig seinen
   Versatz aus, was bei einem größeren Versatz leise zu hören sein kann.
 - **Von außen:** Andere Programme auf diesem Rechner können eine laufende Route lesen und steuern, siehe
   [`CONTROL.md`](CONTROL.md). Was sie ändern, steht als `remote: …` über der Eingabezeile.

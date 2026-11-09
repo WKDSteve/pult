@@ -43,7 +43,7 @@ use crate::dynamics::{Compressor, CompressorControls, Gate, GateControls};
 use crate::eq::{EqControls, Equalizer};
 use crate::level::{AtomicF32, Counter, PeakMeter};
 use crate::limiter::{Limiter, LimiterControls};
-use crate::ramp::{Follower, Glide};
+use crate::ramp::{Follower, Glide, MIN_RAMP_MS};
 use crate::rate::RateControl;
 use crate::remix::{remix_add, remix_add_ramped};
 
@@ -270,6 +270,9 @@ pub fn connect_with(
         compressor: Compressor::new(config.output_rate),
         gain: Follower::new(config.output_rate),
         pan: Follower::new(config.output_rate),
+        onset_frames: (u64::from(config.input_rate) * u64::from(MIN_RAMP_MS) / 1000).max(1)
+            as usize,
+        onset: 0,
     };
     (capture, input, handle)
 }
@@ -360,6 +363,11 @@ pub struct MixerInput {
     gain: Follower,
     /// Where the pan stands.
     pan: Follower,
+    /// Input frames over which the sound fades in where it starts after a priming: what the ring
+    /// gives then begins anywhere in its waveform.
+    onset_frames: usize,
+    /// Input frames of that fade-in done so far.
+    onset: usize,
 }
 
 impl MixerInput {
@@ -400,6 +408,7 @@ impl MixerInput {
         }
         self.drift.reset();
         self.resampler.reset();
+        self.onset = 0;
         self.rate.reset();
         self.gate.start_over();
         self.compressor.start_over();
@@ -453,6 +462,26 @@ impl MixerInput {
         }
     }
 
+    /// Fades in the first `frames` frames of `scratch` while the fade-in after a priming lasts.
+    /// It works on the input, before the resampler: a ramp of the gain behind it would start
+    /// before the sound, which the filter of the resampler delays.
+    fn fade_in(&mut self, frames: usize) {
+        if self.onset >= self.onset_frames {
+            return;
+        }
+        let ch = self.channels;
+        for frame in self.scratch[..frames * ch].chunks_exact_mut(ch) {
+            if self.onset >= self.onset_frames {
+                break;
+            }
+            let gain = self.onset as f32 / self.onset_frames as f32;
+            for sample in frame {
+                *sample *= gain;
+            }
+            self.onset += 1;
+        }
+    }
+
     /// Fills `resampled` with `frames` output frames (at most [`MAX_CHUNK`]): reads what the
     /// resampler needs per the drift plan, resamples it and steers the ratio by the level.
     /// False, with nothing in `resampled`, while the ring primes.
@@ -483,6 +512,7 @@ impl MixerInput {
             self.scratch[first.len()..read].copy_from_slice(second);
             chunk.commit_all();
         }
+        self.fade_in(plan.read);
         self.scratch[read..needed * ch].fill(0.0);
 
         let input = InterleavedSlice::new(&self.scratch[..needed * ch], ch, needed);
@@ -498,8 +528,10 @@ impl MixerInput {
             self.resampled[..end].fill(0.0);
         }
         if event == Event::Underrun {
-            // The silence after an underrun starts the next priming from a clean filter.
+            // The silence after an underrun starts the next priming from a clean filter, and
+            // the sound after it fades in again.
             self.resampler.reset();
+            self.onset = 0;
             return true;
         }
         if let Some(error) = self.drift.steady_error() {
@@ -767,6 +799,49 @@ mod tests {
         assert!(all_near(&out, &[0.2]), "{:?}", &out[..1]);
     }
 
+    /// Runs `callbacks` callbacks of a 103 Hz tone at half scale through `capture` and returns all
+    /// that `mixer` plays (mono).
+    fn record_tone(
+        mixer: &mut Mixer,
+        capture: &mut Capture,
+        tone: &mut crate::tone::Sine,
+        callbacks: usize,
+    ) -> Vec<f32> {
+        let mut all = Vec::with_capacity(callbacks * PERIOD);
+        let mut feed = vec![0.0; PERIOD];
+        let mut out = vec![0.0; PERIOD];
+        for _ in 0..callbacks {
+            tone.fill(&mut feed, 1);
+            capture.push(&feed);
+            mixer.process(&mut out);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+
+    #[test]
+    fn a_ring_starts_to_play_without_a_click() {
+        // The sound a ring gives after priming begins anywhere in its waveform; it fades in on
+        // the input side, since a ramp of the gain behind the resampler would be partly over
+        // before the filter lets the sound through.
+        let detector = crate::clicks::Clicks::for_tone(103.0, 48_000);
+        let mut tone = crate::tone::Sine::new(103.0, 48_000, 0.5);
+        let (mut capture, input, handle) = connect(config(1, 480));
+        let (mut mixer, _) = Mixer::new(vec![input], 1);
+        mixer.resume(1);
+        let started = record_tone(&mut mixer, &mut capture, &mut tone, 20);
+        assert!(started.iter().any(|s| s.abs() > 0.4), "it plays");
+        assert_eq!(detector.find(&started, 1), Vec::new(), "at the start");
+
+        // Off and on again with the matrix button: primes afresh and fades in.
+        handle.routed.store(false, Ordering::Release);
+        record_tone(&mut mixer, &mut capture, &mut tone, 5);
+        handle.routed.store(true, Ordering::Release);
+        let again = record_tone(&mut mixer, &mut capture, &mut tone, 20);
+        assert!(again.iter().any(|s| s.abs() > 0.4), "it plays again");
+        assert_eq!(detector.find(&again, 1), Vec::new(), "routed again");
+    }
+
     /// Runs `callbacks` callbacks of `value` on one mono ring into a mono bus and returns all
     /// of the output.
     fn record(mixer: &mut Mixer, capture: &mut Capture, value: f32, callbacks: usize) -> Vec<f32> {
@@ -1011,8 +1086,9 @@ mod tests {
         let first = out.iter().position(|&o| o != 0.0).expect("it plays");
         assert!(first > 0, "it primes first");
         // Constant level starting from nothing rings through the filter (a real signal rings
-        // far less); near the start of the fade that is what the fade is there to quieten.
-        let (ringing, rest) = out[first..].split_at(256);
+        // far less); near the start of the fade that is what the fade is there to quieten. The
+        // sound itself fades in over its first 5 ms too (before the resampler, so 64 frames late).
+        let (ringing, rest) = out[first..].split_at(512);
         assert!(largest_step(ringing) < 0.02, "{}", largest_step(ringing));
         assert!(
             largest_step(rest) < 0.5 / 2400.0 * 1.5,
