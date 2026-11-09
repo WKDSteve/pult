@@ -3,6 +3,7 @@ without what it asks for (a sabotage of the real text must be found)."""
 
 import importlib.util
 import pathlib
+import re
 import subprocess
 import unittest
 from unittest import mock
@@ -16,11 +17,15 @@ spec.loader.exec_module(check)
 
 CHECKOUT = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 KIT = "WKDSteve/appkit/release-kit"
-PIN = "3bd4aa915514681e44509f330db4cfc85e378fc7"
 
 
 def real():
     return {p.name: p.read_text(encoding="utf-8") for p in sorted(WORKFLOWS.glob("*.yml"))}
+
+
+# The commit the kit's actions are pinned by, as the release workflow has it: read, not written down, so a bump of
+# appkit (tools/bump-apps.py there) does not have to touch the tests.
+PIN = re.search(rf"{KIT}/publish@([0-9a-f]{{40}})", real()["release.yml"]).group(1)
 
 
 def sabotaged(name, old, new, count=1):
