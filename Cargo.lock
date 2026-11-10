@@ -209,7 +209,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "appkit-core"
 version = "0.0.0"
-source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.0#358141485026d89625dce28e95d79a6529a64f03"
+source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.1#ed916dd163a8935570f19c332a1e6bf09eb75cfd"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
@@ -221,7 +221,7 @@ dependencies = [
 [[package]]
 name = "appkit-hub"
 version = "0.0.0"
-source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.0#358141485026d89625dce28e95d79a6529a64f03"
+source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.1#ed916dd163a8935570f19c332a1e6bf09eb75cfd"
 dependencies = [
  "appkit-core",
  "axum",
@@ -239,7 +239,7 @@ dependencies = [
 [[package]]
 name = "appkit-scratch"
 version = "0.0.0"
-source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.0#358141485026d89625dce28e95d79a6529a64f03"
+source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.1#ed916dd163a8935570f19c332a1e6bf09eb75cfd"
 dependencies = [
  "tempfile",
 ]
@@ -247,7 +247,7 @@ dependencies = [
 [[package]]
 name = "appkit-testkit"
 version = "0.0.0"
-source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.0#358141485026d89625dce28e95d79a6529a64f03"
+source = "git+https://github.com/WKDSteve/appkit?tag=v0.44.1#ed916dd163a8935570f19c332a1e6bf09eb75cfd"
 dependencies = [
  "appkit-core",
  "appkit-hub",
@@ -275,7 +275,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1465,7 +1465,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3772,7 +3772,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4163,10 +4163,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4939,7 +4939,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
