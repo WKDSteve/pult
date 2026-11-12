@@ -347,7 +347,7 @@ impl ChannelStrip {
                 *sample = -*sample;
             }
         }
-        self.filter(controls, &settings, block);
+        self.filter(controls, block);
         self.delay(&settings, block);
         if ch == 2 && (settings.width - 100.0).abs() > 1e-3 {
             let side = settings.width / 100.0;
@@ -360,20 +360,23 @@ impl ChannelStrip {
         }
     }
 
-    fn filter(&mut self, controls: &StripControls, settings: &StripSettings, block: &mut [f32]) {
+    fn filter(&mut self, controls: &StripControls, block: &mut [f32]) {
         let ch = self.channels;
+        // The generation first, the corners after it: a corner read before would be one older
+        // than the generation it is remembered with, and its change lost until the next one.
         let generation = controls.generation.load(Ordering::Acquire);
         if self.seen != Some(generation) {
-            let high_on = settings.hpf_hz > HPF_RANGE_HZ.0;
-            let low_on = settings.lpf_hz < LPF_RANGE_HZ.1;
+            let (hpf_hz, lpf_hz) = (controls.hpf_hz.load(), controls.lpf_hz.load());
+            let high_on = hpf_hz > HPF_RANGE_HZ.0;
+            let low_on = lpf_hz < LPF_RANGE_HZ.1;
             for filter in &mut self.high {
-                filter.high_pass(settings.hpf_hz, self.rate);
+                filter.high_pass(hpf_hz, self.rate);
                 if !self.high_on {
                     filter.start_over();
                 }
             }
             for filter in &mut self.low {
-                filter.low_pass(settings.lpf_hz, self.rate);
+                filter.low_pass(lpf_hz, self.rate);
                 if !self.low_on {
                     filter.start_over();
                 }
