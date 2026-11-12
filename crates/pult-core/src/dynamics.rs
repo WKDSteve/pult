@@ -566,6 +566,29 @@ impl Compressor {
 
     /// Compresses `data` (interleaved, `channels` per frame) in place as `controls` say.
     pub fn process(&mut self, controls: &CompressorControls, data: &mut [f32], channels: usize) {
+        self.run(controls, data, None, channels);
+    }
+
+    /// Compresses `data` by the level of `key` (the same frames, for example filtered: a
+    /// sidechain), as `controls` say. A `key` of another length is not taken: `data` keys itself.
+    pub fn process_keyed(
+        &mut self,
+        controls: &CompressorControls,
+        data: &mut [f32],
+        key: &[f32],
+        channels: usize,
+    ) {
+        let key = (key.len() == data.len()).then_some(key);
+        self.run(controls, data, key, channels);
+    }
+
+    fn run(
+        &mut self,
+        controls: &CompressorControls,
+        data: &mut [f32],
+        key: Option<&[f32]>,
+        channels: usize,
+    ) {
         if channels == 0 {
             return;
         }
@@ -578,8 +601,8 @@ impl Compressor {
         if resting {
             // Nothing above the bend in all of it: one gain for everything, without measuring
             // frame by frame.
-            let quiet =
-                self.taken == 0.0 || level_db(loudest(data)) <= self.threshold_db - KNEE_DB / 2.0;
+            let quiet = self.taken == 0.0
+                || level_db(loudest(key.unwrap_or(data))) <= self.threshold_db - KNEE_DB / 2.0;
             if quiet {
                 if self.makeup_db != 0.0 {
                     let gain = gain_of(self.makeup_db);
@@ -591,8 +614,12 @@ impl Compressor {
             }
         }
         let mut wanted = 0.0;
-        for frame in data.chunks_exact_mut(channels) {
-            wanted = f64::from(self.taken * bent(level_db(loudest(frame)) - self.threshold_db));
+        for (index, frame) in data.chunks_exact_mut(channels).enumerate() {
+            let level = match key {
+                Some(key) => loudest(&key[index * channels..(index + 1) * channels]),
+                None => loudest(frame),
+            };
+            wanted = f64::from(self.taken * bent(level_db(level) - self.threshold_db));
             let pace = if wanted > self.reduction_db {
                 self.attack
             } else {

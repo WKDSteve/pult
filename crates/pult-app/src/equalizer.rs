@@ -110,6 +110,14 @@ fn bus_row(
             );
         }
         ui.allocate_ui_with_layout(
+            vec2(COMP_WIDTH, KIND_HEIGHT + DIAL_ROW_HEIGHT + 22.0),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(COMP_WIDTH);
+                comp_column(ui, index, values, actions);
+            },
+        );
+        ui.allocate_ui_with_layout(
             vec2(LIMIT_WIDTH, KIND_HEIGHT + DIAL_ROW_HEIGHT + 22.0),
             Layout::top_down(Align::Min),
             |ui| {
@@ -203,6 +211,50 @@ fn curve(ui: &mut Ui, bus: &BusView) {
         .collect();
     let color = if bus.eq_on { p.accent } else { p.text_faint };
     painter.line(line, Stroke::new(1.5, color));
+}
+
+/// Width of the column of the bus compressor: three dials.
+const COMP_WIDTH: f32 = 150.0;
+
+/// The compressor of a bus, before its fader and limiter: its knob, the mix of dry and
+/// compressed, the sidechain filter, and what it takes away now.
+fn comp_column(ui: &mut Ui, bus: usize, values: &mut Values<'_>, actions: &mut Vec<Action>) {
+    let p = &Theme::current().palette;
+    let taken = values.view().buses.get(bus).map_or(0.0, |b| {
+        if b.comp > 0.0 {
+            b.comp_reduction_db
+        } else {
+            0.0
+        }
+    });
+    let head = if taken >= 0.05 {
+        format!("COMPRESSOR  -{taken:.1} dB")
+    } else {
+        "COMPRESSOR".to_owned()
+    };
+    let color = if taken >= 0.05 {
+        p.accent
+    } else {
+        p.text_faint
+    };
+    ui.label(RichText::new(head).size(9.5).color(color));
+    ui.add_space(4.0 + KIND_HEIGHT);
+    ui.allocate_ui_with_layout(
+        vec2(COMP_WIDTH, DIAL_ROW_HEIGHT),
+        Layout::left_to_right(Align::Min),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let width = COMP_WIDTH / 3.0;
+            for (param, text) in [
+                (BusParam::Comp, "COMP"),
+                (BusParam::CompMix, "MIX"),
+                (BusParam::CompHpf, "HPF"),
+            ] {
+                let dial = Binding::Bus(bus, param);
+                actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, width));
+            }
+        },
+    );
 }
 
 /// The limiter of a bus: its switch, what it is at now, ceiling and lookahead.

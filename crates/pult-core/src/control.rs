@@ -69,6 +69,12 @@ pub enum Command {
     Limit(usize, LimitChange),
     /// Makes a bus a monitor bus (the one solo acts on) or takes that away.
     Monitor(usize, bool),
+    /// Sets the compressor of a bus by its one knob, 0 (off) to 10.
+    BusComp(usize, f32),
+    /// Sets the mix of the compressor of a bus in percent.
+    BusCompMix(usize, f32),
+    /// Sets the sidechain high-pass of the compressor of a bus in Hz.
+    BusCompHpf(usize, f32),
     /// Takes an input into the automixer or out of it.
     Automix(usize, bool),
     /// Sets the priority of an input in the automixer in dB.
@@ -106,6 +112,8 @@ solo <input>         hear only the soloed inputs; unsolo <input> undoes it
 pan <input> <-1..1>  pan a mono input, balance a stereo one
 gate <input> <0..10> keep an input quiet below a level (gate 2 3); gate 2 off undoes it
 comp <input> <0..10> even out an input's level and make it louder; comp 2 off undoes it
+comp <bus> <0..10>   the bus compressor on the sum (comp A1 3); comp <bus> mix <0..100> blends
+                     in the dry sum, comp <bus> hpf <20..500> keeps the bass from pumping
 eq <bus> on|off      switch the equalizer of a bus
 eq <bus> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
@@ -234,6 +242,12 @@ pub fn parse<S: AsRef<str>>(
                 Target::Bus(_) => error("pan works on inputs only"),
             }
         }
+        "comp" | "compressor"
+            if matches!(rest, [.., setting, _] if setting.eq_ignore_ascii_case("mix")
+                || setting.eq_ignore_ascii_case("hpf")) =>
+        {
+            bus_comp(rest, names)
+        }
         "gate" | "comp" | "compressor" => {
             let gate = keyword.eq_ignore_ascii_case("gate");
             let usage = if gate {
@@ -253,6 +267,7 @@ pub fn parse<S: AsRef<str>>(
             match target(&name, names)? {
                 Target::Input(index) if gate => Ok(Command::Gate(index, amount)),
                 Target::Input(index) => Ok(Command::Comp(index, amount)),
+                Target::Bus(index) if !gate => Ok(Command::BusComp(index, amount)),
                 Target::Bus(_) => error(format!("{keyword} works on inputs only")),
             }
         }
@@ -268,6 +283,24 @@ pub fn parse<S: AsRef<str>>(
         "automix" => automix(rest, names),
         other => error(format!("unknown command \"{other}\"; type help")),
     }
+}
+
+/// `comp <bus> mix <0..100>` or `comp <bus> hpf <Hz>`; the bus may have several words.
+fn bus_comp<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let [bus @ .., setting, value] = rest else {
+        return error("usage: comp <bus> mix <0..100>, or comp <bus> hpf <20..500>");
+    };
+    let value: f32 = value
+        .parse()
+        .map_err(|_| ParseError(format!("{setting} takes a number, not \"{value}\"")))?;
+    let Target::Bus(index) = target(&bus.join(" "), names)? else {
+        return error(format!("comp {setting} works on buses only"));
+    };
+    Ok(if setting.eq_ignore_ascii_case("mix") {
+        Command::BusCompMix(index, value)
+    } else {
+        Command::BusCompHpf(index, value)
+    })
 }
 
 /// `automix <input> on|off` or `automix <input> weight <dB>`; the input may have several words.
@@ -602,6 +635,22 @@ mod tests {
     }
 
     #[test]
+    fn comp_on_a_bus_is_its_bus_compressor() {
+        assert_eq!(ok("comp A1 3"), Command::BusComp(0, 3.0));
+        assert_eq!(ok("comp b2 off"), Command::BusComp(1, 0.0));
+        assert_eq!(ok("comp A1 mix 40"), Command::BusCompMix(0, 40.0));
+        assert_eq!(ok("COMP b2 HPF 120"), Command::BusCompHpf(1, 120.0));
+        assert_eq!(
+            ok("comp 2 4"),
+            Command::Comp(1, 4.0),
+            "an input keeps its own"
+        );
+        assert!(bad("gate A1 3").contains("inputs only"));
+        assert!(bad("comp 2 mix 40").contains("buses only"));
+        assert!(bad("comp A1 mix lots").contains("takes a number"));
+    }
+
+    #[test]
     fn automix_switches_an_input_and_weights_it() {
         assert_eq!(ok("automix 2 on"), Command::Automix(1, true));
         assert_eq!(ok("AUTOMIX cable OFF"), Command::Automix(0, false));
@@ -852,7 +901,7 @@ mod tests {
         assert!(bad("eq A1 2 slope 3").contains("\"slope\" is no setting of a band"));
         assert!(bad("eq A1 2 kind notch").contains("kinds are low, bell and high"));
         assert!(bad("eq Z9 2 gain 3").contains("no input or bus matches"));
-        assert!(bad("comp B2 off").contains("comp works on inputs only"));
+        // comp on a bus is its bus compressor (comp_on_a_bus_is_its_bus_compressor).
         assert!(bad("gate 2").contains("usage: gate <input> <0..10|off>"));
         assert!(bad("comp off").contains("usage: comp <input> <0..10|off>"));
         assert!(bad("comp 2 viel").contains("\"viel\" is not a number"));

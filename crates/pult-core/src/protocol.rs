@@ -196,6 +196,18 @@ pub struct BusState {
     /// Its loudness after EBU R128.
     #[serde(default)]
     pub loudness: LoudnessState,
+    /// Its compressor as one knob, 0 (off) to 10.
+    #[serde(default)]
+    pub comp: f32,
+    /// The mix of its compressor in percent.
+    #[serde(default = "full_mix")]
+    pub comp_mix: f32,
+    /// The corner of the sidechain high-pass of its compressor in Hz.
+    #[serde(default = "lowest_hpf")]
+    pub comp_hpf_hz: f32,
+    /// The most its compressor took away since the previous state, in dB.
+    #[serde(default)]
+    pub comp_reduction_db: f32,
     /// How far its limiter turned down at most since the previous state, in dB; 0 when it did not.
     #[serde(default)]
     pub limited_db: f32,
@@ -286,6 +298,16 @@ impl State {
     }
 }
 
+/// A bus compressor is all compressed in a state that does not say.
+fn full_mix() -> f32 {
+    100.0
+}
+
+/// Its sidechain filter is at its lowest in a state that does not say.
+fn lowest_hpf() -> f32 {
+    crate::buscomp::HPF_HZ.0
+}
+
 /// A gate counts as open in a state that does not say.
 fn open() -> bool {
     true
@@ -354,6 +376,10 @@ impl BusState {
             limit_lookahead_ms: bus.limit_lookahead_ms,
             monitor: bus.monitor,
             minus: bus.minus.map(|input| input + 1),
+            comp: bus.comp,
+            comp_mix: bus.comp_mix,
+            comp_hpf_hz: bus.comp_hpf_hz,
+            comp_reduction_db: bus.comp_reduction_db,
             loudness: LoudnessState {
                 momentary_lufs: bus.loudness.momentary_lufs,
                 short_term_lufs: bus.loudness.short_term_lufs,
@@ -437,6 +463,9 @@ impl Op {
             value,
             ramp_ms: (ramp_ms > 0).then_some(ramp_ms),
         };
+        let on_bus = |to: usize, param: &str, value: OpValue| {
+            Some(set(format!("bus/{}/{param}", bus(to)?), value, 0))
+        };
         Some(match command {
             Command::Gain(to, db, ramp_ms) => {
                 set(target(*to, "gain")?, OpValue::Number(*db), *ramp_ms)
@@ -462,7 +491,7 @@ impl Op {
                 OpValue::Number(*amount),
                 0,
             ),
-            Command::Eq(to, on) => set(format!("bus/{}/eq", bus(*to)?), OpValue::Switch(*on), 0),
+            Command::Eq(to, on) => on_bus(*to, "eq", OpValue::Switch(*on))?,
             Command::EqBand(to, band, change) => {
                 let (setting, value) = match change {
                     BandChange::Kind(kind) => ("kind", OpValue::Word(kind.word().to_owned())),
@@ -473,24 +502,19 @@ impl Op {
                 let address = format!("bus/{}/eq/{}/{setting}", bus(*to)?, band + 1);
                 set(address, value, 0)
             }
-            Command::Limit(to, change) => {
-                let bus = bus(*to)?;
-                let (address, value) = match change {
-                    LimitChange::Switch(on) => (format!("bus/{bus}/limit"), OpValue::Switch(*on)),
-                    LimitChange::Ceiling(db) => {
-                        (format!("bus/{bus}/limit/ceiling"), OpValue::Number(*db))
-                    }
-                    LimitChange::Lookahead(ms) => {
-                        (format!("bus/{bus}/limit/lookahead"), OpValue::Number(*ms))
-                    }
-                };
-                set(address, value, 0)
-            }
+            Command::Limit(to, change) => match change {
+                LimitChange::Switch(on) => on_bus(*to, "limit", OpValue::Switch(*on))?,
+                LimitChange::Ceiling(db) => on_bus(*to, "limit/ceiling", OpValue::Number(*db))?,
+                LimitChange::Lookahead(ms) => on_bus(*to, "limit/lookahead", OpValue::Number(*ms))?,
+            },
             Command::Route(input, to, on) => set(
                 format!("matrix/{}/{}", input + 1, bus(*to)?),
                 OpValue::Switch(*on),
                 0,
             ),
+            Command::BusComp(to, amount) => on_bus(*to, "comp", OpValue::Number(*amount))?,
+            Command::BusCompMix(to, percent) => on_bus(*to, "comp/mix", OpValue::Number(*percent))?,
+            Command::BusCompHpf(to, hz) => on_bus(*to, "comp/hpf", OpValue::Number(*hz))?,
             Command::Automix(input, on) => set(
                 format!("input/{}/automix", input + 1),
                 OpValue::Switch(*on),
@@ -501,11 +525,7 @@ impl Op {
                 OpValue::Number(*db),
                 0,
             ),
-            Command::Monitor(to, on) => set(
-                format!("bus/{}/monitor", bus(*to)?),
-                OpValue::Switch(*on),
-                0,
-            ),
+            Command::Monitor(to, on) => on_bus(*to, "monitor", OpValue::Switch(*on))?,
             Command::Send(input, to, db, ramp_ms) => set(
                 format!("send/{}/{}", input + 1, bus(*to)?),
                 OpValue::Number(*db),
@@ -568,6 +588,24 @@ impl Op {
     }
 }
 
+/// The mix (percent) or the sidechain corner (Hz) of a bus compressor, checked.
+fn comp_setting(param: BusParam, number: f32, address: &str) -> Result<Value, String> {
+    if param == BusParam::CompMix {
+        if (0.0..=100.0).contains(&number) {
+            Ok(Value::Percent(number))
+        } else {
+            Err(format!("{address} takes 0 to 100, not {number}"))
+        }
+    } else {
+        let (low, high) = crate::buscomp::HPF_HZ;
+        if (low..=high).contains(&number) {
+            Ok(Value::Freq(number))
+        } else {
+            Err(format!("{address} takes {low} to {high} Hz, not {number}"))
+        }
+    }
+}
+
 /// `value` as the kind of value `binding` takes.
 fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, String> {
     use BusParam::EqBand;
@@ -609,12 +647,16 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         (Binding::Input(_, InputParam::Pan), OpValue::Number(pan)) => {
             Ok(Value::Pan(wants_number(*pan)?))
         }
+        (Binding::Bus(_, param @ (BusParam::CompMix | BusParam::CompHpf)), OpValue::Number(n)) => {
+            comp_setting(param, wants_number(*n)?, address)
+        }
         (Binding::Input(_, InputParam::Gate), OpValue::Number(amount)) => {
             check_amount("gate", wants_number(*amount)?).map(Value::Amount)
         }
-        (Binding::Input(_, InputParam::Comp), OpValue::Number(amount)) => {
-            check_amount("comp", wants_number(*amount)?).map(Value::Amount)
-        }
+        (
+            Binding::Input(_, InputParam::Comp) | Binding::Bus(_, BusParam::Comp),
+            OpValue::Number(amount),
+        ) => check_amount("comp", wants_number(*amount)?).map(Value::Amount),
         (Binding::Bus(_, EqBand(_, BandParam::Gain)), OpValue::Number(db)) => {
             band(BandChange::Gain(wants_number(*db)?)).map(|_| Value::Boost(*db))
         }
@@ -815,6 +857,25 @@ mod tests {
 
     #[test]
     fn sends_and_the_automixer_are_set_by_address() {
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/comp","value":4}"#),
+            Ok(Action::BusComp {
+                bus: 0,
+                amount: 4.0
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/comp/mix","value":40}"#),
+            Ok(Action::BusCompMix {
+                bus: 0,
+                percent: 40.0
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/comp/hpf","value":120}"#),
+            Ok(Action::BusCompHpf { bus: 0, hz: 120.0 })
+        );
+        assert!(action(r#"{"op":"set","address":"bus/A1/comp/hpf","value":5}"#).is_err());
         assert_eq!(
             action(r#"{"op":"set","address":"send/2/A1","value":-6,"ramp_ms":200}"#),
             Ok(Action::Send {

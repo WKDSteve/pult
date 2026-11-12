@@ -16,6 +16,9 @@
 //!                              # the fader, so it keeps its level when the fader moves
 //! eq_on = true                 # optional: false switches the equalizer off, keeping its bands
 //! monitor = false              # optional: the monitor bus, the only one solo acts on
+//! comp = 0                     # optional, 0 (off) to 10: the bus compressor on the sum
+//! comp_mix = 100               # optional, 0 (dry) to 100 (all compressed): parallel compression
+//! comp_hpf_hz = 20             # optional, 20 to 500: the sidechain filter, keeps bass from pumping
 //! minus = 2                    # optional: a mix-minus (N-1) bus for input 2, a caller: it gets
 //!                              # everything but that input, which can never be routed to it
 //! limit_on = true              # optional: false switches the limiter off
@@ -170,6 +173,10 @@ struct BusEntry {
     limit_on: Option<bool>,
     limit_db: Option<f32>,
     limit_lookahead_ms: Option<f32>,
+    #[serde(default)]
+    comp: f32,
+    comp_mix: Option<f32>,
+    comp_hpf_hz: Option<f32>,
     #[serde(default)]
     monitor: bool,
     minus: Option<usize>,
@@ -497,6 +504,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
         }
         check_gain(&format!("bus {}", entry.name), entry.gain_db)?;
         check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
+        let (comp, comp_mix, comp_hpf_hz) = bus_comp_of(&entry)?;
         let eq = bands(&format!("bus {}", entry.name), entry.eq)?;
         let limit_db = entry.limit_db.unwrap_or(DEFAULT_CEILING_DB);
         let limit_lookahead_ms = entry.limit_lookahead_ms.unwrap_or(DEFAULT_LOOKAHEAD_MS);
@@ -522,6 +530,9 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             monitor: entry.monitor,
             // A number from 1 here; checked against the inputs once they are read.
             minus: entry.minus,
+            comp,
+            comp_mix,
+            comp_hpf_hz,
         });
     }
     Ok(buses)
@@ -640,6 +651,42 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
 }
 
 /// The limiter of `bus` in a profile: only what differs from how it starts.
+/// The bus compressor of `entry`, checked: knob, mix in percent, sidechain filter in Hz.
+fn bus_comp_of(entry: &BusEntry) -> Result<(f32, f32, f32), ProfileError> {
+    let (low, high) = pult_core::buscomp::HPF_HZ;
+    let comp = pult_core::view::check_amount("comp", entry.comp)
+        .map_err(|why| ProfileError(format!("bus {}: {why}", entry.name)))?;
+    let mix = entry.comp_mix.unwrap_or(100.0);
+    if !(0.0..=100.0).contains(&mix) {
+        return fail(format!(
+            "bus {}: comp_mix must be 0 to 100, not {mix}",
+            entry.name
+        ));
+    }
+    let hz = entry.comp_hpf_hz.unwrap_or(low);
+    if !(low..=high).contains(&hz) {
+        return fail(format!(
+            "bus {}: comp_hpf_hz must be {low} to {high}, not {hz}",
+            entry.name
+        ));
+    }
+    Ok((comp, mix, hz))
+}
+
+/// The lines of a bus compressor that is not as it starts.
+#[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+fn render_comp(text: &mut String, bus: &BusSpec) {
+    if bus.comp != 0.0 {
+        let _ = writeln!(text, "comp = {}", bus.comp);
+    }
+    if bus.comp_mix != 100.0 {
+        let _ = writeln!(text, "comp_mix = {}", bus.comp_mix);
+    }
+    if bus.comp_hpf_hz != pult_core::buscomp::HPF_HZ.0 {
+        let _ = writeln!(text, "comp_hpf_hz = {}", bus.comp_hpf_hz);
+    }
+}
+
 fn render_limit(text: &mut String, bus: &BusSpec) {
     if !bus.limit_on {
         text.push_str("limit_on = false\n");
@@ -680,6 +727,7 @@ pub fn render(spec: &RouteSpec) -> String {
             let _ = writeln!(text, "minus = {}", input + 1);
         }
         render_limit(&mut text, bus);
+        render_comp(&mut text, bus);
         // Only the bands that are not as they start: most buses have none.
         for (index, band) in bus.eq.iter().enumerate() {
             if *band != Band::at(index) {
@@ -854,6 +902,52 @@ pub fn merge(existing: &str, spec: &RouteSpec) -> String {
         .unwrap_or_else(|| render(spec))
 }
 
+/// The settings of `bus` into its table, all but its name, device and equalizer.
+fn set_bus(table: &mut Table, bus: &BusSpec) {
+    set_label(table, bus.label.as_ref());
+    set_number(table, "gain_db", bus.gain_db);
+    set_switch(table, "mute", bus.muted);
+    // On unless the file says otherwise.
+    if table.get("eq_on").and_then(Item::as_bool).unwrap_or(true) != bus.eq_on {
+        set(table, "eq_on", bus.eq_on.into());
+    }
+    if table
+        .get("limit_on")
+        .and_then(Item::as_bool)
+        .unwrap_or(true)
+        != bus.limit_on
+    {
+        set(table, "limit_on", bus.limit_on.into());
+    }
+    set_number_from(table, "limit_db", bus.limit_db, DEFAULT_CEILING_DB);
+    set_number_from(
+        table,
+        "limit_lookahead_ms",
+        bus.limit_lookahead_ms,
+        DEFAULT_LOOKAHEAD_MS,
+    );
+    set_switch(table, "monitor", bus.monitor);
+    set_number_from(table, "comp", bus.comp, 0.0);
+    set_number_from(table, "comp_mix", bus.comp_mix, 100.0);
+    set_number_from(
+        table,
+        "comp_hpf_hz",
+        bus.comp_hpf_hz,
+        pult_core::buscomp::HPF_HZ.0,
+    );
+    match bus.minus {
+        Some(input) => {
+            let number = i64::try_from(input + 1).unwrap_or(i64::MAX);
+            if table.get("minus").and_then(Item::as_integer) != Some(number) {
+                set(table, "minus", number.into());
+            }
+        }
+        None => {
+            table.remove("minus");
+        }
+    }
+}
+
 /// The merge itself; `None` when `existing` is not a profile of these buses and inputs.
 fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
     let mut file: DocumentMut = existing.parse().ok()?;
@@ -880,40 +974,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         {
             return None;
         }
-        set_label(table, bus.label.as_ref());
-        set_number(table, "gain_db", bus.gain_db);
-        set_switch(table, "mute", bus.muted);
-        // On unless the file says otherwise.
-        if table.get("eq_on").and_then(Item::as_bool).unwrap_or(true) != bus.eq_on {
-            set(table, "eq_on", bus.eq_on.into());
-        }
-        if table
-            .get("limit_on")
-            .and_then(Item::as_bool)
-            .unwrap_or(true)
-            != bus.limit_on
-        {
-            set(table, "limit_on", bus.limit_on.into());
-        }
-        set_number_from(table, "limit_db", bus.limit_db, DEFAULT_CEILING_DB);
-        set_number_from(
-            table,
-            "limit_lookahead_ms",
-            bus.limit_lookahead_ms,
-            DEFAULT_LOOKAHEAD_MS,
-        );
-        set_switch(table, "monitor", bus.monitor);
-        match bus.minus {
-            Some(input) => {
-                let number = i64::try_from(input + 1).unwrap_or(i64::MAX);
-                if table.get("minus").and_then(Item::as_integer) != Some(number) {
-                    set(table, "minus", number.into());
-                }
-            }
-            None => {
-                table.remove("minus");
-            }
-        }
+        set_bus(table, bus);
         set_bands(table, &bus.eq)?;
     }
 

@@ -153,6 +153,9 @@ impl Running {
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
             Command::Monitor(bus, on) => self.monitor(*bus, *on),
+            Command::BusComp(bus, amount) => self.bus_comp(*bus, Some(*amount), None, None),
+            Command::BusCompMix(bus, percent) => self.bus_comp(*bus, None, Some(*percent), None),
+            Command::BusCompHpf(bus, hz) => self.bus_comp(*bus, None, None, Some(*hz)),
             Command::Automix(input, on) => self.automix(*input, Some(*on), None),
             Command::AutomixWeight(input, db) => self.automix(*input, None, Some(*db)),
             Command::Send(input, bus, gain_db, ramp_ms) => {
@@ -398,6 +401,57 @@ impl Running {
         )])
     }
 
+    /// Sets the knob, the mix (percent) and/or the sidechain filter (Hz) of the compressor of
+    /// `bus`.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such bus or a value is out of its range.
+    pub fn bus_comp(
+        &mut self,
+        bus: usize,
+        amount: Option<f32>,
+        mix: Option<f32>,
+        hpf_hz: Option<f32>,
+    ) -> Result<Vec<String>, String> {
+        let Some(running) = self.buses.get(bus) else {
+            return Err(format!("there is no bus {}", bus + 1));
+        };
+        let amount = amount.map(|a| check_amount("comp", a)).transpose()?;
+        if let Some(mix) = mix
+            && !(0.0..=100.0).contains(&mix)
+        {
+            return Err(format!("a mix is 0 to 100 %, not {mix}"));
+        }
+        let (low, high) = pult_core::buscomp::HPF_HZ;
+        if let Some(hz) = hpf_hz
+            && !(low..=high).contains(&hz)
+        {
+            return Err(format!(
+                "the sidechain filter is {low} to {high} Hz, not {hz}"
+            ));
+        }
+        let controls = &running.handle.controls.comp;
+        let spec = &mut self.spec.buses[bus];
+        let mut said = Vec::new();
+        if let Some(amount) = amount {
+            controls.comp.set_simple(amount);
+            spec.comp = amount;
+            said.push(format!("{}: comp {}", running.name, knob(amount)));
+        }
+        if let Some(mix) = mix {
+            controls.set_mix(mix / 100.0);
+            spec.comp_mix = mix;
+            said.push(format!("{}: comp mix {mix:.0} %", running.name));
+        }
+        if let Some(hz) = hpf_hz {
+            controls.set_hpf(hz);
+            spec.comp_hpf_hz = hz;
+            said.push(format!("{}: comp hpf {hz:.0} Hz", running.name));
+        }
+        Ok(said)
+    }
+
     /// Takes `input` into the automixer or out of it, and/or sets its priority in dB.
     ///
     /// # Errors
@@ -546,6 +600,15 @@ impl Running {
         }
         for (bus, spec) in self.buses.iter().zip(&self.spec.buses) {
             let mut line = format!("{} {}  gain {:.1} dB", bus.name, bus.device, spec.gain_db);
+            if spec.comp > 0.0 {
+                let _ = write!(
+                    line,
+                    "  comp {} mix {:.0} % hpf {:.0} Hz",
+                    knob(spec.comp),
+                    spec.comp_mix,
+                    spec.comp_hpf_hz
+                );
+            }
             line.push_str(&eq_summary(spec.eq_on, &spec.eq));
             line.push_str(&limit_summary(
                 spec.limit_on,

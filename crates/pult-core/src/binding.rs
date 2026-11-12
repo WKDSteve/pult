@@ -57,6 +57,12 @@ pub enum BusParam {
     LimitLookahead,
     /// Whether it is a monitor bus, the one solo acts on.
     Monitor,
+    /// Its compressor, as one knob.
+    Comp,
+    /// The mix of its compressor, dry to compressed, in percent.
+    CompMix,
+    /// The corner of the sidechain high-pass of its compressor, in Hz.
+    CompHpf,
     /// Its peak, read only.
     Meter,
 }
@@ -138,6 +144,8 @@ pub enum Value {
     Ceiling(f32),
     /// The lookahead of a limiter in milliseconds.
     Lookahead(f32),
+    /// A share in percent, 0 to 100.
+    Percent(f32),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -206,6 +214,12 @@ impl Binding {
             };
             return Ok(Self::Bus(index, BusParam::EqBand(band, param)));
         }
+        // A setting of a bus compressor, unless no bus has that name.
+        if kind == "bus"
+            && let Some((index, param)) = comp_setting(rest, &bus)
+        {
+            return Ok(Self::Bus(index, param));
+        }
         // A setting of a limiter, unless no bus has that name. Anything else is read as a
         // parameter of a bus whose name ends in `limit`.
         if kind == "bus"
@@ -248,6 +262,7 @@ impl Binding {
                     "eq" => BusParam::Eq,
                     "limit" => BusParam::Limit,
                     "monitor" => BusParam::Monitor,
+                    "comp" => BusParam::Comp,
                     "meter" => BusParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -301,6 +316,9 @@ impl Binding {
                     BusParam::LimitCeiling => "limit/ceiling",
                     BusParam::LimitLookahead => "limit/lookahead",
                     BusParam::Monitor => "monitor",
+                    BusParam::Comp => "comp",
+                    BusParam::CompMix => "comp/mix",
+                    BusParam::CompHpf => "comp/hpf",
                     BusParam::Meter => "meter",
                 };
                 format!("bus/{}/{param}", bus(index)?)
@@ -348,6 +366,9 @@ impl Binding {
                     BusParam::LimitCeiling => Value::Ceiling(bus.limit_db),
                     BusParam::LimitLookahead => Value::Lookahead(bus.limit_lookahead_ms),
                     BusParam::Monitor => Value::Switch(bus.monitor),
+                    BusParam::Comp => Value::Amount(bus.comp),
+                    BusParam::CompMix => Value::Percent(bus.comp_mix),
+                    BusParam::CompHpf => Value::Freq(bus.comp_hpf_hz),
                     BusParam::Meter => Value::Peak(bus.peak_db),
                 }
             }
@@ -412,6 +433,13 @@ impl Binding {
             (Self::Bus(bus, BusParam::Monitor), Value::Switch(on)) => {
                 Action::BusMonitor { bus, on }
             }
+            (Self::Bus(bus, BusParam::Comp), Value::Amount(amount)) => {
+                Action::BusComp { bus, amount }
+            }
+            (Self::Bus(bus, BusParam::CompMix), Value::Percent(percent)) => {
+                Action::BusCompMix { bus, percent }
+            }
+            (Self::Bus(bus, BusParam::CompHpf), Value::Freq(hz)) => Action::BusCompHpf { bus, hz },
             (Self::Bus(bus, BusParam::EqBand(band, param)), value) => {
                 let change = match (param, value) {
                     (BandParam::Kind, Value::Kind(kind)) => BandChange::Kind(kind),
@@ -477,6 +505,11 @@ impl Binding {
             }
             Self::Bus(index, BusParam::Limit) => format!("{} limiter", bus(index)),
             Self::Bus(index, BusParam::Monitor) => format!("{} monitor", bus(index)),
+            Self::Bus(index, BusParam::Comp) => format!("{} compressor", bus(index)),
+            Self::Bus(index, BusParam::CompMix) => format!("{} compressor mix", bus(index)),
+            Self::Bus(index, BusParam::CompHpf) => {
+                format!("{} compressor sidechain filter", bus(index))
+            }
             Self::Bus(index, BusParam::LimitCeiling) => format!("{} limiter ceiling", bus(index)),
             Self::Bus(index, BusParam::LimitLookahead) => {
                 format!("{} limiter lookahead", bus(index))
@@ -489,6 +522,21 @@ impl Binding {
             }
         }
     }
+}
+
+/// `<bus>/comp/mix` or `<bus>/comp/hpf` of a bus that `bus` finds, as its index and parameter.
+fn comp_setting<E>(
+    rest: &str,
+    bus: &impl Fn(&str) -> Result<usize, E>,
+) -> Option<(usize, BusParam)> {
+    let (before, setting) = rest.rsplit_once('/')?;
+    let index = bus(before.strip_suffix("/comp")?).ok()?;
+    let param = match setting {
+        "mix" => BusParam::CompMix,
+        "hpf" => BusParam::CompHpf,
+        _ => return None,
+    };
+    Some((index, param))
 }
 
 /// The index a number in an address names: digits only, without a sign or a leading zero (the

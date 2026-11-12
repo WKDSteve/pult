@@ -14,6 +14,7 @@ static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisable
 
 pub mod automix;
 mod binding;
+pub mod buscomp;
 pub mod clicks;
 pub mod control;
 pub mod drift;

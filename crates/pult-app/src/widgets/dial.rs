@@ -43,7 +43,8 @@ impl Dial {
     #[must_use]
     pub fn of(binding: Binding) -> Option<Self> {
         match binding {
-            Binding::Input(_, InputParam::Gate | InputParam::Comp) => Some(Self {
+            Binding::Input(_, InputParam::Gate | InputParam::Comp)
+            | Binding::Bus(_, BusParam::Comp) => Some(Self {
                 span: Span::even(AMOUNT_RANGE),
                 home: 0.0,
                 both_ways: false,
@@ -53,6 +54,16 @@ impl Dial {
                 span: Span::even((FADER_FLOOR_DB, FADER_TOP_DB)),
                 home: 0.0,
                 both_ways: true,
+            }),
+            Binding::Bus(_, BusParam::CompMix) => Some(Self {
+                span: Span::even((0.0, 100.0)),
+                home: 100.0,
+                both_ways: false,
+            }),
+            Binding::Bus(_, BusParam::CompHpf) => Some(Self {
+                span: Span::octaves(pult_core::buscomp::HPF_HZ),
+                home: pult_core::buscomp::HPF_HZ.0,
+                both_ways: false,
             }),
             Binding::Bus(_, BusParam::LimitCeiling) => Some(Self {
                 span: Span::even(LIMIT_CEILING_DB),
@@ -125,7 +136,8 @@ pub fn number(value: Value) -> Option<f32> {
         | Value::Freq(number)
         | Value::Width(number)
         | Value::Ceiling(number)
-        | Value::Lookahead(number) => Some(number),
+        | Value::Lookahead(number)
+        | Value::Percent(number) => Some(number),
         _ => None,
     }
 }
@@ -140,6 +152,7 @@ fn with_number(value: Value, number: f32) -> Value {
         Value::Width(_) => Value::Width(number),
         Value::Ceiling(_) => Value::Ceiling(number),
         Value::Lookahead(_) => Value::Lookahead(number),
+        Value::Percent(_) => Value::Percent(number),
         other => other,
     }
 }
@@ -157,6 +170,7 @@ pub fn format_value(value: Value) -> String {
         Value::Width(q) => format!("{q:.2}"),
         Value::Ceiling(db) => format!("{db:.1} dB"),
         Value::Lookahead(ms) => format!("{ms:.1} ms"),
+        Value::Percent(percent) => format!("{percent:.0} %"),
         _ => String::new(),
     }
 }

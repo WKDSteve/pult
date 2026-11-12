@@ -404,6 +404,12 @@ pub struct BusSpec {
     /// A mix-minus (N-1) bus: the input it is for (index into [`RouteSpec::inputs`]) never goes
     /// into its sum, so a caller hears everything but their own voice.
     pub minus: Option<usize>,
+    /// Its bus compressor as one knob, 0 (off) to 10.
+    pub comp: f32,
+    /// The mix of its compressor in percent, 0 (dry) to 100 (all compressed).
+    pub comp_mix: f32,
+    /// The corner of the sidechain high-pass of its compressor in Hz.
+    pub comp_hpf_hz: f32,
 }
 
 impl BusSpec {
@@ -423,6 +429,9 @@ impl BusSpec {
             limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
             monitor: false,
             minus: None,
+            comp: 0.0,
+            comp_mix: 100.0,
+            comp_hpf_hz: pult_core::buscomp::HPF_HZ.0,
         }
     }
 }
@@ -1226,6 +1235,10 @@ fn set_up_bus(handle: &BusHandle, bus: &BusSpec) {
         .controls
         .limiter
         .set_all(bus.limit_on, bus.limit_db, bus.limit_lookahead_ms);
+    let comp = &handle.controls.comp;
+    comp.comp.set_simple(bus.comp);
+    comp.set_mix(bus.comp_mix / 100.0);
+    comp.set_hpf(bus.comp_hpf_hz);
 }
 
 /// Opens every device of `spec` and starts mixing.

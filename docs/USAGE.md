@@ -238,6 +238,12 @@ pult run --profile meinprofil.toml --log abend.csv
   process = "Discord"
   buses = ["A1"]             # nie "Call"
   ```
+- **Bus-Kompressor:** Jeder Bus hat auf seiner Summe einen Kompressor wie das SSL-Pult, nach dem EQ und vor Fader und
+  Limiter: `comp = 0..10` am Bus (ein Regler wie am Eingang), `comp_mix = 0..100` mischt den trockenen Klang dazu
+  (Parallelkompression: Druck ohne das Leben der Summe zu nehmen), `comp_hpf_hz = 20..500` filtert den Bass aus dem
+  Steuersignal, damit er die Summe nicht pumpen lässt. Während des Laufs `comp A1 3`, `comp A1 mix 50`,
+  `comp A1 hpf 120`; im Fenster in der Ansicht **EQ** (Spalte COMPRESSOR, mit der Reduktion im Kopf); von außen
+  `bus/<name>/comp`, `bus/<name>/comp/mix`, `bus/<name>/comp/hpf`.
 - **Loudness:** Jeder Bus wird nach EBU R128 / ITU-R BS.1770 gemessen (Momentary, Short-Term, Integrated, Range, True
   Peak), auf einem eigenen Thread. Unter dem Bus-Fader steht die Short-Term-Loudness (`-14.1 LUFS`), wenn weder Clipping
   noch der Limiter etwas zu melden haben; alle Werte stehen im Zustand (`docs/CONTROL.md`). Für Streaming-Plattformen

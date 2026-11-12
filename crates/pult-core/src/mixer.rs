@@ -154,6 +154,8 @@ pub struct BusControls {
     pub eq: EqControls,
     /// The limiter, behind the gain; off until a route switches it on.
     pub limiter: LimiterControls,
+    /// The bus compressor, after the equalizer and before the gain; off at first.
+    pub comp: crate::buscomp::BusCompControls,
     /// Whether solo acts on this bus: on every bus while the route has no monitor bus, else
     /// only on the monitor buses, so a talk bus keeps hearing every source. True at first.
     pub solo_here: AtomicBool,
@@ -167,6 +169,7 @@ impl Default for BusControls {
             fade_ms: AtomicU32::new(0),
             eq: EqControls::default(),
             limiter: LimiterControls::default(),
+            comp: crate::buscomp::BusCompControls::default(),
             solo_here: AtomicBool::new(true),
         }
     }
@@ -640,6 +643,8 @@ pub struct Mixer {
     eq: Box<Equalizer>,
     /// The limiter of the bus, at its output rate.
     limiter: Box<Limiter>,
+    /// The bus compressor, at its output rate.
+    comp: Box<crate::buscomp::BusCompressor>,
     /// Resumed, and no callback yet: the next one opens the rings.
     opening: bool,
     /// Where the output goes to be measured for loudness, off this thread.
@@ -663,6 +668,7 @@ impl Mixer {
             gain: Follower::new(rate),
             eq: Box::new(Equalizer::new(rate)),
             limiter: Box::new(Limiter::new(rate, out_channels)),
+            comp: Box::new(crate::buscomp::BusCompressor::new(rate)),
             inputs,
             out_channels,
             controls: Arc::clone(&handle.controls),
@@ -720,6 +726,8 @@ impl Mixer {
             input.mix_into(out, self.out_channels, frames, solo_here);
         }
         self.eq.process(&self.controls.eq, out, self.out_channels);
+        self.comp
+            .process(&self.controls.comp, out, self.out_channels);
         let sounding = !self.controls.muted.load(Ordering::Acquire);
         let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
         self.gain

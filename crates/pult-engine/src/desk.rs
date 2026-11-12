@@ -243,6 +243,10 @@ impl Desk for EngineDesk {
                 limit_lookahead_ms: spec.limit_lookahead_ms,
                 monitor: spec.monitor,
                 minus: spec.minus,
+                comp: spec.comp,
+                comp_mix: spec.comp_mix,
+                comp_hpf_hz: spec.comp_hpf_hz,
+                comp_reduction_db: bus.handle.controls.comp.reduction.take(),
                 loudness: bus
                     .loudness
                     .as_deref()
@@ -351,6 +355,11 @@ impl Desk for EngineDesk {
             }
             Action::Route { input, bus, on } => self.running.route(input, bus, on),
             Action::BusMonitor { bus, on } => self.running.monitor(bus, on),
+            Action::BusComp { bus, amount } => self.running.bus_comp(bus, Some(amount), None, None),
+            Action::BusCompMix { bus, percent } => {
+                self.running.bus_comp(bus, None, Some(percent), None)
+            }
+            Action::BusCompHpf { bus, hz } => self.running.bus_comp(bus, None, None, Some(hz)),
             Action::InputAutomix { input, on } => self.running.automix(input, Some(on), None),
             Action::InputAutomixWeight { input, db } => self.running.automix(input, None, Some(db)),
             Action::Send {

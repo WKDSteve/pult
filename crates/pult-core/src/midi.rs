@@ -266,6 +266,11 @@ impl Param {
             Binding::Bus(_, BusParam::EqBand(_, BandParam::Q)) => {
                 Self::Knob(binding, Span::octaves(EQ_Q))
             }
+            Binding::Bus(_, BusParam::Comp) => Self::Knob(binding, Span::even(AMOUNT_RANGE)),
+            Binding::Bus(_, BusParam::CompMix) => Self::Knob(binding, Span::even((0.0, 100.0))),
+            Binding::Bus(_, BusParam::CompHpf) => {
+                Self::Knob(binding, Span::octaves(crate::buscomp::HPF_HZ))
+            }
             Binding::Input(_, InputParam::AutomixWeight) => {
                 Self::Knob(binding, Span::even((-12.0, 12.0)))
             }
@@ -599,6 +604,7 @@ impl Map {
                     Some(
                         Value::Amount(number)
                         | Value::Gain(number)
+                        | Value::Percent(number)
                         | Value::Boost(number)
                         | Value::Freq(number)
                         | Value::Width(number)

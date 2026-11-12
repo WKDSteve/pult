@@ -125,6 +125,11 @@ fn showcase(t: f64) -> MixerView {
             limit_lookahead_ms: 1.0,
             monitor: false,
             minus: None,
+            // The stream bus with its bus compressor at work, half parallel.
+            comp: [0.0, 0.0, 3.0][j],
+            comp_mix: [100.0, 100.0, 50.0][j],
+            comp_hpf_hz: [20.0, 20.0, 120.0][j],
+            comp_reduction_db: [0.0, 0.0, 2.4][j],
             // The stream bus at the loudness of a streaming platform.
             loudness: LoudnessView {
                 short_term_lufs: Some([-19.2, -23.5, -14.1][j]),

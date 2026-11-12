@@ -150,6 +150,9 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `matrix/<n>/<bus>` | `true` oder `false` |
 | `input/<n>/automix` | `true` oder `false`: im Automixer |
 | `input/<n>/automix/weight` | Zahl, -12 bis 12 dB: Vorrang im Automixer |
+| `bus/<name>/comp` | Zahl, 0 (aus) bis 10: der Bus-Kompressor |
+| `bus/<name>/comp/mix` | Zahl, 0 (trocken) bis 100 (ganz komprimiert) |
+| `bus/<name>/comp/hpf` | Zahl, 20 bis 500 Hz: Hochpass im Steuersignal |
 | `bus/<name>/monitor` | `true` oder `false`: der Monitor-Bus, auf dem allein Solo wirkt |
 | `send/<n>/<bus>` | Zahl, der Pegel dieser Kreuzung in dB (wie ein Gain, gleitet mit `ramp_ms`); 0 am Anfang |
 | `sendpre/<n>/<bus>` | `true` (vor dem Fader des Eingangs) oder `false` (danach, am Anfang) |

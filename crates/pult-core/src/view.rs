@@ -193,6 +193,14 @@ pub struct BusView {
     pub minus: Option<usize>,
     /// Its loudness after EBU R128.
     pub loudness: LoudnessView,
+    /// Its compressor as one knob, 0 (off) to 10.
+    pub comp: f32,
+    /// The mix of its compressor in percent, 0 (dry) to 100 (all compressed).
+    pub comp_mix: f32,
+    /// The corner of the sidechain high-pass of its compressor in Hz.
+    pub comp_hpf_hz: f32,
+    /// The most its compressor took away since the previous view, in dB.
+    pub comp_reduction_db: f32,
     /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
     pub limited_db: f32,
     /// Whether the device is there; false while it is gone.
@@ -346,6 +354,27 @@ pub enum Action {
         input: usize,
         /// Priority in dB, -12 to 12.
         db: f32,
+    },
+    /// Sets the compressor of a bus by its one knob.
+    BusComp {
+        /// Bus index.
+        bus: usize,
+        /// 0 (off) to 10.
+        amount: f32,
+    },
+    /// Sets the mix of the compressor of a bus.
+    BusCompMix {
+        /// Bus index.
+        bus: usize,
+        /// 0 (dry) to 100 (all compressed).
+        percent: f32,
+    },
+    /// Sets the sidechain high-pass of the compressor of a bus.
+    BusCompHpf {
+        /// Bus index.
+        bus: usize,
+        /// Its corner in Hz.
+        hz: f32,
     },
     /// Makes a bus a monitor bus or takes that away.
     BusMonitor {
@@ -516,6 +545,10 @@ impl FakeDesk {
             monitor: false,
             minus: None,
             loudness: LoudnessView::default(),
+            comp: 0.0,
+            comp_mix: 100.0,
+            comp_hpf_hz: 20.0,
+            comp_reduction_db: 0.0,
             limited_db: 0.0,
             present: true,
             peak_db: None,
@@ -628,6 +661,36 @@ impl FakeDesk {
             said.push(format!("[{}] automix weight {db:+.1} dB", input + 1));
         }
         Ok(said)
+    }
+
+    /// One setting of the compressor of a bus.
+    fn set_bus_comp(&mut self, action: &Action) -> Result<Vec<String>, String> {
+        let (bus, line) = match *action {
+            Action::BusComp { bus, amount } => {
+                let amount = check_amount("comp", amount)?;
+                self.bus_mut(bus)?.comp = amount;
+                (bus, format!("comp {amount:.1}"))
+            }
+            Action::BusCompMix { bus, percent } => {
+                if !(0.0..=100.0).contains(&percent) {
+                    return Err(format!("a mix is 0 to 100 %, not {percent}"));
+                }
+                self.bus_mut(bus)?.comp_mix = percent;
+                (bus, format!("comp mix {percent:.0} %"))
+            }
+            Action::BusCompHpf { bus, hz } => {
+                let (low, high) = crate::buscomp::HPF_HZ;
+                if !(low..=high).contains(&hz) {
+                    return Err(format!(
+                        "the sidechain filter is {low} to {high} Hz, not {hz}"
+                    ));
+                }
+                self.bus_mut(bus)?.comp_hpf_hz = hz;
+                (bus, format!("comp hpf {hz:.0} Hz"))
+            }
+            _ => return Err("not a setting of a bus compressor".to_owned()),
+        };
+        Ok(vec![format!("{}: {line}", self.bus_mut(bus)?.name)])
     }
 
     /// Makes `bus` a monitor bus or takes that away.
@@ -927,6 +990,9 @@ impl Desk for FakeDesk {
             Action::BusEqBand { bus, band, change } => self.set_band(bus, band, change),
             Action::BusLimit { bus, change } => self.set_limit(bus, change),
             Action::BusMonitor { bus, on } => self.set_monitor(bus, on),
+            Action::BusComp { .. } | Action::BusCompMix { .. } | Action::BusCompHpf { .. } => {
+                self.set_bus_comp(&action)
+            }
             Action::InputAutomix { input, on } => self.set_automix(input, Some(on), None),
             Action::InputAutomixWeight { input, db } => self.set_automix(input, None, Some(db)),
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
