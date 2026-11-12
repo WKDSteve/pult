@@ -247,7 +247,9 @@ mod tests {
         assert!(out.iter().all(|&s| s == i16::from_sample_(0.5_f32)));
     }
 
-    /// Only here does `assert_no_alloc` see the allocator; a binary brings its own.
+    /// Only here does `assert_no_alloc` see the allocator; a binary brings its own. Debug only:
+    /// release builds of `assert_no_alloc` have no `AllocDisabler` (see pult-core's lib.rs).
+    #[cfg(debug_assertions)]
     #[global_allocator]
     static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 

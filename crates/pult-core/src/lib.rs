@@ -7,8 +7,11 @@
 
 #![forbid(unsafe_code)]
 
-// The tests check that the audio path allocates nothing (`assert_no_alloc`).
-#[cfg(test)]
+// The tests check that the audio path allocates nothing (`assert_no_alloc`). Only in debug
+// builds: in release `assert_no_alloc` (default feature `disable_release`) has no
+// `AllocDisabler` and its guards are no-ops, so a release test run builds but checks nothing
+// about allocation.
+#[cfg(all(test, debug_assertions))]
 #[global_allocator]
 static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
