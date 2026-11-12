@@ -153,6 +153,8 @@ impl Running {
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
             Command::Monitor(bus, on) => self.monitor(*bus, *on),
+            Command::Automix(input, on) => self.automix(*input, Some(*on), None),
+            Command::AutomixWeight(input, db) => self.automix(*input, None, Some(*db)),
             Command::Send(input, bus, gain_db, ramp_ms) => {
                 self.send(*input, *bus, *gain_db, *ramp_ms)
             }
@@ -263,6 +265,12 @@ impl Running {
                         .store(buses.contains(&route.bus), Ordering::Release);
                 }
                 self.spec.inputs[change.input].buses.clone_from(buses);
+            }
+            if let Some(on) = change.automix {
+                if let Some((group, index)) = self.inputs[change.input].controls.automix.get() {
+                    group.member(*index).set_on(on);
+                }
+                self.spec.inputs[change.input].automix = on;
             }
             for send in &change.sends {
                 if let Some(route) = self.inputs[change.input].routes.get(send.bus) {
@@ -388,6 +396,51 @@ impl Running {
             self.target_label(Target::Input(input)),
             self.buses[bus].name
         )])
+    }
+
+    /// Takes `input` into the automixer or out of it, and/or sets its priority in dB.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such input or the weight is not -12 to 12 dB.
+    pub fn automix(
+        &mut self,
+        input: usize,
+        on: Option<bool>,
+        weight_db: Option<f32>,
+    ) -> Result<Vec<String>, String> {
+        let Some(running) = self.inputs.get(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        if let Some(db) = weight_db
+            && !(-12.0..=12.0).contains(&db)
+        {
+            return Err(format!("an automix weight is -12 to 12 dB, not {db}"));
+        }
+        let label = self.target_label(Target::Input(input));
+        let member = running
+            .controls
+            .automix
+            .get()
+            .map(|(group, index)| group.member(*index));
+        let spec = &mut self.spec.inputs[input];
+        let mut said = Vec::new();
+        if let Some(on) = on {
+            spec.automix = on;
+            if let Some(member) = member {
+                member.set_on(on);
+            }
+            let state = if on { "in" } else { "out of" };
+            said.push(format!("{label}: {state} the automixer"));
+        }
+        if let Some(db) = weight_db {
+            spec.automix_weight_db = db;
+            if let Some(member) = member {
+                member.set_weight_db(db);
+            }
+            said.push(format!("{label}: automix weight {db:+.1} dB"));
+        }
+        Ok(said)
     }
 
     /// Makes `bus` a monitor bus or takes that away; solo then acts where [`Self::apply_monitors`]

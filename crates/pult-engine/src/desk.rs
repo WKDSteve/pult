@@ -126,6 +126,53 @@ fn levels(input: &crate::RunningInput) -> (f32, f32, u64) {
     (peak, drift, dropouts)
 }
 
+/// One input as the view shows it; takes its meters.
+fn input_view(input: &crate::RunningInput, spec: &crate::InputSpec, solo: bool) -> InputView {
+    let (peak, drift, dropouts) = levels(input);
+    InputView {
+        name: input.name.clone(),
+        label: spec.label.clone(),
+        kind: match spec.kind {
+            InputKind::Device => SourceKind::Device,
+            InputKind::Process => SourceKind::Program,
+        },
+        sample_rate: input.sample_rate,
+        gain_db: spec.gain_db,
+        muted: spec.muted,
+        solo,
+        pan: spec.pan,
+        gate: spec.gate,
+        comp: spec.comp,
+        automix: spec.automix,
+        automix_weight_db: spec.automix_weight_db,
+        automix_gain_db: automix_gain_db(input, spec),
+        gate_reduction_db: input.controls.gate_reduction.take(),
+        gate_open: input.controls.gate_open.load(Ordering::Relaxed),
+        comp_reduction_db: input.controls.comp_reduction.take(),
+        buses: input
+            .routes
+            .iter()
+            .filter(|route| route.is_routed())
+            .map(|route| route.bus)
+            .collect(),
+        sends: sends_of(spec, input.routes.len()),
+        present: input.present,
+        peak_db: peak_db(peak),
+        drift_ppm: drift,
+        dropouts,
+    }
+}
+
+/// What the automixer gives `input` now in dB; 0 outside it.
+fn automix_gain_db(input: &crate::RunningInput, spec: &crate::InputSpec) -> f32 {
+    if !spec.automix {
+        return 0.0;
+    }
+    input.controls.automix.get().map_or(0.0, |(group, index)| {
+        20.0 * group.gain(*index).max(1e-6).log10()
+    })
+}
+
 /// The send of `spec` to each of `buses` buses, as a view shows them.
 fn sends_of(spec: &crate::InputSpec, buses: usize) -> Vec<SendView> {
     (0..buses)
@@ -176,38 +223,7 @@ impl Desk for EngineDesk {
             .iter()
             .zip(&running.spec.inputs)
             .zip(&self.solo)
-            .map(|((input, spec), &solo)| {
-                let (peak, drift, dropouts) = levels(input);
-                InputView {
-                    name: input.name.clone(),
-                    label: spec.label.clone(),
-                    kind: match spec.kind {
-                        InputKind::Device => SourceKind::Device,
-                        InputKind::Process => SourceKind::Program,
-                    },
-                    sample_rate: input.sample_rate,
-                    gain_db: spec.gain_db,
-                    muted: spec.muted,
-                    solo,
-                    pan: spec.pan,
-                    gate: spec.gate,
-                    comp: spec.comp,
-                    gate_reduction_db: input.controls.gate_reduction.take(),
-                    gate_open: input.controls.gate_open.load(Ordering::Relaxed),
-                    comp_reduction_db: input.controls.comp_reduction.take(),
-                    buses: input
-                        .routes
-                        .iter()
-                        .filter(|route| route.is_routed())
-                        .map(|route| route.bus)
-                        .collect(),
-                    sends: sends_of(spec, input.routes.len()),
-                    present: input.present,
-                    peak_db: peak_db(peak),
-                    drift_ppm: drift,
-                    dropouts,
-                }
-            })
+            .map(|((input, spec), &solo)| input_view(input, spec, solo))
             .collect();
         let buses = running
             .buses
@@ -325,6 +341,8 @@ impl Desk for EngineDesk {
             }
             Action::Route { input, bus, on } => self.running.route(input, bus, on),
             Action::BusMonitor { bus, on } => self.running.monitor(bus, on),
+            Action::InputAutomix { input, on } => self.running.automix(input, Some(on), None),
+            Action::InputAutomixWeight { input, db } => self.running.automix(input, None, Some(db)),
             Action::Send {
                 input,
                 bus,

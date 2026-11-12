@@ -266,6 +266,9 @@ impl Param {
             Binding::Bus(_, BusParam::EqBand(_, BandParam::Q)) => {
                 Self::Knob(binding, Span::octaves(EQ_Q))
             }
+            Binding::Input(_, InputParam::AutomixWeight) => {
+                Self::Knob(binding, Span::even((-12.0, 12.0)))
+            }
             Binding::Bus(_, BusParam::LimitCeiling) => {
                 Self::Knob(binding, Span::even(LIMIT_CEILING_DB))
             }
@@ -275,7 +278,7 @@ impl Param {
             Binding::Bus(_, BusParam::EqBand(_, BandParam::Kind)) => {
                 return Err(format!("{target} is a word, which no control can say"));
             }
-            Binding::Input(_, InputParam::Mute | InputParam::Solo)
+            Binding::Input(_, InputParam::Mute | InputParam::Solo | InputParam::Automix)
             | Binding::Bus(
                 _,
                 BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor,
@@ -595,6 +598,7 @@ impl Map {
                 let current = match binding.read(view) {
                     Some(
                         Value::Amount(number)
+                        | Value::Gain(number)
                         | Value::Boost(number)
                         | Value::Freq(number)
                         | Value::Width(number)

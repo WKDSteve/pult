@@ -96,6 +96,15 @@ pub struct InputState {
     /// Its compressor as one knob, 0 (off) to 10; 0 from a run older than compressors.
     #[serde(default)]
     pub comp: f32,
+    /// In the automixer.
+    #[serde(default)]
+    pub automix: bool,
+    /// Its priority in the automixer in dB.
+    #[serde(default)]
+    pub automix_weight_db: f32,
+    /// What the automixer gives it now in dB (0 outside it).
+    #[serde(default)]
+    pub automix_gain_db: f32,
     /// The most its gate took away since the previous state, in dB; 0 when open or off.
     #[serde(default)]
     pub gate_reduction_db: f32,
@@ -280,6 +289,9 @@ impl InputState {
             pan: input.pan,
             gate: input.gate,
             comp: input.comp,
+            automix: input.automix,
+            automix_weight_db: input.automix_weight_db,
+            automix_gain_db: input.automix_gain_db,
             gate_reduction_db: input.gate_reduction_db,
             gate_open: input.gate_open,
             comp_reduction_db: input.comp_reduction_db,
@@ -446,6 +458,16 @@ impl Op {
                 OpValue::Switch(*on),
                 0,
             ),
+            Command::Automix(input, on) => set(
+                format!("input/{}/automix", input + 1),
+                OpValue::Switch(*on),
+                0,
+            ),
+            Command::AutomixWeight(input, db) => set(
+                format!("input/{}/automix/weight", input + 1),
+                OpValue::Number(*db),
+                0,
+            ),
             Command::Monitor(to, on) => set(
                 format!("bus/{}/monitor", bus(*to)?),
                 OpValue::Switch(*on),
@@ -530,7 +552,9 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             Err(format!("{address} can only be read"))
         }
         (
-            Binding::Input(_, InputParam::Gain) | Binding::Bus(_, BusParam::Gain),
+            Binding::Input(_, InputParam::Gain)
+            | Binding::Bus(_, BusParam::Gain)
+            | Binding::Send { .. },
             OpValue::Number(db),
         ) => {
             let (low, high) = GAIN_RANGE_DB;
@@ -539,6 +563,14 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
                 Ok(Value::Gain(db))
             } else {
                 Err(format!("gain {db} dB is outside {low} to {high} dB"))
+            }
+        }
+        (Binding::Input(_, InputParam::AutomixWeight), OpValue::Number(db)) => {
+            let db = wants_number(*db)?;
+            if (-12.0..=12.0).contains(&db) {
+                Ok(Value::Gain(db))
+            } else {
+                Err(format!("{address} takes -12 to 12 dB, not {db}"))
             }
         }
         (Binding::Input(_, InputParam::Pan), OpValue::Number(pan)) => {
@@ -574,15 +606,17 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             Err(format!("{address} takes low, bell or high"))
         }
         (
-            Binding::Input(_, InputParam::Mute | InputParam::Solo)
+            Binding::Input(_, InputParam::Mute | InputParam::Solo | InputParam::Automix)
             | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
-            | Binding::Route { .. },
+            | Binding::Route { .. }
+            | Binding::SendPre { .. },
             OpValue::Switch(on),
         ) => Ok(Value::Switch(*on)),
         (
-            Binding::Input(_, InputParam::Mute | InputParam::Solo)
+            Binding::Input(_, InputParam::Mute | InputParam::Solo | InputParam::Automix)
             | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
-            | Binding::Route { .. },
+            | Binding::Route { .. }
+            | Binding::SendPre { .. },
             _,
         ) => Err(format!("{address} takes true or false")),
         _ => Err(format!("{address} takes a number")),
@@ -744,6 +778,36 @@ mod tests {
             action(r#"{"op":"save"}"#),
             Ok(Action::SaveProfile { path: None })
         );
+    }
+
+    #[test]
+    fn sends_and_the_automixer_are_set_by_address() {
+        assert_eq!(
+            action(r#"{"op":"set","address":"send/2/A1","value":-6,"ramp_ms":200}"#),
+            Ok(Action::Send {
+                input: 1,
+                bus: 0,
+                db: -6.0,
+                ramp_ms: 200
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"sendpre/2/A1","value":true}"#),
+            Ok(Action::SendPre {
+                input: 1,
+                bus: 0,
+                pre: true
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/automix","value":true}"#),
+            Ok(Action::InputAutomix { input: 0, on: true })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/automix/weight","value":6}"#),
+            Ok(Action::InputAutomixWeight { input: 0, db: 6.0 })
+        );
+        assert!(action(r#"{"op":"set","address":"input/1/automix/weight","value":20}"#).is_err());
     }
 
     #[test]
@@ -934,11 +998,11 @@ mod tests {
         );
         assert!(
             refused(r#"{"op":"set","address":"input/1/mute","value":true,"ramp_ms":100}"#)
-                .contains("only a gain or a pan")
+                .contains("can ramp")
         );
         assert!(
             refused(r#"{"op":"set","address":"matrix/1/A1","value":true,"ramp_ms":100}"#)
-                .contains("only a gain or a pan")
+                .contains("can ramp")
         );
     }
 
@@ -1008,7 +1072,7 @@ mod tests {
         );
         assert!(
             refused(r#"{"op":"set","address":"bus/A1/limit/ceiling","value":-3,"ramp_ms":100}"#)
-                .contains("only a gain or a pan")
+                .contains("can ramp")
         );
         assert!(
             refused(r#"{"op":"set","address":"bus/A1/eq/2/gain","value":30}"#)
@@ -1036,7 +1100,7 @@ mod tests {
         );
         assert!(
             refused(r#"{"op":"set","address":"bus/A1/eq/2/gain","value":3,"ramp_ms":100}"#)
-                .contains("only a gain or a pan")
+                .contains("can ramp")
         );
         assert!(
             refused(r#"{"op":"set","address":"input/1/gate","value":11}"#)
@@ -1052,7 +1116,7 @@ mod tests {
         );
         assert!(
             refused(r#"{"op":"set","address":"input/1/comp","value":3,"ramp_ms":100}"#)
-                .contains("only a gain or a pan")
+                .contains("can ramp")
         );
     }
 

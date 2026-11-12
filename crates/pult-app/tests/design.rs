@@ -74,6 +74,10 @@ fn showcase(t: f64) -> MixerView {
                 pan: [0.0, -0.35, 0.25, 0.0, 0.0, 0.0, 0.0][i],
                 gate: [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 comp: [4.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0][i],
+                // Mic 1 and Guitar share the automixer; Mic 1 speaks.
+                automix: i < 2,
+                automix_weight_db: 0.0,
+                automix_gain_db: [-0.4, -14.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 // Mic 1: the compressor takes 4.5 dB; Guitar: its gate is shut.
                 gate_reduction_db: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 gate_open: true,

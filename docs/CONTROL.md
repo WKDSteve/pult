@@ -148,13 +148,15 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `bus/<name>/eq/<band>/q` | Zahl, 0.1 bis 10 |
 | `bus/<name>/eq/<band>/kind` | `"low"`, `"bell"` oder `"high"` |
 | `matrix/<n>/<bus>` | `true` oder `false` |
+| `input/<n>/automix` | `true` oder `false`: im Automixer |
+| `input/<n>/automix/weight` | Zahl, -12 bis 12 dB: Vorrang im Automixer |
 | `bus/<name>/monitor` | `true` oder `false`: der Monitor-Bus, auf dem allein Solo wirkt |
 | `send/<n>/<bus>` | Zahl, der Pegel dieser Kreuzung in dB (wie ein Gain, gleitet mit `ramp_ms`); 0 am Anfang |
 | `sendpre/<n>/<bus>` | `true` (vor dem Fader des Eingangs) oder `false` (danach, am Anfang) |
 | `input/<n>/meter`, `bus/<name>/meter` | nur lesbar, im Zustand als `peak_db` |
 
 Im Zustand trägt jeder Eingang außerdem, was Gate und Kompressor wegnehmen (nur lesbar, seit dem letzten Zustand):
-`gate_reduction_db` (0 offen oder aus), `gate_open` (`true` offen oder aus), `comp_reduction_db`. Das Fenster zeigt sie unter
+`automix`, `automix_weight_db`, `automix_gain_db` (was der Automixer gerade gibt), `gate_reduction_db` (0 offen oder aus), `gate_open` (`true` offen oder aus), `comp_reduction_db`. Das Fenster zeigt sie unter
 den Reglern GATE und COMP: `open` oder `shut -40`, und die dB des Kompressors, hervorgehoben, solange er arbeitet.
 
 `<n>` zählt ab 1 wie `[1]` in der Eingabezeile. Eine Datei lässt sich nicht benennen: `save` schreibt nur in das Profil der

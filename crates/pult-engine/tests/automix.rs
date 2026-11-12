@@ -85,3 +85,61 @@ fn a_member_taken_out_keeps_its_gain() {
     assert!(talker > -0.1, "{talker}");
     assert!(out.abs() < 0.01, "out of the sharing, unchanged: {out} dB");
 }
+
+#[test]
+fn the_music_can_join_at_run_time_and_a_weight_gives_priority() {
+    use pult_core::control::Command;
+    let mut o = offline();
+    // Two talkers alike: -3 dB each.
+    let [a, b, _] = run(&mut o, [0.3, 0.3, 0.2], 100);
+    assert!((a + 3.0).abs() < 0.1 && (b + 3.0).abs() < 0.1, "{a} {b}");
+    // Mic 1 weighted by 6 dB: about -1 dB against -7 dB.
+    o.running()
+        .apply(&Command::AutomixWeight(0, 6.0))
+        .expect("a weight");
+    let [a, b, _] = run(&mut o, [0.3, 0.3, 0.2], 100);
+    assert!(
+        (a + 0.97).abs() < 0.15 && (b + 6.99).abs() < 0.15,
+        "{a} {b}"
+    );
+    // The music joins the sharing at run time: the talkers give some of their share to it.
+    o.running().apply(&Command::Automix(2, true)).expect("in");
+    let [_, _, music] = run(&mut o, [0.3, 0.3, 0.2], 100);
+    assert!(music < -1.0, "the music shares now: {music} dB");
+    assert!(o.running().apply(&Command::AutomixWeight(0, 20.0)).is_err());
+}
+
+#[test]
+fn weight_and_scene_switch_are_read_and_rendered() {
+    let text = format!(
+        "{}
+[[scene]]
+name = \"solo talk\"
+[[scene.input]]
+input = 2
+automix = false
+",
+        PROFILE.replace(
+            "automix = true
+
+[[input]]
+device = \"mic 2\"",
+            "automix = true
+automix_weight_db = 6
+
+[[input]]
+device = \"mic 2\""
+        )
+    );
+    let spec = profile::parse(&text).expect("valid profile");
+    assert_eq!(spec.inputs[0].automix_weight_db, 6.0);
+    assert_eq!(spec.scenes[0].inputs[0].automix, Some(false));
+    assert_eq!(profile::parse(&profile::render(&spec)).as_ref(), Ok(&spec));
+    let bad = text.replace("automix_weight_db = 6", "automix_weight_db = 30");
+    assert!(
+        profile::parse(&bad)
+            .unwrap_err()
+            .0
+            .contains("automix_weight_db")
+    );
+}

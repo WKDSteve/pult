@@ -10,6 +10,7 @@
 //! gain_db = 0                  # optional
 //! mute = false                 # optional
 //! automix = false              # optional: one of the microphones that share one gain
+//! automix_weight_db = 0        # optional, -12 to 12: its priority in the automixer
 //! sends = [{ bus = "A1", gain_db = -6, pre = true }]
 //!                              # optional: the level of a crossing (an aux send); pre = before
 //!                              # the fader, so it keeps its level when the fader moves
@@ -139,6 +140,7 @@ struct SceneInputEntry {
     buses: Option<Vec<String>>,
     gate: Option<f32>,
     comp: Option<f32>,
+    automix: Option<bool>,
     #[serde(default)]
     sends: Vec<SendEntry>,
 }
@@ -204,6 +206,8 @@ struct InputEntry {
     mute: bool,
     #[serde(default)]
     automix: bool,
+    #[serde(default)]
+    automix_weight_db: f32,
     #[serde(default)]
     sends: Vec<SendEntry>,
 }
@@ -334,6 +338,7 @@ fn scene_input(
         && routed.is_none()
         && input.gate.is_none()
         && input.comp.is_none()
+        && input.automix.is_none()
         && input.sends.is_empty()
     {
         return fail(format!("{place} changes nothing"));
@@ -347,6 +352,7 @@ fn scene_input(
         buses: routed,
         gate: input.gate,
         comp: input.comp,
+        automix: input.automix,
         sends: scene_sends,
     })
 }
@@ -592,6 +598,15 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             comp: entry.comp,
             muted: entry.mute,
             automix: entry.automix,
+            automix_weight_db: {
+                if !(-12.0..=12.0).contains(&entry.automix_weight_db) {
+                    return fail(format!(
+                        "{what}: automix_weight_db must be -12 to 12, not {}",
+                        entry.automix_weight_db
+                    ));
+                }
+                entry.automix_weight_db
+            },
             sends: sends(&what, entry.sends, &buses)?,
             buses: routed,
         });
@@ -703,6 +718,9 @@ pub fn render(spec: &RouteSpec) -> String {
                     .collect();
                 let _ = writeln!(text, "buses = [{}]", names.join(", "));
             }
+            if let Some(on) = input.automix {
+                let _ = writeln!(text, "automix = {on}");
+            }
             if !input.sends.is_empty() {
                 let _ = writeln!(text, "sends = [{}]", render_sends(spec, &input.sends));
             }
@@ -761,6 +779,9 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
     let _ = writeln!(text, "mute = {}", input.muted);
     if input.automix {
         let _ = writeln!(text, "automix = true");
+    }
+    if input.automix_weight_db != 0.0 {
+        let _ = writeln!(text, "automix_weight_db = {}", input.automix_weight_db);
     }
     if !input.sends.is_empty() {
         let _ = writeln!(text, "sends = [{}]", render_sends(spec, &input.sends));
@@ -927,6 +948,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_number(table, "comp", input.comp);
         set_switch(table, "mute", input.muted);
         set_switch(table, "automix", input.automix);
+        set_number_from(table, "automix_weight_db", input.automix_weight_db, 0.0);
         set_sends(table, spec, &input.sends);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
@@ -1595,6 +1617,7 @@ mod tests {
                         buses: Some(vec![0, 1]),
                         gate: None,
                         comp: None,
+                        automix: None,
                         sends: Vec::new(),
                     }],
                     buses: vec![SceneBus {

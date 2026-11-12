@@ -166,6 +166,12 @@ pub fn input_strip(index: usize, view: &MixerView) -> Element {
             Role::Solo,
             Binding::Input(index, InputParam::Solo),
         ),
+        Element::toggle(
+            Zone::MuteSolo,
+            "AM",
+            Role::Assign,
+            Binding::Input(index, InputParam::Automix),
+        ),
         Element::part(Zone::Fader, Control::Fader, at(InputParam::Gain)),
         Element::part(Zone::Fader, Control::Meter, at(InputParam::Meter)),
         Element::part(Zone::Readout, Control::Readout, at(InputParam::Gain)),
@@ -305,8 +311,10 @@ mod tests {
         let mut expected = vec!["input/2/pan".to_owned(), "input/2/pan".to_owned()];
         expected.extend(view.buses.iter().map(|b| format!("matrix/2/{}", b.name)));
         expected.extend(
-            ["gate", "comp", "mute", "solo", "gain", "meter", "gain"]
-                .map(|param| format!("input/2/{param}")),
+            [
+                "gate", "comp", "mute", "solo", "automix", "gain", "meter", "gain",
+            ]
+            .map(|param| format!("input/2/{param}")),
         );
         assert_eq!(addresses, expected);
         assert!(

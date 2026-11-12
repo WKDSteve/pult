@@ -304,6 +304,8 @@ pub struct InputSpec {
     /// In the automix group of the route: of the inputs that are, the ones spoken into are open
     /// and the sum stays as loud as one ([`pult_core::automix`]).
     pub automix: bool,
+    /// Its priority in the automixer in dB, -12 to 12 (0: none).
+    pub automix_weight_db: f32,
     /// The sends that differ from the default (0 dB, after the fader), one per bus at most.
     pub sends: Vec<SendSpec>,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
@@ -366,6 +368,7 @@ impl InputSpec {
             comp: 0.0,
             muted: false,
             automix: false,
+            automix_weight_db: 0.0,
             sends: Vec::new(),
             buses,
         }
@@ -441,6 +444,8 @@ pub struct SceneInput {
     pub gate: Option<f32>,
     /// Its compressor as one knob. Goes along its own times, not the scene's.
     pub comp: Option<f32>,
+    /// Takes it into the automixer or out of it.
+    pub automix: Option<bool>,
     /// The sends it sets; the crossings it does not name stay as they are.
     pub sends: Vec<SendSpec>,
 }
@@ -1016,17 +1021,17 @@ struct Rings<'a> {
     bus_rates: &'a [u32],
     /// Buffering per ring in milliseconds.
     latency_ms: u32,
-    /// The automix group of the route, one member per input with `automix`, in their order.
+    /// The automix group of the route, one member per input, in their order; `automix` takes a
+    /// member into the sharing.
     automix: Arc<AutomixGroup>,
     /// Members of it handed out so far.
     automix_next: usize,
 }
 
-/// The automix group of `spec`: one member for every input with `automix`.
+/// The automix group of `spec`: one member for every input, so any can be taken into it while
+/// the route runs; those without `automix` are off.
 fn automix_group(spec: &RouteSpec) -> Arc<AutomixGroup> {
-    Arc::new(AutomixGroup::new(
-        spec.inputs.iter().filter(|input| input.automix).count(),
-    ))
+    Arc::new(AutomixGroup::new(spec.inputs.len()))
 }
 
 /// What a slot opens at the start of a route.
@@ -1095,11 +1100,14 @@ fn make_rings(
     controls.gate.set_simple(input.gate);
     controls.compressor.set_simple(input.comp);
     controls.muted.store(input.muted, Ordering::Relaxed);
-    if input.automix {
-        let place = (Arc::clone(&rings.automix), rings.automix_next);
+    {
+        let index = rings.automix_next;
         rings.automix_next += 1;
+        let member = rings.automix.member(index);
+        member.set_on(input.automix);
+        member.set_weight_db(input.automix_weight_db);
         // A fresh controls: the place is free.
-        let _ = controls.automix.set(place);
+        let _ = controls.automix.set((Arc::clone(&rings.automix), index));
     }
     let (target, band, capacity) = buffering(sample_rate, rings.latency_ms);
     let ring = InputConfig {

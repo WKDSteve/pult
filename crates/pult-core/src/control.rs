@@ -69,6 +69,10 @@ pub enum Command {
     Limit(usize, LimitChange),
     /// Makes a bus a monitor bus (the one solo acts on) or takes that away.
     Monitor(usize, bool),
+    /// Takes an input into the automixer or out of it.
+    Automix(usize, bool),
+    /// Sets the priority of an input in the automixer in dB.
+    AutomixWeight(usize, f32),
     /// Routes an input (first index) to a bus (second index), or takes it off.
     Route(usize, usize, bool),
     /// Sets the level of a crossing (input, bus) in dB, reached in so many milliseconds: what of
@@ -112,6 +116,9 @@ limit <bus> look <ms>
                      its lookahead, 0 to 5: gentler, and the sound leaves that much later
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
 monitor <bus> on|off make a bus the monitor: solo acts only there, a talk bus keeps hearing all
+automix <input> on|off
+                     take a microphone into the automixer; automix <input> weight <dB>,
+                     -12 to 12, gives it priority
 send <input> <bus> <dB>
                      the level of that crossing, -60 to 12 (send 2 B1 -6): a mix of its own
                      per bus; send <input> <bus> pre|post takes it before or after the fader
@@ -258,8 +265,39 @@ pub fn parse<S: AsRef<str>>(
         }
         "send" => send(rest, names),
         "monitor" => monitor(rest, names),
+        "automix" => automix(rest, names),
         other => error(format!("unknown command \"{other}\"; type help")),
     }
+}
+
+/// `automix <input> on|off` or `automix <input> weight <dB>`; the input may have several words.
+fn automix<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let usage = "usage: automix <input> on|off, or automix <input> weight <dB>";
+    let only_input = |words: &[&str]| match target(&words.join(" "), names)? {
+        Target::Input(index) => Ok(index),
+        Target::Bus(_) => error("automix works on inputs only"),
+    };
+    if let [input @ .., word, db] = rest
+        && word.eq_ignore_ascii_case("weight")
+        && !input.is_empty()
+    {
+        let db: f32 = db
+            .parse()
+            .map_err(|_| ParseError(format!("weight takes dB, not \"{db}\"")))?;
+        return Ok(Command::AutomixWeight(only_input(input)?, db));
+    }
+    let Some((switch, input)) = rest.split_last() else {
+        return error(usage);
+    };
+    let on = match switch.to_ascii_lowercase().as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return error(usage),
+    };
+    if input.is_empty() {
+        return error(usage);
+    }
+    Ok(Command::Automix(only_input(input)?, on))
 }
 
 /// `monitor <bus> on|off`; the bus may have several words.
@@ -561,6 +599,19 @@ mod tests {
 
     fn bad(line: &str) -> String {
         parse(line, &INPUTS, &BUSES, &NO_LABELS).expect_err(line).0
+    }
+
+    #[test]
+    fn automix_switches_an_input_and_weights_it() {
+        assert_eq!(ok("automix 2 on"), Command::Automix(1, true));
+        assert_eq!(ok("AUTOMIX cable OFF"), Command::Automix(0, false));
+        assert_eq!(
+            ok("automix Analogue 1 weight 6"),
+            Command::AutomixWeight(1, 6.0)
+        );
+        assert!(bad("automix A1 on").contains("inputs only"));
+        assert!(bad("automix 2 weight loud").contains("weight takes dB"));
+        assert!(bad("automix 2").contains("usage: automix"));
     }
 
     #[test]

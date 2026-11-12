@@ -97,6 +97,12 @@ pub struct InputView {
     pub gate: f32,
     /// Its compressor as one knob, 0 (off) to 10: the higher, the more even and the louder.
     pub comp: f32,
+    /// Takes part in the automixer.
+    pub automix: bool,
+    /// Its priority in the automixer in dB.
+    pub automix_weight_db: f32,
+    /// What the automixer gives it now in dB (0 outside it).
+    pub automix_gain_db: f32,
     /// The most the gate took away since the previous view, in dB (0: open or off).
     pub gate_reduction_db: f32,
     /// Whether the gate is open (or off) now.
@@ -310,6 +316,20 @@ pub enum Action {
         /// The new setting.
         change: LimitChange,
     },
+    /// Takes an input into the automixer or out of it.
+    InputAutomix {
+        /// Input index.
+        input: usize,
+        /// In or out.
+        on: bool,
+    },
+    /// Sets the priority of an input in the automixer.
+    InputAutomixWeight {
+        /// Input index.
+        input: usize,
+        /// Priority in dB, -12 to 12.
+        db: f32,
+    },
     /// Makes a bus a monitor bus or takes that away.
     BusMonitor {
         /// Bus index.
@@ -373,8 +393,9 @@ impl Action {
         match &mut self {
             Self::InputGain { ramp_ms, .. }
             | Self::InputPan { ramp_ms, .. }
-            | Self::BusGain { ramp_ms, .. } => *ramp_ms = ms,
-            _ => return Err("only a gain or a pan can ramp".to_owned()),
+            | Self::BusGain { ramp_ms, .. }
+            | Self::Send { ramp_ms, .. } => *ramp_ms = ms,
+            _ => return Err("only a gain, a send or a pan can ramp".to_owned()),
         }
         Ok(self)
     }
@@ -450,6 +471,9 @@ impl FakeDesk {
             pan: 0.0,
             gate: 0.0,
             comp: 0.0,
+            automix: false,
+            automix_weight_db: 0.0,
+            automix_gain_db: 0.0,
             gate_reduction_db: 0.0,
             gate_open: true,
             comp_reduction_db: 0.0,
@@ -535,6 +559,57 @@ impl FakeDesk {
             0.0
         };
         -24.0 + 8.0 * phase.sin() + beat
+    }
+
+    /// Routes `input` to `bus` or takes it off; an input keeps at least one bus.
+    fn set_route(&mut self, input: usize, bus: usize, on: bool) -> Result<Vec<String>, String> {
+        let name = self.bus_mut(bus)?.name.clone();
+        let strip = self.input_mut(input)?;
+        if on {
+            if !strip.buses.contains(&bus) {
+                strip.buses.push(bus);
+                strip.buses.sort_unstable();
+            }
+        } else {
+            if strip.buses == [bus] {
+                return Err(format!(
+                    "[{}] would feed no bus; mute it instead",
+                    input + 1
+                ));
+            }
+            strip.buses.retain(|&b| b != bus);
+        }
+        Ok(vec![format!(
+            "[{}] {} {name}",
+            input + 1,
+            if on { "->" } else { "off" }
+        )])
+    }
+
+    /// Takes `input` into the automixer or out of it, and/or sets its priority.
+    fn set_automix(
+        &mut self,
+        input: usize,
+        on: Option<bool>,
+        weight_db: Option<f32>,
+    ) -> Result<Vec<String>, String> {
+        if let Some(db) = weight_db
+            && !(-12.0..=12.0).contains(&db)
+        {
+            return Err(format!("an automix weight is -12 to 12 dB, not {db}"));
+        }
+        let strip = self.input_mut(input)?;
+        let mut said = Vec::new();
+        if let Some(on) = on {
+            strip.automix = on;
+            let state = if on { "in" } else { "out of" };
+            said.push(format!("[{}] {state} the automixer", input + 1));
+        }
+        if let Some(db) = weight_db {
+            strip.automix_weight_db = db;
+            said.push(format!("[{}] automix weight {db:+.1} dB", input + 1));
+        }
+        Ok(said)
     }
 
     /// Makes `bus` a monitor bus or takes that away.
@@ -834,31 +909,11 @@ impl Desk for FakeDesk {
             Action::BusEqBand { bus, band, change } => self.set_band(bus, band, change),
             Action::BusLimit { bus, change } => self.set_limit(bus, change),
             Action::BusMonitor { bus, on } => self.set_monitor(bus, on),
+            Action::InputAutomix { input, on } => self.set_automix(input, Some(on), None),
+            Action::InputAutomixWeight { input, db } => self.set_automix(input, None, Some(db)),
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
             Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
-            Action::Route { input, bus, on } => {
-                let name = self.bus_mut(bus)?.name.clone();
-                let strip = self.input_mut(input)?;
-                if on {
-                    if !strip.buses.contains(&bus) {
-                        strip.buses.push(bus);
-                        strip.buses.sort_unstable();
-                    }
-                } else {
-                    if strip.buses == [bus] {
-                        return Err(format!(
-                            "[{}] would feed no bus; mute it instead",
-                            input + 1
-                        ));
-                    }
-                    strip.buses.retain(|&b| b != bus);
-                }
-                Ok(vec![format!(
-                    "[{}] {} {name}",
-                    input + 1,
-                    if on { "->" } else { "off" }
-                )])
-            }
+            Action::Route { input, bus, on } => self.set_route(input, bus, on),
             Action::Scene { name } => {
                 // The demo's scenes: one quieter with the microphone on, one with all up.
                 let (cable, microphone) = if name.eq_ignore_ascii_case("Abend") {

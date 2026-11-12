@@ -30,6 +30,10 @@ pub enum InputParam {
     Gate,
     /// Its compressor, as one knob.
     Comp,
+    /// Whether it takes part in the automixer.
+    Automix,
+    /// Its priority in the automixer, in dB.
+    AutomixWeight,
     /// Its peak, read only.
     Meter,
 }
@@ -230,6 +234,8 @@ impl Binding {
                     "pan" => InputParam::Pan,
                     "gate" => InputParam::Gate,
                     "comp" => InputParam::Comp,
+                    "automix" => InputParam::Automix,
+                    "automix/weight" => InputParam::AutomixWeight,
                     "meter" => InputParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -277,6 +283,8 @@ impl Binding {
                     InputParam::Pan => "pan",
                     InputParam::Gate => "gate",
                     InputParam::Comp => "comp",
+                    InputParam::Automix => "automix",
+                    InputParam::AutomixWeight => "automix/weight",
                     InputParam::Meter => "meter",
                 };
                 format!("input/{}/{param}", input(index)?)
@@ -316,6 +324,8 @@ impl Binding {
                     InputParam::Pan => Value::Pan(input.pan),
                     InputParam::Gate => Value::Amount(input.gate),
                     InputParam::Comp => Value::Amount(input.comp),
+                    InputParam::Automix => Value::Switch(input.automix),
+                    InputParam::AutomixWeight => Value::Gain(input.automix_weight_db),
                     InputParam::Meter => Value::Peak(input.peak_db),
                 }
             }
@@ -384,6 +394,12 @@ impl Binding {
             (Self::Input(input, InputParam::Comp), Value::Amount(amount)) => {
                 Action::InputComp { input, amount }
             }
+            (Self::Input(input, InputParam::Automix), Value::Switch(on)) => {
+                Action::InputAutomix { input, on }
+            }
+            (Self::Input(input, InputParam::AutomixWeight), Value::Gain(db)) => {
+                Action::InputAutomixWeight { input, db }
+            }
             (Self::Bus(bus, BusParam::Gain), Value::Gain(db)) => Action::BusGain {
                 bus,
                 db: action_gain(db),
@@ -444,6 +460,10 @@ impl Binding {
             Self::Input(index, InputParam::Solo) => format!("{} solo", input(index)),
             Self::Input(index, InputParam::Gate) => format!("{} gate", input(index)),
             Self::Input(index, InputParam::Comp) => format!("{} compressor", input(index)),
+            Self::Input(index, InputParam::Automix) => format!("{} automix", input(index)),
+            Self::Input(index, InputParam::AutomixWeight) => {
+                format!("{} automix weight", input(index))
+            }
             Self::Input(index, _) => input(index).to_owned(),
             Self::Bus(index, BusParam::Mute) => format!("{} mute", bus(index)),
             Self::Bus(index, BusParam::Eq) => format!("{} equalizer", bus(index)),

@@ -199,7 +199,10 @@ pult run --profile meinprofil.toml --log abend.csv
   0 dB), die anderen sind weit unten; sprechen zwei, liegt jeder um -3 dB; ist es still, teilen sich alle gleich, und der
   Raum klingt wie durch ein einzelnes Mikrofon. Es gibt keine Schwelle und kein Klicken, die Verstärkungen gleiten mit den
   Pegeln. Gemessen wird in der Eingangsstufe nach Gate und Kompressor, gewirkt vor dem Fader; Eingänge ohne `automix`
-  (Musik, Programme) bleiben unberührt.
+  (Musik, Programme) bleiben unberührt. Während des Laufs: `automix 2 on|off`, `automix 2 weight 6` (Vorrang -12 bis 12 dB:
+  ein Mikrofon mit 6 dB Gewicht zählt beim Teilen, als wäre es 6 dB lauter, etwa der Moderator gegen den Gast), im Profil
+  `automix_weight_db = 6`, in Szenen `automix = true|false`, im Fenster der Schalter **AM** im Kanalzug, von außen
+  `input/<n>/automix` und `input/<n>/automix/weight`, per MIDI `learn input/2/automix`.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil

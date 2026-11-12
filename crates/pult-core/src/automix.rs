@@ -39,6 +39,8 @@ pub const FOLLOW_SECONDS: f32 = 0.01;
 pub struct AutomixMember {
     power: AtomicF32,
     on: AtomicBool,
+    /// Its priority as a factor on its power (1: none), as Dugan's weight.
+    weight: AtomicF32,
 }
 
 impl AutomixMember {
@@ -63,6 +65,18 @@ impl AutomixMember {
     pub fn set_on(&self, on: bool) {
         self.on.store(on, Ordering::Relaxed);
     }
+
+    /// Its priority in dB, -12 to 12 (0: none): a microphone weighted up by 6 dB counts as if it
+    /// were 6 dB louder when the gain is shared, so it opens first, and stays open against a
+    /// louder neighbour (a host against a guest).
+    pub fn set_weight_db(&self, db: f32) {
+        let db = if db.is_finite() {
+            db.clamp(-12.0, 12.0)
+        } else {
+            0.0
+        };
+        self.weight.store(10_f32.powf(db / 10.0));
+    }
 }
 
 /// The microphones that share one gain.
@@ -80,6 +94,7 @@ impl AutomixGroup {
                 .map(|_| AutomixMember {
                     power: AtomicF32::new(0.0),
                     on: AtomicBool::new(true),
+                    weight: AtomicF32::new(1.0),
                 })
                 .collect(),
         }
@@ -117,11 +132,12 @@ impl AutomixGroup {
         let level = |m: &AutomixMember| {
             let p = m.power();
             // A broken measurement counts as silence, never as a share of everything.
-            if p.is_finite() && p > 0.0 {
+            let level = if p.is_finite() && p > 0.0 {
                 p + FLOOR_POWER
             } else {
                 FLOOR_POWER
-            }
+            };
+            level * m.weight.load()
         };
         let total: f32 = self.members.iter().filter(|m| m.is_on()).map(level).sum();
         (level(member) / total).sqrt()
@@ -250,6 +266,30 @@ mod tests {
         assert_eq!(group.gain(1), 1.0);
         assert!(db(group.gain(0)) > -0.01, "alone in the sharing");
         assert_eq!(group.gain(7), 1.0, "not in the group");
+    }
+
+    #[test]
+    fn a_weighted_microphone_counts_as_louder() {
+        let group = AutomixGroup::new(2);
+        group.member(0).store_power(0.01);
+        group.member(1).store_power(0.01);
+        group.member(0).set_weight_db(6.0);
+        // Weighted by 6 dB, four times the power: 80 % of the share, -1 dB against -7 dB.
+        assert!(
+            (db(group.gain(0)) + 0.97).abs() < 0.05,
+            "{}",
+            db(group.gain(0))
+        );
+        assert!(
+            (db(group.gain(1)) + 6.99).abs() < 0.05,
+            "{}",
+            db(group.gain(1))
+        );
+        group.member(0).set_weight_db(f32::NAN);
+        assert!(
+            (db(group.gain(0)) + 3.01).abs() < 0.05,
+            "a weight that is no number is none"
+        );
     }
 
     #[test]
