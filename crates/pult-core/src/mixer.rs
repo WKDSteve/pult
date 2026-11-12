@@ -547,6 +547,9 @@ impl MixerInput {
     /// It works on the input, before the resampler: a ramp of the gain behind it would start
     /// before the sound, which the filter of the resampler delays.
     fn fade_in(&mut self, frames: usize) {
+        if crate::ramp::unsmoothed() {
+            self.onset = self.onset_frames;
+        }
         if self.onset >= self.onset_frames {
             return;
         }
@@ -583,14 +586,31 @@ impl MixerInput {
         if event == Event::Priming {
             return false;
         }
-        if let Ok(chunk) = self.consumer.read_chunk(plan.skip * ch) {
-            chunk.commit_all();
-        }
+        let skip = plan.skip * ch;
         let read = plan.read * ch;
-        if let Ok(chunk) = self.consumer.read_chunk(read) {
+        // The plan never reads past what is buffered, so one chunk holds the skip and the read.
+        if let Ok(chunk) = self.consumer.read_chunk(skip + read) {
             let (first, second) = chunk.as_slices();
-            self.scratch[..first.len()].copy_from_slice(first);
-            self.scratch[first.len()..read].copy_from_slice(second);
+            let at = |i: usize| {
+                first
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(|| second[i - first.len()])
+            };
+            for (i, sample) in self.scratch[..read].iter_mut().enumerate() {
+                *sample = at(skip + i);
+            }
+            if skip > 0 && !crate::ramp::unsmoothed() {
+                // A skip (aligned after settling, or a resync) would jump to another point of
+                // the waveform: cross over from the sound that would have come next instead.
+                let fade = self.onset_frames.min(plan.read);
+                for (frame, out) in self.scratch[..fade * ch].chunks_exact_mut(ch).enumerate() {
+                    let new = (frame + 1) as f32 / (fade + 1) as f32;
+                    for (c, sample) in out.iter_mut().enumerate() {
+                        *sample = at(frame * ch + c) * (1.0 - new) + *sample * new;
+                    }
+                }
+            }
             chunk.commit_all();
         }
         self.fade_in(plan.read);

@@ -16,7 +16,8 @@ pub const MIN_RAMP_MS: u32 = 5;
 pub const MAX_RAMP_MS: u32 = 60_000;
 
 /// Set only by the sabotage probe of the click test (`pult-engine/tests/clicks_sabotage.rs`):
-/// every ramp jumps to its goal at once, as if there were no smoothing. Nothing else sets it.
+/// every ramp jumps to its goal at once, and a ring that primed again starts without its fade-in,
+/// as if there were no smoothing. Nothing else sets it.
 static UNSMOOTHED: AtomicBool = AtomicBool::new(false);
 
 /// Switches the smoothing of all ramps in this process off (`true`) or on again: for the sabotage
@@ -24,6 +25,12 @@ static UNSMOOTHED: AtomicBool = AtomicBool::new(false);
 #[doc(hidden)]
 pub fn sabotage_smoothing(off: bool) {
     UNSMOOTHED.store(off, Ordering::Relaxed);
+}
+
+/// Whether the sabotage probe switched the smoothing off: then the fade-in of a ring that primed
+/// again is skipped as well ([`crate::mixer`]), so the probe also hears a ring come back.
+pub(crate) fn unsmoothed() -> bool {
+    UNSMOOTHED.load(Ordering::Relaxed)
 }
 
 /// A target and the time to reach it, as one word: the audio thread never sees a new value with

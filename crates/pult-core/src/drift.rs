@@ -176,7 +176,7 @@ impl DriftControl {
         self.level += self.alpha * (after as f64 - self.level);
         // A surplus the average still shows beyond the threshold is no drift but a backlog
         // (a busy machine held one side back). Steering it off would shift the pitch for
-        // seconds; skipping it is one short jump. Never below the target, by the actual level.
+        // seconds; skipping it is one short crossfade (in the mixer). Never below the target, by the actual level.
         let limit = (self.target + self.skip_threshold()) as f64;
         if self.level > limit {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
