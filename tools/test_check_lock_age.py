@@ -184,5 +184,34 @@ class TooManyRequests(unittest.TestCase):
         self.assertEqual(len(pauses), len(age_check.BACKOFF))
 
 
+class CacheTrust(unittest.TestCase):
+    def test_a_date_without_a_time_zone_is_asked_again(self):
+        cache = {"x11-dl 2.21.0": "2020-01-01T00:00:00"}
+        asked = []
+
+        def ask(name, version):
+            asked.append(name)
+            return datetime(2026, 10, 10, tzinfo=timezone.utc)
+
+        moment, fresh = age_check.published_cached("x11-dl", "2.21.0", cache, ask=ask)
+        self.assertEqual(asked, ["x11-dl"])
+        self.assertTrue(fresh)
+        self.assertEqual(moment.year, 2026)
+        self.assertEqual(cache["x11-dl 2.21.0"], "2026-10-10T00:00:00+00:00")
+
+    def test_the_default_cache_is_the_workspace_s_not_the_account_s(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LOCK_AGE_CACHE", None)
+            with tempfile.TemporaryDirectory() as folder:
+                lock = os.path.join(folder, "Cargo.lock")
+                path = age_check.default_cache(lock)
+                self.assertEqual(path, os.path.join(folder, "target", "lock-age-cache.json"))
+                self.assertFalse(path.startswith(os.path.expanduser("~") + os.sep + ".cache"))
+
+    def test_lock_age_cache_still_names_another_file(self):
+        with mock.patch.dict(os.environ, {"LOCK_AGE_CACHE": "elsewhere.json"}):
+            self.assertEqual(age_check.default_cache("Cargo.lock"), "elsewhere.json")
+
+
 if __name__ == "__main__":
     unittest.main()

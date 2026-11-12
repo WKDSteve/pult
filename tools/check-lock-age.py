@@ -14,8 +14,13 @@ Exit 2: the check itself could not run (network, API); that is not a pass.
 
 crates.io asks for one request per second and an identifying User-Agent. When a publication date has been read
 once, it is kept in a cache file (it never changes): `--cache`, else `$LOCK_AGE_CACHE`, else
-`~/.cache/lock-age/crates-io.json`. A run then only asks for the versions it has not seen, which keeps a runner that
-checks several repositories below the rate limit of crates.io.
+`target/lock-age-cache.json` next to the lock file. A run then only asks for the versions it has not seen, which keeps
+a runner below the rate limit of crates.io.
+
+The cache belongs to one workspace, not to the account: a file every job of every repository on a self-hosted runner
+can write (`~/.cache`) would let the build script of any dependency anywhere enter an old date for a young version and
+open this gate. What is left: a build script of this very workspace can still write its `target/`; a hosted runner
+starts without it. A date without a time zone is no date this tool wrote: it is asked again.
 """
 
 import argparse
@@ -78,9 +83,11 @@ def published(name, version, sleep=time.sleep):
     raise RuntimeError("unreachable")
 
 
-def default_cache():
-    """Where the publication dates are kept between runs."""
-    return os.environ.get("LOCK_AGE_CACHE") or os.path.join(os.path.expanduser("~"), ".cache", "lock-age", "crates-io.json")
+def default_cache(lock="Cargo.lock"):
+    """Where the publication dates are kept between runs: `$LOCK_AGE_CACHE`, else `target/` of the lock's workspace."""
+    return os.environ.get("LOCK_AGE_CACHE") or os.path.join(
+        os.path.dirname(os.path.abspath(lock)), "target", "lock-age-cache.json"
+    )
 
 
 def load_cache(path):
@@ -110,7 +117,10 @@ def published_cached(name, version, cache, ask=None):
     key = f"{name} {version}"
     if key in cache:
         try:
-            return datetime.fromisoformat(cache[key]), False
+            moment = datetime.fromisoformat(cache[key])
+            # a date without a time zone was not written here (and cannot be compared with now): ask again
+            if moment.tzinfo is not None:
+                return moment, False
         except ValueError:
             pass
     moment = (ask or published)(name, version)
@@ -132,7 +142,7 @@ def main():
     parser.add_argument("--lock", default="Cargo.lock")
     parser.add_argument("--cache", default=None, help="file of known publication dates")
     args = parser.parse_args()
-    cache_path = args.cache or default_cache()
+    cache_path = args.cache or default_cache(args.lock)
     cache = load_cache(cache_path)
 
     with open(args.lock, encoding="utf-8") as handle:
