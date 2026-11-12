@@ -93,6 +93,20 @@ pub enum Binding {
         /// Bus index.
         bus: usize,
     },
+    /// The level of the crossing of input `input` and bus `bus`, in dB: `send/<n>/<bus>`.
+    Send {
+        /// Input index.
+        input: usize,
+        /// Bus index.
+        bus: usize,
+    },
+    /// Whether that send is taken before the input's fader: `sendpre/<n>/<bus>`.
+    SendPre {
+        /// Input index.
+        input: usize,
+        /// Bus index.
+        bus: usize,
+    },
 }
 
 /// The value of a parameter.
@@ -234,6 +248,14 @@ impl Binding {
                 input: input(number)?,
                 bus: bus(name)?,
             }),
+            ("send", number, name) => Ok(Self::Send {
+                input: input(number)?,
+                bus: bus(name)?,
+            }),
+            ("sendpre", number, name) => Ok(Self::SendPre {
+                input: input(number)?,
+                bus: bus(name)?,
+            }),
             _ => Err(malformed()),
         }
     }
@@ -272,6 +294,8 @@ impl Binding {
                 format!("bus/{}/{param}", bus(index)?)
             }
             Self::Route { input: i, bus: b } => format!("matrix/{}/{}", input(i)?, bus(b)?),
+            Self::Send { input: i, bus: b } => format!("send/{}/{}", input(i)?, bus(b)?),
+            Self::SendPre { input: i, bus: b } => format!("sendpre/{}/{}", input(i)?, bus(b)?),
         })
     }
 
@@ -315,6 +339,14 @@ impl Binding {
             Self::Route { input, bus } => {
                 view.buses.get(bus)?;
                 Value::Switch(view.inputs.get(input)?.buses.contains(&bus))
+            }
+            Self::Send { input, bus } => {
+                view.buses.get(bus)?;
+                Value::Gain(view.inputs.get(input)?.send(bus).db)
+            }
+            Self::SendPre { input, bus } => {
+                view.buses.get(bus)?;
+                Value::Switch(view.inputs.get(input)?.send(bus).pre)
             }
         })
     }
@@ -379,6 +411,15 @@ impl Binding {
                 change: LimitChange::Lookahead(ms),
             },
             (Self::Route { input, bus }, Value::Switch(on)) => Action::Route { input, bus, on },
+            (Self::Send { input, bus }, Value::Gain(db)) => Action::Send {
+                input,
+                bus,
+                db: action_gain(db),
+                ramp_ms: 0,
+            },
+            (Self::SendPre { input, bus }, Value::Switch(pre)) => {
+                Action::SendPre { input, bus, pre }
+            }
             _ => return None,
         })
     }
@@ -413,6 +454,10 @@ impl Binding {
             }
             Self::Bus(index, _) => bus(index).to_owned(),
             Self::Route { input: i, bus: b } => format!("{} to {}", input(i), bus(b)),
+            Self::Send { input: i, bus: b } => format!("{} send to {}", input(i), bus(b)),
+            Self::SendPre { input: i, bus: b } => {
+                format!("{} send to {} before the fader", input(i), bus(b))
+            }
         }
     }
 }
@@ -490,7 +535,47 @@ mod tests {
                 Binding::Bus(1, BusParam::LimitLookahead),
             ),
             ("matrix/2/A1", Binding::Route { input: 1, bus: 0 }),
+            ("send/2/A2", Binding::Send { input: 1, bus: 1 }),
+            ("sendpre/1/A1", Binding::SendPre { input: 0, bus: 0 }),
         ]
+    }
+
+    #[test]
+    fn a_send_reads_and_writes_its_crossing() {
+        let mut view = view();
+        view.inputs[1].send_mut(1).db = -6.0;
+        view.inputs[1].send_mut(1).pre = true;
+        let send = Binding::Send { input: 1, bus: 1 };
+        let pre = Binding::SendPre { input: 1, bus: 1 };
+        assert_eq!(send.read(&view), Some(Value::Gain(-6.0)));
+        assert_eq!(pre.read(&view), Some(Value::Switch(true)));
+        assert_eq!(
+            Binding::Send { input: 0, bus: 0 }.read(&view),
+            Some(Value::Gain(0.0)),
+            "a crossing without an entry is at 0 dB"
+        );
+        assert_eq!(
+            send.write(Value::Gain(-3.0)),
+            Some(Action::Send {
+                input: 1,
+                bus: 1,
+                db: -3.0,
+                ramp_ms: 0
+            })
+        );
+        assert_eq!(
+            pre.write(Value::Switch(false)),
+            Some(Action::SendPre {
+                input: 1,
+                bus: 1,
+                pre: false
+            })
+        );
+        assert_eq!(
+            send.write(Value::Switch(true)),
+            None,
+            "a send takes a level"
+        );
     }
 
     #[test]

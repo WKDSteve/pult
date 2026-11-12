@@ -427,6 +427,34 @@ fn the_matrix_routes_too() {
 }
 
 #[test]
+fn the_matrix_sets_the_send_of_a_crossing_and_takes_it_before_the_fader() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("Matrix").click();
+    harness.run_steps(2);
+    let bus = desk_view(&mut harness).inputs[SPOTIFY].buses[0];
+    let name = desk_view(&mut harness).buses[bus].name.clone();
+    let center = harness
+        .get_by_label(&format!("Spotify.exe send to {name}"))
+        .rect()
+        .center();
+    harness.hover_at(center);
+    harness.drag_at(center);
+    harness.run_steps(1);
+    harness.hover_at(center - vec2(0.0, 40.0));
+    harness.run_steps(1);
+    harness.drop_at(center - vec2(0.0, 40.0));
+    let send = desk_view(&mut harness).inputs[SPOTIFY].send(bus);
+    assert!(send.db > 0.0, "turned up: {}", send.db);
+    assert!(!send.pre);
+
+    harness
+        .get_by_label(&format!("Spotify.exe send to {name} before the fader"))
+        .click();
+    assert!(desk_view(&mut harness).inputs[SPOTIFY].send(bus).pre);
+}
+
+#[test]
 fn inputs_of_the_same_name_keep_their_own_crosspoints() {
     // Two instances of one program carry the same name; each crosspoint must still switch
     // its own input.

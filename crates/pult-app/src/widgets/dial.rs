@@ -12,7 +12,7 @@ use pult_core::eq::{Band, EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
 use pult_core::limiter::{
     DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LIMIT_CEILING_DB, LIMIT_LOOKAHEAD_MS,
 };
-use pult_core::scale::Span;
+use pult_core::scale::{FADER_FLOOR_DB, FADER_TOP_DB, Span};
 use pult_core::view::{AMOUNT_RANGE, Action};
 
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value, Values};
@@ -47,6 +47,12 @@ impl Dial {
                 span: Span::even(AMOUNT_RANGE),
                 home: 0.0,
                 both_ways: false,
+            }),
+            // The level of a crossing: the range of a fader, 0 dB at home.
+            Binding::Send { .. } => Some(Self {
+                span: Span::even((FADER_FLOOR_DB, FADER_TOP_DB)),
+                home: 0.0,
+                both_ways: true,
             }),
             Binding::Bus(_, BusParam::LimitCeiling) => Some(Self {
                 span: Span::even(LIMIT_CEILING_DB),

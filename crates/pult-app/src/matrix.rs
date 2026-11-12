@@ -1,14 +1,17 @@
 //! The matrix view: inputs as rows, buses as columns, a crosspoint where an input feeds a bus.
+//! A crosspoint that is on carries the send of that crossing: a dial for its level (a double
+//! click puts it back to 0 dB) and a PRE button that takes it before the input's fader.
 
 use eframe::egui::{
-    Align2, CornerRadius, Frame, Margin, Pos2, Rect, Response, RichText, ScrollArea, Sense, Stroke,
-    StrokeKind, Ui, WidgetInfo, pos2, vec2,
+    Align2, Button, CornerRadius, Frame, Margin, Pos2, Rect, Response, RichText, ScrollArea, Sense,
+    Stroke, StrokeKind, Ui, Vec2, WidgetInfo, pos2, vec2,
 };
 use pult_core::view::{Action, InputView, MixerView, SourceKind};
 
 use crate::binding::{Binding, Value};
 use crate::theme::Theme;
 use crate::widgets::badge::{elided, show_elided};
+use crate::widgets::dial::{Dial, dial};
 use crate::widgets::strip::format_rate;
 
 const NAME_WIDTH: f32 = 230.0;
@@ -42,7 +45,9 @@ pub fn show(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("ROUTING").size(10.0).color(p.text_faint));
         ui.label(
-            RichText::new("click a crosspoint to send an input to a bus")
+            RichText::new(
+                "click a crosspoint to send an input to a bus; its dial sets the level, PRE takes it before the fader",
+            )
                 .size(10.0)
                 .color(p.text_faint),
         );
@@ -125,6 +130,9 @@ fn grid(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
             );
             if response.clicked() {
                 actions.extend(route.write(Value::Switch(!on)));
+            }
+            if on {
+                send_controls(ui, view, cell(row, column), (row, column), actions);
             }
         }
     }
@@ -212,6 +220,48 @@ fn row_head(ui: &Ui, rect: Rect, row: usize, input: &InputView) {
         vec2(BAR_SIZE[0], BAR_SIZE[1]),
     );
     crate::widgets::meter::level_bar(painter, bar, input.peak_db);
+}
+
+/// The send of a crosspoint that is on: PRE at its left, the level dial at its right.
+fn send_controls(
+    ui: &mut Ui,
+    view: &MixerView,
+    rect: Rect,
+    (input, bus): (usize, usize),
+    actions: &mut Vec<Action>,
+) {
+    let send = Binding::Send { input, bus };
+    let pre = Binding::SendPre { input, bus };
+    if let Some(shape) = Dial::of(send) {
+        let mut db = match send.read(view) {
+            Some(Value::Gain(db)) => db,
+            _ => 0.0,
+        };
+        let before = db;
+        let at = Rect::from_center_size(
+            pos2(rect.right() - 18.0, rect.center().y),
+            Vec2::splat(22.0),
+        );
+        let label = send.title(view);
+        let response = ui.put(at, |ui: &mut Ui| dial(ui, &mut db, shape, 22.0, &label));
+        if response.changed() && (db - before).abs() > f32::EPSILON {
+            actions.extend(send.write(Value::Gain(db)));
+        }
+    }
+    let pre_on = pre.read(view) == Some(Value::Switch(true));
+    let at = Rect::from_center_size(pos2(rect.left() + 19.0, rect.center().y), vec2(30.0, 16.0));
+    let button = Button::new(RichText::new("PRE").size(9.0))
+        .selected(pre_on)
+        .small()
+        .wrap_mode(eframe::egui::TextWrapMode::Extend);
+    let title = pre.title(view);
+    let response = ui.put(at, button).on_hover_text(&title);
+    // Its own name for a screen reader: every crosspoint has a PRE.
+    response
+        .widget_info(|| WidgetInfo::selected(eframe::egui::Role::CheckBox, true, pre_on, &title));
+    if response.clicked() {
+        actions.extend(pre.write(Value::Switch(!pre_on)));
+    }
 }
 
 /// One crosspoint; its id comes from its place, not its label: two inputs may share a name.

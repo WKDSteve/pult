@@ -56,5 +56,5 @@ pub use stage::{InputStage, STAGE_FRAMES};
 pub use tone::Sine;
 pub use view::{
     Action, BusView, Desk, EventKind, EventView, FakeDesk, InputView, MeterPoint, MixerView, Reply,
-    SourceKind,
+    SendView, SourceKind,
 };

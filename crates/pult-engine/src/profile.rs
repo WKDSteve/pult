@@ -10,6 +10,9 @@
 //! gain_db = 0                  # optional
 //! mute = false                 # optional
 //! automix = false              # optional: one of the microphones that share one gain
+//! sends = [{ bus = "A1", gain_db = -6, pre = true }]
+//!                              # optional: the level of a crossing (an aux send); pre = before
+//!                              # the fader, so it keeps its level when the fader moves
 //! eq_on = true                 # optional: false switches the equalizer off, keeping its bands
 //! limit_on = true              # optional: false switches the limiter off
 //! limit_db = -0.3              # optional: the ceiling of the limiter, -20 to 0
@@ -69,7 +72,9 @@ use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use crate::live::quoted;
-use crate::{BusSpec, Error, InputKind, InputSpec, RouteSpec, SceneBus, SceneInput, SceneSpec};
+use crate::{
+    BusSpec, Error, InputKind, InputSpec, RouteSpec, SceneBus, SceneInput, SceneSpec, SendSpec,
+};
 
 /// Buffering per input when a profile or the command line names none.
 pub const DEFAULT_LATENCY_MS: u32 = 40;
@@ -131,6 +136,8 @@ struct SceneInputEntry {
     buses: Option<Vec<String>>,
     gate: Option<f32>,
     comp: Option<f32>,
+    #[serde(default)]
+    sends: Vec<SendEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +198,42 @@ struct InputEntry {
     mute: bool,
     #[serde(default)]
     automix: bool,
+    #[serde(default)]
+    sends: Vec<SendEntry>,
+}
+
+/// One send of an input or of a scene's input: `{ bus = "A1", gain_db = -6, pre = true }`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SendEntry {
+    bus: String,
+    #[serde(default)]
+    gain_db: f32,
+    #[serde(default)]
+    pre: bool,
+}
+
+/// The sends of `entries`, checked: a bus that exists, once, a gain in range.
+fn sends(
+    place: &str,
+    entries: Vec<SendEntry>,
+    buses: &[BusSpec],
+) -> Result<Vec<SendSpec>, ProfileError> {
+    let mut out: Vec<SendSpec> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let bus = bus_index(place, &entry.bus, buses)?;
+        if out.iter().any(|send| send.bus == bus) {
+            return fail(format!("{place} has two sends to bus {}", entry.bus));
+        }
+        check_gain(&format!("{place}, send to {}", entry.bus), entry.gain_db)?;
+        out.push(SendSpec {
+            bus,
+            gain_db: entry.gain_db,
+            pre: entry.pre,
+        });
+    }
+    out.sort_by_key(|send| send.bus);
+    Ok(out)
 }
 
 fn fail<T>(message: String) -> Result<T, ProfileError> {
@@ -279,9 +322,11 @@ fn scene_input(
         && routed.is_none()
         && input.gate.is_none()
         && input.comp.is_none()
+        && input.sends.is_empty()
     {
         return fail(format!("{place} changes nothing"));
     }
+    let scene_sends = sends(&place, input.sends, buses)?;
     Ok(SceneInput {
         input: index,
         gain_db: input.gain_db,
@@ -290,6 +335,7 @@ fn scene_input(
         buses: routed,
         gate: input.gate,
         comp: input.comp,
+        sends: scene_sends,
     })
 }
 
@@ -531,6 +577,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             comp: entry.comp,
             muted: entry.mute,
             automix: entry.automix,
+            sends: sends(&what, entry.sends, &buses)?,
             buses: routed,
         });
     }
@@ -611,31 +658,7 @@ pub fn render(spec: &RouteSpec) -> String {
         }
     }
     for input in &spec.inputs {
-        let key = match input.kind {
-            InputKind::Device => "device",
-            InputKind::Process => "process",
-        };
-        let buses: Vec<String> = input
-            .buses
-            .iter()
-            .map(|&bus| quoted(&spec.buses[bus].name))
-            .collect();
-        let _ = write!(
-            text,
-            "\n[[input]]\n{key} = {}\nbuses = [{}]\n{}gain_db = {}\npan = {}\n",
-            quoted(&input.device),
-            buses.join(", "),
-            label_line(input.label.as_ref()),
-            input.gain_db,
-            input.pan,
-        );
-        // Only when they are on: most inputs have neither.
-        for (key, amount) in [("gate", input.gate), ("comp", input.comp)] {
-            if amount > 0.0 {
-                let _ = writeln!(text, "{key} = {amount}");
-            }
-        }
-        let _ = writeln!(text, "mute = {}", input.muted);
+        render_input(&mut text, spec, input);
     }
     for scene in &spec.scenes {
         let _ = write!(text, "\n[[scene]]\nname = {}\n", quoted(&scene.name));
@@ -656,6 +679,9 @@ pub fn render(spec: &RouteSpec) -> String {
                     .map(|&bus| quoted(&spec.buses[bus].name))
                     .collect();
                 let _ = writeln!(text, "buses = [{}]", names.join(", "));
+            }
+            if !input.sends.is_empty() {
+                let _ = writeln!(text, "sends = [{}]", render_sends(spec, &input.sends));
             }
         }
         for bus in &scene.buses {
@@ -681,6 +707,57 @@ pub fn render(spec: &RouteSpec) -> String {
         }
     }
     text
+}
+
+/// The `[[input]]` table of `input`.
+fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
+    let key = match input.kind {
+        InputKind::Device => "device",
+        InputKind::Process => "process",
+    };
+    let buses: Vec<String> = input
+        .buses
+        .iter()
+        .map(|&bus| quoted(&spec.buses[bus].name))
+        .collect();
+    let _ = write!(
+        text,
+        "\n[[input]]\n{key} = {}\nbuses = [{}]\n{}gain_db = {}\npan = {}\n",
+        quoted(&input.device),
+        buses.join(", "),
+        label_line(input.label.as_ref()),
+        input.gain_db,
+        input.pan,
+    );
+    // Only when they are on: most inputs have neither.
+    for (key, amount) in [("gate", input.gate), ("comp", input.comp)] {
+        if amount > 0.0 {
+            let _ = writeln!(text, "{key} = {amount}");
+        }
+    }
+    let _ = writeln!(text, "mute = {}", input.muted);
+    if input.automix {
+        let _ = writeln!(text, "automix = true");
+    }
+    if !input.sends.is_empty() {
+        let _ = writeln!(text, "sends = [{}]", render_sends(spec, &input.sends));
+    }
+}
+
+/// Sends as the inline tables of a profile: `{ bus = "A1", gain_db = -6, pre = true }, ...`.
+fn render_sends(spec: &RouteSpec, sends: &[SendSpec]) -> String {
+    sends
+        .iter()
+        .map(|send| {
+            let pre = if send.pre { ", pre = true" } else { "" };
+            format!(
+                "{{ bus = {}, gain_db = {}{pre} }}",
+                quoted(&spec.buses[send.bus].name),
+                send.gain_db
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The lines of what a scene changes; what it leaves alone has none.
@@ -788,6 +865,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_number(table, "comp", input.comp);
         set_switch(table, "mute", input.muted);
         set_switch(table, "automix", input.automix);
+        set_sends(table, spec, &input.sends);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
     let text = file.to_string();
@@ -918,6 +996,31 @@ fn set_number(table: &mut Table, key: &str, number: f32) {
 }
 
 /// Sets a switch that defaults to off.
+/// The `sends` of an input in its table: written when it changed, removed when there are none.
+fn set_sends(table: &mut Table, spec: &RouteSpec, sends: &[SendSpec]) {
+    if sends.is_empty() {
+        table.remove("sends");
+        return;
+    }
+    let mut array = Array::new();
+    for send in sends {
+        let mut entry = toml_edit::InlineTable::new();
+        entry.insert("bus", spec.buses[send.bus].name.as_str().into());
+        entry.insert("gain_db", f64::from(send.gain_db).into());
+        if send.pre {
+            entry.insert("pre", true.into());
+        }
+        array.push(entry);
+    }
+    let same = table
+        .get("sends")
+        .and_then(Item::as_array)
+        .is_some_and(|old| old.to_string().trim() == array.to_string().trim());
+    if !same {
+        set(table, "sends", array.into());
+    }
+}
+
 fn set_switch(table: &mut Table, key: &str, on: bool) {
     let same = table
         .get(key)
@@ -1290,6 +1393,81 @@ mod tests {
         assert_eq!(text.matches('\n').count(), text.matches("\r\n").count());
     }
 
+    const SENDS: &str = r#"
+        [[bus]]
+        name = "A1"
+        device = "Speakers"
+
+        [[bus]]
+        name = "B1"
+        device = "Headset"
+
+        [[input]]
+        device = "Mic"
+        buses = ["A1", "B1"]
+        # the headphones keep their level when the stream fader moves
+        sends = [{ bus = "B1", gain_db = -6, pre = true }]
+        automix = true
+
+        [[scene]]
+        name = "Leise"
+        [[scene.input]]
+        input = 1
+        sends = [{ bus = "A1", gain_db = -12 }]
+    "#;
+
+    #[test]
+    fn sends_are_read_rendered_and_merged() {
+        let spec = parse(SENDS).expect("valid profile");
+        let mic = &spec.inputs[0];
+        assert_eq!(
+            mic.sends,
+            [SendSpec {
+                bus: 1,
+                gain_db: -6.0,
+                pre: true
+            }]
+        );
+        assert!(mic.automix);
+        assert_eq!(
+            spec.scenes[0].inputs[0].sends,
+            [SendSpec {
+                bus: 0,
+                gain_db: -12.0,
+                pre: false
+            }]
+        );
+        // A rendered profile reads back to the same route, sends and automix included.
+        assert_eq!(parse(&render(&spec)).as_ref(), Ok(&spec));
+        // A change merged into the file keeps its comment.
+        let mut changed = spec.clone();
+        changed.inputs[0].set_send(SendSpec {
+            bus: 0,
+            gain_db: -3.0,
+            pre: false,
+        });
+        let merged = merge(SENDS, &changed);
+        assert!(merged.contains("# the headphones keep"), "{merged}");
+        assert_eq!(parse(&merged).as_ref(), Ok(&changed));
+        // Back to the defaults: the input has no sends any more (the scene keeps its own).
+        let mut plain = changed.clone();
+        plain.inputs[0].sends.clear();
+        let merged = merge(SENDS, &plain);
+        assert_eq!(parse(&merged).as_ref(), Ok(&plain));
+        assert!(!merged.contains("gain_db = -6, pre = true"), "{merged}");
+    }
+
+    #[test]
+    fn a_send_to_a_bus_that_is_not_there_or_twice_is_refused() {
+        let missing = SENDS.replace("bus = \"B1\", gain_db = -6", "bus = \"C9\", gain_db = -6");
+        assert!(parse(&missing).unwrap_err().0.contains("C9"));
+        let twice = SENDS.replace(
+            "sends = [{ bus = \"B1\", gain_db = -6, pre = true }]",
+            "sends = [{ bus = \"B1\" }, { bus = \"B1\", gain_db = -1 }]",
+        );
+        assert!(parse(&twice).unwrap_err().0.contains("two sends"));
+    }
+
     const SCENES: &str = r#"
         [[bus]]
         name = "A1"
@@ -1355,6 +1533,7 @@ mod tests {
                         buses: Some(vec![0, 1]),
                         gate: None,
                         comp: None,
+                        sends: Vec::new(),
                     }],
                     buses: vec![SceneBus {
                         bus: 1,

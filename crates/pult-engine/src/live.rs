@@ -13,7 +13,9 @@ use pult_core::view::{
 use pult_core::{EQ_BANDS, EqControls, InputControls, MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
-use crate::{BusSpec, InputSpec, RouteSpec, Running, SceneBus, SceneInput, SceneSpec};
+use crate::{
+    BusSpec, InputSpec, RouteSpec, Running, RunningRoute, SceneBus, SceneInput, SceneSpec, SendSpec,
+};
 
 impl Running {
     /// Makes one change to the limiter of `bus`, and returns what to show for it.
@@ -150,6 +152,10 @@ impl Running {
                 )])
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
+            Command::Send(input, bus, gain_db, ramp_ms) => {
+                self.send(*input, *bus, *gain_db, *ramp_ms)
+            }
+            Command::SendPre(input, bus, pre) => self.send_pre(*input, *bus, *pre),
             Command::Scene(name) => self.scene(name),
             Command::Scenes => Ok(vec![self.scene_names()]),
             // Who is soloed silences the others, and only the desk knows them all.
@@ -257,6 +263,13 @@ impl Running {
                 }
                 self.spec.inputs[change.input].buses.clone_from(buses);
             }
+            for send in &change.sends {
+                if let Some(route) = self.inputs[change.input].routes.get(send.bus) {
+                    route.send.ramp_to(db_to_linear(send.gain_db), blend);
+                    route.send_pre.store(send.pre, Ordering::Relaxed);
+                }
+                self.spec.inputs[change.input].set_send(*send);
+            }
             scene_dynamics(
                 change,
                 &self.inputs[change.input].controls,
@@ -319,6 +332,69 @@ impl Running {
         Ok(vec![format!("{label} {state} {bus_name}")])
     }
 
+    /// Sets the level of the crossing of `input` and `bus` in dB, reached in `ramp_ms`.
+    ///
+    /// # Errors
+    ///
+    /// A message when an index, the level or the ramp is out of range.
+    pub fn send(
+        &mut self,
+        input: usize,
+        bus: usize,
+        gain_db: f32,
+        ramp_ms: u32,
+    ) -> Result<Vec<String>, String> {
+        let route = self.crossing(input, bus)?;
+        if !GAIN_DB.contains(&gain_db) {
+            return Err(format!(
+                "a send must be {} to {} dB, not {gain_db}",
+                GAIN_DB.start(),
+                GAIN_DB.end()
+            ));
+        }
+        check_ramp(ramp_ms)?;
+        route.send.ramp_to(db_to_linear(gain_db), ramp_ms);
+        let spec = &mut self.spec.inputs[input];
+        let pre = spec.send(bus).pre;
+        spec.set_send(SendSpec { bus, gain_db, pre });
+        Ok(vec![format!(
+            "{} send to {} {gain_db:.1} dB{}",
+            self.target_label(Target::Input(input)),
+            self.buses[bus].name,
+            over(ramp_ms)
+        )])
+    }
+
+    /// Takes the send of `input` to `bus` before (`pre`) or after the input's fader.
+    ///
+    /// # Errors
+    ///
+    /// A message when an index is out of range.
+    pub fn send_pre(&mut self, input: usize, bus: usize, pre: bool) -> Result<Vec<String>, String> {
+        let route = self.crossing(input, bus)?;
+        route.send_pre.store(pre, Ordering::Relaxed);
+        let spec = &mut self.spec.inputs[input];
+        let gain_db = spec.send(bus).gain_db;
+        spec.set_send(SendSpec { bus, gain_db, pre });
+        let point = if pre { "before" } else { "after" };
+        Ok(vec![format!(
+            "{} send to {} {point} the fader",
+            self.target_label(Target::Input(input)),
+            self.buses[bus].name
+        )])
+    }
+
+    /// The ring of `input` on `bus`.
+    fn crossing(&self, input: usize, bus: usize) -> Result<&RunningRoute, String> {
+        let Some(running) = self.inputs.get(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        running
+            .routes
+            .get(bus)
+            .ok_or_else(|| format!("there is no bus {}", bus + 1))
+    }
+
     /// Writes the current state as a profile to `path`.
     ///
     /// # Errors
@@ -359,6 +435,14 @@ impl Running {
                 if amount > 0.0 {
                     let _ = write!(line, "  {what} {}", knob(amount));
                 }
+            }
+            for send in &spec.sends {
+                let point = if send.pre { " pre" } else { "" };
+                let _ = write!(
+                    line,
+                    "  send {} {:.1} dB{point}",
+                    self.buses[send.bus].name, send.gain_db
+                );
             }
             if spec.muted {
                 line.push_str("  muted");

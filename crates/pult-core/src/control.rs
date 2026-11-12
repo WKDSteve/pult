@@ -69,6 +69,11 @@ pub enum Command {
     Limit(usize, LimitChange),
     /// Routes an input (first index) to a bus (second index), or takes it off.
     Route(usize, usize, bool),
+    /// Sets the level of a crossing (input, bus) in dB, reached in so many milliseconds: what of
+    /// the input this bus gets.
+    Send(usize, usize, f32, u32),
+    /// Takes the send of a crossing (input, bus) before the input's fader (true) or after it.
+    SendPre(usize, usize, bool),
     /// Changes to the scene of this name.
     Scene(String),
     /// Lists the scenes.
@@ -104,6 +109,9 @@ limit <bus> <dB>     its ceiling, -20 to 0 (limit A1 -3)
 limit <bus> look <ms>
                      its lookahead, 0 to 5: gentler, and the sound leaves that much later
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
+send <input> <bus> <dB>
+                     the level of that crossing, -60 to 12 (send 2 B1 -6): a mix of its own
+                     per bus; send <input> <bus> pre|post takes it before or after the fader
 scene <name>         change to a scene of the profile; scenes lists them
 learn <address>      the next movement on the MIDI controller binds it (learn input/1/gain,
                      learn scene/abend); unlearn <address> takes it off
@@ -245,8 +253,35 @@ pub fn parse<S: AsRef<str>>(
             let (input, bus) = route(rest, names)?;
             Ok(Command::Route(input, bus, on))
         }
+        "send" => send(rest, names),
         other => error(format!("unknown command \"{other}\"; type help")),
     }
+}
+
+/// `send <input> <bus> <dB> [over <ms>]` or `send <input> <bus> pre|post`.
+fn send<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let usage = "usage: send <input> <bus> <dB> [over <ms>], or send <input> <bus> pre|post";
+    if let [words @ .., last] = rest
+        && (last.eq_ignore_ascii_case("pre") || last.eq_ignore_ascii_case("post"))
+    {
+        if words.len() < 2 {
+            return error(usage);
+        }
+        let (input, bus) = route(words, names)?;
+        return Ok(Command::SendPre(
+            input,
+            bus,
+            last.eq_ignore_ascii_case("pre"),
+        ));
+    }
+    let (rest, ramp_ms) = split_ramp(rest)?;
+    let (name, db) = split_value(rest, usage.trim_start_matches("usage: "))?;
+    let words: Vec<&str> = name.split_whitespace().collect();
+    if words.len() < 2 {
+        return error(usage);
+    }
+    let (input, bus) = route(&words, names)?;
+    Ok(Command::Send(input, bus, db, ramp_ms))
 }
 
 /// `eq <bus> on|off` or `eq <bus> <band> <setting> <value>`; the bus may have several words.
@@ -505,6 +540,19 @@ mod tests {
 
     fn bad(line: &str) -> String {
         parse(line, &INPUTS, &BUSES, &NO_LABELS).expect_err(line).0
+    }
+
+    #[test]
+    fn a_send_has_a_level_or_a_point() {
+        assert_eq!(ok("send 2 B2 -6"), Command::Send(1, 1, -6.0, 0));
+        assert_eq!(
+            ok("send cable a1 -3 over 200"),
+            Command::Send(0, 0, -3.0, 200)
+        );
+        assert_eq!(ok("send Analogue 1 b2 pre"), Command::SendPre(1, 1, true));
+        assert_eq!(ok("SEND 3 A1 POST"), Command::SendPre(2, 0, false));
+        assert!(bad("send 2").contains("usage: send"));
+        assert!(bad("send 2 pre").contains("usage: send"));
     }
 
     #[test]

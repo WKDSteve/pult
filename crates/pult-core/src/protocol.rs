@@ -97,6 +97,9 @@ pub struct InputState {
     pub comp: f32,
     /// The names of the buses it feeds.
     pub buses: Vec<String>,
+    /// Its send to every bus, in bus order; empty from a run older than sends.
+    #[serde(default)]
+    pub sends: Vec<SendState>,
     /// Whether the device or program is there.
     pub present: bool,
     /// The highest peak since the previous state in dBFS; `None` for silence.
@@ -105,6 +108,17 @@ pub struct InputState {
     pub drift_ppm: f32,
     /// Times it ran dry or resynced so far.
     pub dropouts: u64,
+}
+
+/// The send of an input to one bus.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SendState {
+    /// The name of the bus.
+    pub bus: String,
+    /// Level in dB.
+    pub gain_db: f32,
+    /// Taken before the input's fader.
+    pub pre: bool,
 }
 
 /// One bus.
@@ -219,7 +233,7 @@ impl State {
                 .inputs
                 .iter()
                 .enumerate()
-                .map(|(index, input)| InputState::new(index, input, &bus_name))
+                .map(|(index, input)| InputState::new(index, input, &bus_name, view.buses.len()))
                 .collect(),
             buses: view.buses.iter().map(BusState::new).collect(),
             events,
@@ -230,7 +244,12 @@ impl State {
 }
 
 impl InputState {
-    fn new(index: usize, input: &InputView, bus_name: &impl Fn(&usize) -> Option<String>) -> Self {
+    fn new(
+        index: usize,
+        input: &InputView,
+        bus_name: &impl Fn(&usize) -> Option<String>,
+        buses: usize,
+    ) -> Self {
         Self {
             number: index + 1,
             name: input.name.clone(),
@@ -247,6 +266,16 @@ impl InputState {
             gate: input.gate,
             comp: input.comp,
             buses: input.buses.iter().filter_map(bus_name).collect(),
+            sends: (0..buses)
+                .filter_map(|bus| {
+                    let send = input.send(bus);
+                    Some(SendState {
+                        bus: bus_name(&bus)?,
+                        gain_db: send.db,
+                        pre: send.pre,
+                    })
+                })
+                .collect(),
             present: input.present,
             peak_db: input.peak_db,
             drift_ppm: input.drift_ppm,
@@ -397,6 +426,16 @@ impl Op {
             Command::Route(input, to, on) => set(
                 format!("matrix/{}/{}", input + 1, bus(*to)?),
                 OpValue::Switch(*on),
+                0,
+            ),
+            Command::Send(input, to, db, ramp_ms) => set(
+                format!("send/{}/{}", input + 1, bus(*to)?),
+                OpValue::Number(*db),
+                *ramp_ms,
+            ),
+            Command::SendPre(input, to, pre) => set(
+                format!("sendpre/{}/{}", input + 1, bus(*to)?),
+                OpValue::Switch(*pre),
                 0,
             ),
             Command::Scene(name) => Self::Scene { name: name.clone() },

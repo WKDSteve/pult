@@ -32,7 +32,7 @@ pub fn sabotage_smoothing(off: bool) {
 pub struct Aim(u64);
 
 impl Aim {
-    fn new(value: f32, ms: u32) -> Self {
+    pub(crate) fn new(value: f32, ms: u32) -> Self {
         Self(u64::from(value.to_bits()) << 32 | u64::from(ms))
     }
 

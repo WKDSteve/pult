@@ -55,6 +55,24 @@ pub enum SourceKind {
     Program,
 }
 
+/// The send of one crossing of an input and a bus.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SendView {
+    /// Its level in dB, 0 at first.
+    pub db: f32,
+    /// Taken before the input's fader.
+    pub pre: bool,
+}
+
+impl Default for SendView {
+    fn default() -> Self {
+        Self {
+            db: 0.0,
+            pre: false,
+        }
+    }
+}
+
 /// One input as a channel strip shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputView {
@@ -80,6 +98,8 @@ pub struct InputView {
     pub comp: f32,
     /// The buses it feeds, as indices into [`MixerView::buses`].
     pub buses: Vec<usize>,
+    /// The send to each bus, by bus index; a bus beyond the list has the default (0 dB, post).
+    pub sends: Vec<SendView>,
     /// Whether the device or program is there; false while it is gone.
     pub present: bool,
     /// Peak since the previous view in dBFS, at the [`MixerView::meter_point`]; `None` for
@@ -92,6 +112,20 @@ pub struct InputView {
 }
 
 impl InputView {
+    /// The send of this input to bus `bus`.
+    #[must_use]
+    pub fn send(&self, bus: usize) -> SendView {
+        self.sends.get(bus).copied().unwrap_or_default()
+    }
+
+    /// The send to bus `bus`, to change it; the list grows to it.
+    pub fn send_mut(&mut self, bus: usize) -> &mut SendView {
+        if self.sends.len() <= bus {
+            self.sends.resize(bus + 1, SendView::default());
+        }
+        &mut self.sends[bus]
+    }
+
     /// What a strip calls it: its label, else its full name.
     #[must_use]
     pub fn shown_name(&self) -> &str {
@@ -274,6 +308,26 @@ pub enum Action {
         /// On or off.
         on: bool,
     },
+    /// Sets the level of a crossing.
+    Send {
+        /// Input index.
+        input: usize,
+        /// Bus index.
+        bus: usize,
+        /// Level in dB.
+        db: f32,
+        /// Milliseconds to reach it in.
+        ramp_ms: u32,
+    },
+    /// Takes the send of a crossing before or after the input's fader.
+    SendPre {
+        /// Input index.
+        input: usize,
+        /// Bus index.
+        bus: usize,
+        /// Before the fader.
+        pre: bool,
+    },
     /// Changes to a scene of the route.
     Scene {
         /// Its name, ignoring case.
@@ -379,6 +433,7 @@ impl FakeDesk {
             gate: 0.0,
             comp: 0.0,
             buses,
+            sends: Vec::new(),
             present: true,
             peak_db: None,
             drift_ppm: 0.0,
@@ -457,6 +512,30 @@ impl FakeDesk {
             0.0
         };
         -24.0 + 8.0 * phase.sin() + beat
+    }
+
+    /// Sets the level and/or the point of the send of `input` to `bus`.
+    fn set_send(
+        &mut self,
+        input: usize,
+        bus: usize,
+        db: Option<f32>,
+        pre: Option<bool>,
+    ) -> Result<Vec<String>, String> {
+        let db = db.map(check_gain).transpose()?;
+        let name = self.bus_mut(bus)?.name.clone();
+        let send = self.input_mut(input)?.send_mut(bus);
+        let mut said = Vec::new();
+        if let Some(db) = db {
+            send.db = db;
+            said.push(format!("[{}] send to {name} {db:.1} dB", input + 1));
+        }
+        if let Some(pre) = pre {
+            send.pre = pre;
+            let point = if pre { "pre" } else { "post" };
+            said.push(format!("[{}] send to {name} {point}", input + 1));
+        }
+        Ok(said)
     }
 
     fn input_mut(&mut self, input: usize) -> Result<&mut InputView, String> {
@@ -719,6 +798,8 @@ impl Desk for FakeDesk {
             Action::BusEq { bus, on } => self.set_eq(bus, on),
             Action::BusEqBand { bus, band, change } => self.set_band(bus, band, change),
             Action::BusLimit { bus, change } => self.set_limit(bus, change),
+            Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
+            Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
             Action::Route { input, bus, on } => {
                 let name = self.bus_mut(bus)?.name.clone();
                 let strip = self.input_mut(input)?;

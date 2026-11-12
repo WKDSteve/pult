@@ -243,7 +243,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
             Some(other) => Err(usage(format!("unexpected argument \"{other}\""))),
         },
         "gain" | "mute" | "unmute" | "solo" | "unsolo" | "pan" | "gate" | "comp" | "compressor"
-        | "eq" | "limit" | "route" | "unroute" | "scene" => {
+        | "eq" | "limit" | "route" | "unroute" | "send" | "scene" => {
             // Quoted or not: the input line reads a name of several words either way.
             let rest: Vec<String> = args.collect();
             Ok(Command::Remote(Remote::Line(format!(

@@ -42,7 +42,8 @@ use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
 use pult_core::{
     AutomixGroup, Band, BusHandle, Counter, DriftControl, InputConfig, InputControls, InputStage,
-    InputStats, Mixer, MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
+    InputStats, Mixer, MixerInput, SelectError, Sine, connect_with, db_to_linear, ramp::Glide,
+    select,
 };
 
 pub use desk::EngineDesk;
@@ -303,11 +304,55 @@ pub struct InputSpec {
     /// In the automix group of the route: of the inputs that are, the ones spoken into are open
     /// and the sum stays as loud as one ([`pult_core::automix`]).
     pub automix: bool,
+    /// The sends that differ from the default (0 dB, after the fader), one per bus at most.
+    pub sends: Vec<SendSpec>,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
     pub buses: Vec<usize>,
 }
 
+/// The send of an input to one bus: the level of that crossing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SendSpec {
+    /// Index into [`RouteSpec::buses`].
+    pub bus: usize,
+    /// Level in dB.
+    pub gain_db: f32,
+    /// Taken before the input's fader.
+    pub pre: bool,
+}
+
+impl SendSpec {
+    /// Whether it is the default a crossing has without an entry.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.gain_db == 0.0 && !self.pre
+    }
+}
+
 impl InputSpec {
+    /// The send to bus `bus`: its entry, or the default (0 dB, after the fader).
+    #[must_use]
+    pub fn send(&self, bus: usize) -> SendSpec {
+        self.sends
+            .iter()
+            .find(|send| send.bus == bus)
+            .copied()
+            .unwrap_or(SendSpec {
+                bus,
+                gain_db: 0.0,
+                pre: false,
+            })
+    }
+
+    /// Sets the send to bus `bus`; an entry that is the default again is dropped.
+    pub fn set_send(&mut self, send: SendSpec) {
+        self.sends.retain(|s| s.bus != send.bus);
+        if !send.is_default() {
+            self.sends.push(send);
+            self.sends.sort_by_key(|s| s.bus);
+        }
+    }
+
     /// An input at `gain_db`, centred, unmuted, without gate or compressor, feeding `buses`.
     #[must_use]
     pub fn new(device: impl Into<String>, gain_db: f32, buses: Vec<usize>) -> Self {
@@ -321,6 +366,7 @@ impl InputSpec {
             comp: 0.0,
             muted: false,
             automix: false,
+            sends: Vec::new(),
             buses,
         }
     }
@@ -387,6 +433,8 @@ pub struct SceneInput {
     pub gate: Option<f32>,
     /// Its compressor as one knob. Goes along its own times, not the scene's.
     pub comp: Option<f32>,
+    /// The sends it sets; the crossings it does not name stay as they are.
+    pub sends: Vec<SendSpec>,
 }
 
 /// What a scene changes of one bus; what it does not name stays as it is.
@@ -532,6 +580,10 @@ pub struct RunningRoute {
     pub stats: Arc<InputStats>,
     /// Whether the input feeds this bus now (the matrix button).
     pub routed: Arc<AtomicBool>,
+    /// The level of this crossing, linear ([`pult_core::InputHandle::send`]).
+    pub send: Arc<Glide>,
+    /// Whether the send is taken before the fader.
+    pub send_pre: Arc<AtomicBool>,
 }
 
 impl RunningRoute {
@@ -1070,10 +1122,15 @@ fn make_rings(
         };
         captures.push(capture);
         rings.bus_inputs[bus].push(mixer_input);
+        let send = input.send(bus);
+        handle.send.store(db_to_linear(send.gain_db));
+        handle.send_pre.store(send.pre, Ordering::Relaxed);
         routes.push(RunningRoute {
             bus,
             stats: handle.stats,
             routed: handle.routed,
+            send: handle.send,
+            send_pre: handle.send_pre,
         });
     }
     // Gate, compressor and the PRE meter run once for the input, at its own rate.

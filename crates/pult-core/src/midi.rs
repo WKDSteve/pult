@@ -250,9 +250,9 @@ impl Param {
         }
         let binding = Binding::parse(target, view).map_err(|e| e.to_string())?;
         Ok(match binding {
-            Binding::Input(_, InputParam::Gain) | Binding::Bus(_, BusParam::Gain) => {
-                Self::Gain(binding)
-            }
+            Binding::Input(_, InputParam::Gain)
+            | Binding::Bus(_, BusParam::Gain)
+            | Binding::Send { .. } => Self::Gain(binding),
             Binding::Input(_, InputParam::Pan) => Self::Pan(binding),
             Binding::Input(_, InputParam::Gate | InputParam::Comp) => {
                 Self::Knob(binding, Span::even(AMOUNT_RANGE))
@@ -277,7 +277,8 @@ impl Param {
             }
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
             | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit)
-            | Binding::Route { .. } => Self::Switch(binding),
+            | Binding::Route { .. }
+            | Binding::SendPre { .. } => Self::Switch(binding),
             Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter) => {
                 return Err(format!("{target} can only be read"));
             }

@@ -75,6 +75,7 @@ fn showcase(t: f64) -> MixerView {
                 gate: [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 comp: [4.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 buses: buses.to_vec(),
+                sends: Vec::new(),
                 present: i != 6,
                 peak_db: (i != 3 && i != 6)
                     .then(|| (base + gain_db.min(0.0) * 0.3 + wobble(seed, t) * 8.0).min(0.0)),

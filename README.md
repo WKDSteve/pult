@@ -15,6 +15,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Geräte auflisten (`pult devices`) | fertig |
 | Eingänge mischen und auf einen Ausgang spielen (`pult run --from … --to …`), Gain je Eingang | fertig |
 | Mehrere Busse (Ausgänge) mit Routing-Matrix, Gain/Mute/Pan je Eingang, Gain/Mute je Bus, als Profil-Datei (`pult run --profile`) | fertig |
+| Sends: eigener Pegel je Kreuzung aus Eingang und Bus, vor oder nach dem Fader (`send 2 B1 -6`, `send 2 B1 pre`, Profil, Szenen, Fernsteuerung, MIDI, Matrix im Fenster) | fertig |
 | Regler während des Laufs: `gain A1 -6`, `mute 2`, `pan`, `show`, `save profil.toml` in einer Eingabezeile unter der Statuszeile | fertig |
 | Testton auf ein Gerät (`pult tone`) | fertig |
 | Grundlage der Oberfläche (`pult_core::view`): Solo, Meter vor/nach dem Fader, Matrix während des Laufs umschalten | fertig, auch im Fenster |

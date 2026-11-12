@@ -220,6 +220,28 @@ pult run --profile meinprofil.toml --log abend.csv
   zur Grundstellung. Frequenz und Breite eines Bandes gehen oktavweise.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
   ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
+- **Sends (Pegel je Kreuzung):** Jeder Bus bekommt von jedem Eingang einen eigenen Pegel, wie die Aux-Wege großer Pulte:
+  `sends = [{ bus = "B1", gain_db = -6, pre = true }]` am Eingang, nur für die Busse, die vom Standard (0 dB, nach dem
+  Fader) abweichen. Nach dem Fader (`post`) wirkt der Eingangs-Fader zusätzlich; vor dem Fader (`pre = true`) bleibt der
+  Pegel, wenn der Fader sich bewegt. Mute und Solo wirken auf beide. Während des Laufs: `send 2 B1 -6`,
+  `send 2 B1 pre`, im Fenster in der Matrix (Drehregler und **PRE** an jeder geschalteten Kreuzung), von außen über
+  `send/<n>/<bus>` und `sendpre/<n>/<bus>`, per MIDI mit `learn send/2/B1`. Szenen setzen Sends genauso
+  (`sends = [...]` in `[[scene.input]]`); was eine Szene nicht nennt, bleibt.
+
+  Vorlage Kopfhörer gegen Gespräch: Das Mikrofon geht auf `A1` (Stream) und `B1` (eigener Kopfhörer). Auf `B1` vor dem
+  Fader, etwas leiser, damit man sich hört, auch wenn man sich im Stream herunterzieht:
+
+  ```toml
+  [[input]]
+  device = "Mikrofon"
+  buses = ["A1", "B1"]
+  sends = [{ bus = "B1", gain_db = -10, pre = true }]
+
+  [[input]]
+  process = "Discord"
+  buses = ["A1", "B1"]
+  sends = [{ bus = "A1", gain_db = -4 }]   # das Gespräch im Stream etwas unter der eigenen Stimme
+  ```
 - **Szenen:** `[[scene]]` benennt einen Zustand des Mischpults, siehe unten.
 - **Tippfehler:** Unbekannte Schlüssel, Werte außerhalb der Bereiche und Busse, die es nicht gibt, sind Fehler mit
   Zeilenangabe; pult startet dann nicht.

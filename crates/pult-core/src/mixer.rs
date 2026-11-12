@@ -46,7 +46,7 @@ use crate::dynamics::{CompressorControls, GateControls};
 use crate::eq::{EqControls, Equalizer};
 use crate::level::{AtomicF32, Counter, PeakMeter};
 use crate::limiter::{Limiter, LimiterControls};
-use crate::ramp::{Follower, Glide, MIN_RAMP_MS};
+use crate::ramp::{Aim, Follower, Glide, MIN_RAMP_MS};
 use crate::rate::RateControl;
 use crate::remix::{remix_add, remix_add_ramped};
 
@@ -182,6 +182,13 @@ pub struct InputHandle {
     /// Whether the input feeds this ring's bus: the matrix button. The mixer follows a
     /// change in its next callback.
     pub routed: Arc<AtomicBool>,
+    /// The level of this crossing, linear, gliding like a fader: what of the input this bus
+    /// gets (an aux send). 1 at first.
+    pub send: Arc<Glide>,
+    /// Whether the send is taken before the input's fader (pre) instead of after it (post, at
+    /// first): a pre send keeps its level when the fader moves, a headphone mix stays when the
+    /// stream mix is turned down. Mute and solo act on both.
+    pub send_pre: Arc<AtomicBool>,
 }
 
 /// The control thread's side of one bus.
@@ -255,6 +262,8 @@ pub fn connect_with(
         controls,
         stats: Arc::new(InputStats::default()),
         routed: Arc::new(AtomicBool::new(true)),
+        send: Arc::new(Glide::new(1.0)),
+        send_pre: Arc::new(AtomicBool::new(false)),
     };
     let capture = Capture {
         producer,
@@ -277,6 +286,12 @@ pub fn connect_with(
         controls: Arc::clone(&handle.controls),
         stats: Arc::clone(&handle.stats),
         routed: Arc::clone(&handle.routed),
+        send: Arc::clone(&handle.send),
+        send_pre: Arc::clone(&handle.send_pre),
+        seen_fader: handle.controls.gain.load(),
+        seen_send: handle.send.load(),
+        seen_pre: false,
+        aim: handle.controls.gain.load(),
         playing: true,
         gain: Follower::new(config.output_rate),
         pan: Follower::new(config.output_rate),
@@ -367,6 +382,16 @@ pub struct MixerInput {
     routed: Arc<AtomicBool>,
     /// Whether the ring plays: routed, or fading out after it no longer is.
     playing: bool,
+    /// The level of this crossing ([`InputHandle::send`]): the send of the input to this bus.
+    send: Arc<Glide>,
+    /// Whether the send is taken before the input's fader ([`InputHandle::send_pre`]).
+    send_pre: Arc<AtomicBool>,
+    /// Fader, send and pre as last seen, and the aim made of them for [`Self::gain`]: a
+    /// new aim only when one of them moved, with the time of the one that moved.
+    seen_fader: Aim,
+    seen_send: Aim,
+    seen_pre: bool,
+    aim: Aim,
     /// Where the gain stands, silence and the fades of the matrix included.
     gain: Follower,
     /// Where the pan stands.
@@ -432,8 +457,8 @@ impl MixerInput {
         let silent = self.controls.muted.load(Ordering::Acquire)
             || self.controls.soloed_out.load(Ordering::Acquire);
         let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
-        self.gain
-            .follow(self.controls.gain.load(), routed && !silent, fade_ms);
+        let aim = self.crossing_aim(fade_ms);
+        self.gain.follow(aim, routed && !silent, fade_ms);
         self.pan.follow(self.controls.pan.load(), true, 0);
         let ch = self.channels;
         let mut done = 0;
@@ -467,6 +492,35 @@ impl MixerInput {
             }
             done += n;
         }
+    }
+
+    /// The gain this ring aims at: the input's fader times the send of this crossing, or the send
+    /// alone when it is taken before the fader. A new aim only when fader, send or pre moved,
+    /// reached in the time of what moved (a switch of pre in the fade time, at least the
+    /// shortest ramp, since the level jumps).
+    fn crossing_aim(&mut self, fade_ms: u32) -> Aim {
+        let fader = self.controls.gain.load();
+        let send = self.send.load();
+        let pre = self.send_pre.load(Ordering::Relaxed);
+        if fader == self.seen_fader && send == self.seen_send && pre == self.seen_pre {
+            return self.aim;
+        }
+        let mut ms = 0;
+        if fader != self.seen_fader && !pre {
+            ms = ms.max(fader.ms());
+        }
+        if send != self.seen_send {
+            ms = ms.max(send.ms());
+        }
+        if pre != self.seen_pre {
+            ms = ms.max(fade_ms.max(MIN_RAMP_MS));
+        }
+        let base = if pre { 1.0 } else { fader.value() };
+        self.seen_fader = fader;
+        self.seen_send = send;
+        self.seen_pre = pre;
+        self.aim = Aim::new(base * send.value(), ms);
+        self.aim
     }
 
     /// Fades in the first `frames` frames of `scratch` while the fade-in after a priming lasts.
@@ -954,6 +1008,53 @@ mod tests {
         );
         assert!((out[2400] - 0.25).abs() < 2e-3, "halfway: {}", out[2400]);
         assert!(out[4800..].iter().all(|&o| o == 0.0));
+    }
+
+    #[test]
+    fn a_send_scales_its_crossing_after_the_fader() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.controls.gain.store(0.5);
+        handle.send.ramp_to(0.5, 50);
+        let out = record(&mut mixer, &mut capture, 0.5, 20);
+        assert!(
+            (out[out.len() - 1] - 0.125).abs() < 2e-3,
+            "{}",
+            out[out.len() - 1]
+        );
+        assert!(largest_step(&out) < 0.01, "no step: {}", largest_step(&out));
+    }
+
+    #[test]
+    fn a_pre_send_keeps_its_level_when_the_fader_moves() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.send.store(0.5);
+        handle.send_pre.store(true, Ordering::Relaxed);
+        record(&mut mixer, &mut capture, 0.5, 10);
+        handle.controls.gain.ramp_to(0.1, 20);
+        let out = record(&mut mixer, &mut capture, 0.5, 10);
+        assert!(
+            (out[out.len() - 1] - 0.25).abs() < 2e-3,
+            "pre: {}",
+            out[out.len() - 1]
+        );
+        // Back to post: the fader counts again, gliding, not in a step.
+        handle.send_pre.store(false, Ordering::Relaxed);
+        let out = record(&mut mixer, &mut capture, 0.5, 20);
+        assert!(
+            (out[out.len() - 1] - 0.025).abs() < 2e-3,
+            "post: {}",
+            out[out.len() - 1]
+        );
+        assert!(largest_step(&out) < 0.01, "no step: {}", largest_step(&out));
+    }
+
+    #[test]
+    fn a_muted_input_is_silent_on_a_pre_send_too() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.send_pre.store(true, Ordering::Relaxed);
+        handle.controls.muted.store(true, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 20);
+        assert_eq!(out[out.len() - 1], 0.0);
     }
 
     #[test]

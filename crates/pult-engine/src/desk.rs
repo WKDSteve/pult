@@ -9,7 +9,7 @@ use std::time::Instant;
 use pult_core::control::{Command, Target};
 use pult_core::{
     Action, BusView, Desk, Dropouts, EventKind, EventView, InputView, MeterPoint, MixerView, Reply,
-    SourceKind, linear_to_db,
+    SendView, SourceKind, linear_to_db,
 };
 
 use crate::{Change, InputKind, Running, profile};
@@ -126,6 +126,19 @@ fn levels(input: &crate::RunningInput) -> (f32, f32, u64) {
     (peak, drift, dropouts)
 }
 
+/// The send of `spec` to each of `buses` buses, as a view shows them.
+fn sends_of(spec: &crate::InputSpec, buses: usize) -> Vec<SendView> {
+    (0..buses)
+        .map(|bus| {
+            let send = spec.send(bus);
+            SendView {
+                db: send.gain_db,
+                pre: send.pre,
+            }
+        })
+        .collect()
+}
+
 fn farther(a: f32, b: f32) -> f32 {
     if b.abs() > a.abs() { b } else { a }
 }
@@ -185,6 +198,7 @@ impl Desk for EngineDesk {
                         .filter(|route| route.is_routed())
                         .map(|route| route.bus)
                         .collect(),
+                    sends: sends_of(spec, input.routes.len()),
                     present: input.present,
                     peak_db: peak_db(peak),
                     drift_ppm: drift,
@@ -305,6 +319,13 @@ impl Desk for EngineDesk {
                 Ok(lines)
             }
             Action::Route { input, bus, on } => self.running.route(input, bus, on),
+            Action::Send {
+                input,
+                bus,
+                db,
+                ramp_ms,
+            } => self.running.send(input, bus, db, ramp_ms),
+            Action::SendPre { input, bus, pre } => self.running.send_pre(input, bus, pre),
             Action::Scene { name } => self.running.scene(&name),
         }
     }
