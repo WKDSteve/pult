@@ -642,6 +642,8 @@ pub struct Mixer {
     limiter: Box<Limiter>,
     /// Resumed, and no callback yet: the next one opens the rings.
     opening: bool,
+    /// Where the output goes to be measured for loudness, off this thread.
+    loudness: Option<crate::loudness::LoudnessTap>,
 }
 
 impl Mixer {
@@ -666,6 +668,7 @@ impl Mixer {
             controls: Arc::clone(&handle.controls),
             stats: Arc::clone(&handle.stats),
             opening: false,
+            loudness: None,
         };
         (mixer, handle)
     }
@@ -744,6 +747,14 @@ impl Mixer {
             self.stats.clipped.add(clipped);
         }
         self.stats.peak.record_scaled(out, 1.0);
+        if let Some(tap) = &mut self.loudness {
+            tap.feed(out, self.out_channels);
+        }
+    }
+
+    /// Hands every output from now on to a loudness meter ([`crate::loudness`]).
+    pub fn set_loudness(&mut self, tap: crate::loudness::LoudnessTap) {
+        self.loudness = Some(tap);
     }
 }
 

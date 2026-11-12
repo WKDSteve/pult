@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use pult_core::control::{Command, Target};
 use pult_core::{
-    Action, BusView, Desk, Dropouts, EventKind, EventView, InputView, MeterPoint, MixerView, Reply,
-    SendView, SourceKind, linear_to_db,
+    Action, BusView, Desk, Dropouts, EventKind, EventView, InputView, LoudnessView, MeterPoint,
+    MixerView, Reply, SendView, SourceKind, linear_to_db,
 };
 
 use crate::{Change, InputKind, Running, profile};
@@ -243,6 +243,16 @@ impl Desk for EngineDesk {
                 limit_lookahead_ms: spec.limit_lookahead_ms,
                 monitor: spec.monitor,
                 minus: spec.minus,
+                loudness: bus
+                    .loudness
+                    .as_deref()
+                    .map_or_else(LoudnessView::default, |l| LoudnessView {
+                        momentary_lufs: l.momentary(),
+                        short_term_lufs: l.short_term(),
+                        integrated_lufs: l.integrated(),
+                        range_lu: l.range(),
+                        true_peak_db: l.true_peak(),
+                    }),
                 limited_db: bus.handle.stats.limited_db.take(),
                 present: bus.present,
                 peak_db: peak_db(bus.handle.stats.peak.take()),

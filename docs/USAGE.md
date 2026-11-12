@@ -238,6 +238,10 @@ pult run --profile meinprofil.toml --log abend.csv
   process = "Discord"
   buses = ["A1"]             # nie "Call"
   ```
+- **Loudness:** Jeder Bus wird nach EBU R128 / ITU-R BS.1770 gemessen (Momentary, Short-Term, Integrated, Range, True
+  Peak), auf einem eigenen Thread. Unter dem Bus-Fader steht die Short-Term-Loudness (`-14.1 LUFS`), wenn weder Clipping
+  noch der Limiter etwas zu melden haben; alle Werte stehen im Zustand (`docs/CONTROL.md`). Für Streaming-Plattformen
+  zählt die Integrated Loudness, meist um -14 LUFS.
 - **Monitor-Bus:** `monitor = true` an einem Bus macht ihn zum Abhör-Bus. Solo wirkt dann nur dort; ein Gesprächs- oder
   Stream-Bus hört weiter alle Quellen, auch während man auf dem Kopfhörer eine Quelle allein abhört. Ohne Monitor-Bus
   wirkt Solo wie bisher auf allen Bussen. Während des Laufs `monitor B1 on|off`, im Fenster der Schalter **MON** am Bus,

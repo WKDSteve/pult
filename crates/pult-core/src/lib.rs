@@ -22,6 +22,7 @@ pub mod dynamics;
 pub mod eq;
 pub mod level;
 pub mod limiter;
+pub mod loudness;
 pub mod midi;
 pub mod mixer;
 pub mod protocol;
@@ -44,6 +45,7 @@ pub use dynamics::{
 pub use eq::{Band, BandKind, EQ_BANDS, EqControls, Equalizer, response_db};
 pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
 pub use limiter::{LimitChange, Limiter, LimiterControls};
+pub use loudness::{LoudnessMeter, LoudnessStats, LoudnessTap, loudness};
 pub use mixer::{
     BusControls, BusHandle, BusStats, Capture, InputConfig, InputControls, InputHandle, InputStats,
     Mixer, MixerInput, connect, connect_with,
@@ -55,6 +57,6 @@ pub use select::{SelectError, select};
 pub use stage::{InputStage, STAGE_FRAMES};
 pub use tone::Sine;
 pub use view::{
-    Action, BusView, Desk, EventKind, EventView, FakeDesk, InputView, MeterPoint, MixerView, Reply,
-    SendView, SourceKind,
+    Action, BusView, Desk, EventKind, EventView, FakeDesk, InputView, LoudnessView, MeterPoint,
+    MixerView, Reply, SendView, SourceKind,
 };

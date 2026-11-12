@@ -16,6 +16,8 @@ pub struct Offline {
     running: Running,
     /// Per input, one capture per bus, as its device callback would push them.
     inputs_fed: Vec<InputFeed>,
+    /// The loudness meters of the buses, drained after every callback: no thread here.
+    meters: Vec<pult_core::LoudnessMeter>,
     /// Per bus, its mixer, as its device callback would run it.
     mixers: Vec<Mixer>,
     /// Per bus, the output of the latest [`Self::process`].
@@ -58,8 +60,17 @@ impl Offline {
         let channels = usize::from(channels);
         let mut mixers = Vec::with_capacity(spec.buses.len());
         let mut buses = Vec::with_capacity(spec.buses.len());
+        let mut meters = Vec::with_capacity(spec.buses.len());
         for (bus, mixer_inputs) in spec.buses.iter().zip(bus_inputs) {
             let (mut mixer, handle) = Mixer::new(mixer_inputs, channels);
+            let loudness = match pult_core::loudness(channels, rate, 2.0) {
+                Ok((tap, meter, stats)) => {
+                    mixer.set_loudness(tap);
+                    meters.push(meter);
+                    Some(stats)
+                }
+                Err(_) => None,
+            };
             set_up_bus(&handle, bus);
             // What `start` and the slot of the bus do before its first callback.
             mixer.suspend();
@@ -72,6 +83,7 @@ impl Offline {
                 sample_rate: rate,
                 present: true,
                 outages: 0,
+                loudness,
             });
         }
         let running = Running {
@@ -81,12 +93,14 @@ impl Offline {
             buses,
             xruns: Arc::new(Counter::default()),
             spec: spec.clone(),
+            _loudness: None,
         };
         running.apply_monitors();
         let outputs = spec.buses.iter().map(|_| Vec::new()).collect();
         Ok(Self {
             running,
             inputs_fed: captures,
+            meters,
             mixers,
             outputs,
             channels,
@@ -115,6 +129,9 @@ impl Offline {
         for (mixer, out) in self.mixers.iter_mut().zip(&mut self.outputs) {
             out.resize(frames * self.channels, 0.0);
             mixer.process(out);
+        }
+        for meter in &mut self.meters {
+            meter.drain();
         }
         &self.outputs
     }

@@ -146,6 +146,21 @@ impl InputView {
     }
 }
 
+/// The loudness of a bus ([`crate::loudness`]); `None` until it is measured.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LoudnessView {
+    /// Momentary loudness (400 ms) in LUFS.
+    pub momentary_lufs: Option<f32>,
+    /// Short-term loudness (3 s) in LUFS.
+    pub short_term_lufs: Option<f32>,
+    /// Integrated loudness since the start in LUFS.
+    pub integrated_lufs: Option<f32>,
+    /// Loudness range in LU.
+    pub range_lu: Option<f32>,
+    /// Highest true peak since the start in dBTP.
+    pub true_peak_db: Option<f32>,
+}
+
 /// One bus as its master strip shows it.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Switches of a console, each on its own.
@@ -176,6 +191,8 @@ pub struct BusView {
     pub monitor: bool,
     /// A mix-minus (N-1) bus: the input it is for, which never feeds it.
     pub minus: Option<usize>,
+    /// Its loudness after EBU R128.
+    pub loudness: LoudnessView,
     /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
     pub limited_db: f32,
     /// Whether the device is there; false while it is gone.
@@ -498,6 +515,7 @@ impl FakeDesk {
             limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
             monitor: false,
             minus: None,
+            loudness: LoudnessView::default(),
             limited_db: 0.0,
             present: true,
             peak_db: None,

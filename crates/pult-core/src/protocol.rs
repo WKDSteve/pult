@@ -129,6 +129,21 @@ pub struct InputState {
     pub dropouts: u64,
 }
 
+/// The loudness of a bus after EBU R128; each `null` until measured.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct LoudnessState {
+    /// Momentary loudness (400 ms) in LUFS.
+    pub momentary_lufs: Option<f32>,
+    /// Short-term loudness (3 s) in LUFS.
+    pub short_term_lufs: Option<f32>,
+    /// Integrated loudness since the start in LUFS.
+    pub integrated_lufs: Option<f32>,
+    /// Loudness range in LU.
+    pub range_lu: Option<f32>,
+    /// Highest true peak since the start in dBTP.
+    pub true_peak_db: Option<f32>,
+}
+
 /// The send of an input to one bus.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SendState {
@@ -172,6 +187,15 @@ pub struct BusState {
     /// The lookahead of its limiter in milliseconds: this much later the sound leaves the bus.
     #[serde(default)]
     pub limit_lookahead_ms: f32,
+    /// The monitor bus, the one solo acts on; false from a run older than this.
+    #[serde(default)]
+    pub monitor: bool,
+    /// A mix-minus bus: the number of the input it is for (from 1), which never feeds it.
+    #[serde(default)]
+    pub minus: Option<usize>,
+    /// Its loudness after EBU R128.
+    #[serde(default)]
+    pub loudness: LoudnessState,
     /// How far its limiter turned down at most since the previous state, in dB; 0 when it did not.
     #[serde(default)]
     pub limited_db: f32,
@@ -328,6 +352,15 @@ impl BusState {
             limit_on: bus.limit_on,
             limit_db: bus.limit_db,
             limit_lookahead_ms: bus.limit_lookahead_ms,
+            monitor: bus.monitor,
+            minus: bus.minus.map(|input| input + 1),
+            loudness: LoudnessState {
+                momentary_lufs: bus.loudness.momentary_lufs,
+                short_term_lufs: bus.loudness.short_term_lufs,
+                integrated_lufs: bus.loudness.integrated_lufs,
+                range_lu: bus.loudness.range_lu,
+                true_peak_db: bus.loudness.true_peak_db,
+            },
             limited_db: bus.limited_db,
             present: bus.present,
             peak_db: bus.peak_db,

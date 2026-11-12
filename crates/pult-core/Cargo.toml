@@ -11,6 +11,7 @@ publish.workspace = true
 
 [dependencies]
 rtrb.workspace = true
+ebur128.workspace = true
 rubato = { version = "5.0.1", default-features = false }
 serde.workspace = true
 

@@ -507,11 +507,17 @@ impl<'v> Draw<'_, 'v> {
                     .get(index)
                     .map_or(0.0, |bus| bus.limited_db);
                 let now = self.now;
+                let short_term = self
+                    .view()
+                    .buses
+                    .get(index)
+                    .and_then(|bus| bus.loudness.short_term_lufs);
                 self.meters.buses_mut().get_mut(index).and_then(|meter| {
                     let limit = meter.held_limit(limited_db, now);
                     clip_note(meter)
                         .map(|text| (text, p.meter_high))
                         .or_else(|| limit_note(limit).map(|text| (text, p.text_faint)))
+                        .or_else(|| loudness_note(short_term).map(|text| (text, p.text_faint)))
                 })
             }
         };
@@ -524,6 +530,13 @@ impl<'v> Draw<'_, 'v> {
 #[must_use]
 pub fn clip_note(meter: &MeterState) -> Option<String> {
     meter.clipped().then(|| "CLIP".to_owned())
+}
+
+/// The note under a bus fader with nothing more urgent to say: its short-term loudness,
+/// `-14.1 LUFS`, once it is measured.
+#[must_use]
+pub fn loudness_note(short_term_lufs: Option<f32>) -> Option<String> {
+    short_term_lufs.map(|lufs| format!("{lufs:.1} LUFS"))
 }
 
 /// The note under a bus fader while its limiter turns down: `LIM -3.2`.

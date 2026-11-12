@@ -15,7 +15,9 @@ use pult_app::console::{self, ConsoleState, Tab};
 use pult_app::layout::{self, Control, Meters};
 use pult_app::theme::Theme;
 use pult_app::widgets::strip;
-use pult_core::view::{BusView, EventView, InputView, MeterPoint, MixerView, SourceKind};
+use pult_core::view::{
+    BusView, EventView, InputView, LoudnessView, MeterPoint, MixerView, SourceKind,
+};
 
 /// Frames to run before the shot, so peak lines have something to hold.
 const FRAMES: usize = 40;
@@ -123,6 +125,12 @@ fn showcase(t: f64) -> MixerView {
             limit_lookahead_ms: 1.0,
             monitor: false,
             minus: None,
+            // The stream bus at the loudness of a streaming platform.
+            loudness: LoudnessView {
+                short_term_lufs: Some([-19.2, -23.5, -14.1][j]),
+                integrated_lufs: Some([-20.0, -24.0, -14.0][j]),
+                ..LoudnessView::default()
+            },
             limited_db: if j == 0 { 2.5 } else { 0.0 },
             present: true,
             peak_db: Some((-10.0 + gain_db + wobble(seed, t) * 6.0).min(0.0)),

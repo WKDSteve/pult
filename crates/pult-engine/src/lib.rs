@@ -640,6 +640,58 @@ pub struct RunningBus {
     pub present: bool,
     /// Times the device was lost so far.
     pub outages: u64,
+    /// Its loudness, measured on the loudness thread; `None` when no meter could be made.
+    pub loudness: Option<Arc<pult_core::LoudnessStats>>,
+}
+
+/// The thread that measures the loudness of every bus; stops when the route ends.
+pub(crate) struct LoudnessThread {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl LoudnessThread {
+    /// How often it measures what the buses handed over.
+    const EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
+    /// Starts measuring `meters`; none, when there are none.
+    pub(crate) fn start(mut meters: Vec<pult_core::LoudnessMeter>) -> Option<Self> {
+        if meters.is_empty() {
+            return None;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let thread = std::thread::Builder::new()
+            .name("pult loudness".to_owned())
+            .spawn(move || {
+                while !stopped.load(Ordering::Relaxed) {
+                    for meter in &mut meters {
+                        meter.drain();
+                    }
+                    std::thread::sleep(Self::EVERY);
+                }
+            })
+            .ok()?;
+        Some(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for LoudnessThread {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl fmt::Debug for LoudnessThread {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("LoudnessThread")
+    }
 }
 
 /// What [`Running::supervise`] did to a device.
@@ -713,6 +765,9 @@ pub struct Running {
     xruns: Arc<Counter>,
     /// The spec as it stands now: changed by `apply` along with the controls.
     spec: RouteSpec,
+    /// The loudness meters of the buses; `None` for a route rendered without devices, whose
+    /// meters the caller drains.
+    _loudness: Option<LoudnessThread>,
 }
 
 impl fmt::Debug for Running {
@@ -1214,11 +1269,21 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         inputs.push(found.running);
     }
     let mut buses = Vec::with_capacity(spec.buses.len());
+    let mut meters = Vec::with_capacity(spec.buses.len());
     for ((bus, found), mixer_inputs) in spec.buses.iter().zip(found_buses).zip(bus_inputs) {
-        let (mut mixer, handle) = Mixer::new(mixer_inputs, usize::from(found.config.channels()));
+        let channels = usize::from(found.config.channels());
+        let (mut mixer, handle) = Mixer::new(mixer_inputs, channels);
         // The input streams open first; nothing may pile up until this bus's stream calls back.
         mixer.suspend();
         let sample_rate = found.config.sample_rate();
+        let loudness = match pult_core::loudness(channels, sample_rate, 2.0) {
+            Ok((tap, meter, stats)) => {
+                mixer.set_loudness(tap);
+                meters.push(meter);
+                Some(stats)
+            }
+            Err(_) => None,
+        };
         set_up_bus(&handle, bus);
         slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
         opening.push(Opening::Device(found.device, found.config));
@@ -1229,6 +1294,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
             sample_rate,
             present: false,
             outages: 0,
+            loudness,
         });
     }
 
@@ -1239,6 +1305,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         buses,
         xruns: Arc::new(Counter::default()),
         spec: spec.clone(),
+        _loudness: LoudnessThread::start(meters),
     };
     running.apply_monitors();
     // Inputs first: a ring opens with the first callback of its output, and primes faster
