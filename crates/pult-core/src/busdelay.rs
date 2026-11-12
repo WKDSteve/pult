@@ -118,9 +118,10 @@ impl BusDelay {
             return;
         }
         let wanted = self.wanted(controls);
-        if wanted != self.behind {
-            // From where it plays now: the old delay, or the mix of a crossfade cut short
-            // (taken as the delay it was going to).
+        // A change while a crossfade still runs waits for it to end (a later callback takes
+        // it): cutting it short would jump from the mix to the new delay. With callbacks shorter
+        // than the fade, or a knob turned on and on, that would click.
+        if wanted != self.behind && self.from.is_none() {
             self.from = Some((self.behind, self.fade_frames));
             self.behind = wanted;
         }
@@ -223,6 +224,39 @@ mod tests {
         }
         // The tone's own steepest step is 0.5 * step (0.0065); a jump would be up to 1.
         assert!(steepest < 0.05, "a step of {steepest}");
+    }
+
+    #[test]
+    fn a_knob_turned_on_and_on_in_short_callbacks_does_not_click() {
+        // 64 frames per callback, a new delay in every one: each crossfade (240 frames) is
+        // still running when the next change comes.
+        let controls = BusDelayControls::default();
+        let mut delay = BusDelay::new(48_000, 1);
+        let step = std::f32::consts::TAU * 100.0 / 48_000.0;
+        let mut phase = 0.0_f32;
+        let mut previous = 0.0_f32;
+        let mut steepest = 0.0_f32;
+        for callback in 0..2000_u16 {
+            controls.set(f32::from(callback % 200) * 0.37);
+            let mut data: Vec<f32> = (0..64)
+                .map(|_| {
+                    phase += step;
+                    0.5 * phase.sin()
+                })
+                .collect();
+            delay.process(&controls, &mut data, 1);
+            for sample in data {
+                steepest = steepest.max((sample - previous).abs());
+                previous = sample;
+            }
+        }
+        assert!(steepest < 0.05, "a step of {steepest}");
+        // And it ends where it was asked to.
+        controls.set(10.0);
+        let mut data = vec![0.0_f32; 4800];
+        delay.process(&controls, &mut data, 1);
+        delay.process(&controls, &mut data, 1);
+        assert_eq!(delay.behind, 480);
     }
 
     #[test]
