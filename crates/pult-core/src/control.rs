@@ -81,6 +81,8 @@ pub enum Command {
     BusCompMix(usize, f32),
     /// Sets the sidechain high-pass of the compressor of a bus in Hz.
     BusCompHpf(usize, f32),
+    /// Sets the delay of a bus in milliseconds.
+    BusDelay(usize, f32),
     /// Changes one setting of the channel strip of an input.
     Strip(usize, StripChange),
     /// Takes an input into the automixer or out of it.
@@ -323,7 +325,7 @@ fn strip<S: AsRef<str>>(
         "polarity" | "phase" => "polarity <input> on|off",
         "hpf" => "hpf <input> <Hz>|off",
         "lpf" => "lpf <input> <Hz>|off",
-        "delay" => "delay <input> <ms>",
+        "delay" => "delay <input|bus> <ms>|off",
         _ => "width <input> <%>|mono",
     };
     let Some((&value, input)) = rest.split_last() else {
@@ -352,7 +354,10 @@ fn strip<S: AsRef<str>>(
     };
     match target(&input.join(" "), names)? {
         Target::Input(index) => Ok(Command::Strip(index, change)),
-        Target::Bus(_) => error(format!("{keyword} works on inputs only")),
+        Target::Bus(index) => match change {
+            StripChange::Delay(ms) => Ok(Command::BusDelay(index, ms)),
+            _ => error(format!("{keyword} works on inputs only")),
+        },
     }
 }
 
@@ -693,6 +698,8 @@ mod tests {
         assert_eq!(ok("comp b2 off"), Command::BusComp(1, 0.0));
         assert_eq!(ok("comp A1 mix 40"), Command::BusCompMix(0, 40.0));
         assert_eq!(ok("COMP b2 HPF 120"), Command::BusCompHpf(1, 120.0));
+        assert_eq!(ok("delay A1 12.5"), Command::BusDelay(0, 12.5));
+        assert_eq!(ok("delay b2 off"), Command::BusDelay(1, 0.0));
         assert_eq!(
             ok("comp 2 4"),
             Command::Comp(1, 4.0),

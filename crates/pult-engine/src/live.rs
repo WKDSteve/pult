@@ -16,6 +16,21 @@ use crate::{
 };
 
 impl Running {
+    /// Sets the delay of `bus` in milliseconds, and returns what to show for it.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such bus or the delay is out of its range.
+    pub fn bus_delay(&mut self, bus: usize, ms: f32) -> Result<Vec<String>, String> {
+        let ms = pult_core::busdelay::check_delay(ms)?;
+        let Some(running) = self.buses.get(bus) else {
+            return Err(format!("there is no bus {}", bus + 1));
+        };
+        running.handle.controls.delay.set(ms);
+        self.spec.buses[bus].delay_ms = ms;
+        Ok(vec![format!("{}: delay {ms:.1} ms", running.name)])
+    }
+
     /// Makes one change to the limiter of `bus`, and returns what to show for it.
     fn change_limit(&mut self, bus: usize, change: LimitChange) -> Result<Vec<String>, String> {
         let change = change.checked()?;
@@ -131,6 +146,7 @@ impl Running {
             Command::BusComp(bus, amount) => self.bus_comp(*bus, Some(*amount), None, None),
             Command::BusCompMix(bus, percent) => self.bus_comp(*bus, None, Some(*percent), None),
             Command::BusCompHpf(bus, hz) => self.bus_comp(*bus, None, None, Some(*hz)),
+            Command::BusDelay(bus, ms) => self.bus_delay(*bus, *ms),
             Command::Strip(input, change) => self.strip(*input, *change),
             Command::Automix(input, on) => self.automix(*input, Some(*on), None),
             Command::AutomixWeight(input, db) => self.automix(*input, None, Some(*db)),
@@ -650,6 +666,9 @@ impl Running {
             }
             line.push_str(&eq_summary(spec.eq_on, &spec.eq));
             line.push_str(&spec.limit.summary());
+            if spec.delay_ms > 0.0 {
+                let _ = write!(line, "  delay {:.1} ms", spec.delay_ms);
+            }
             if spec.muted {
                 line.push_str("  muted");
             }

@@ -74,6 +74,8 @@ pub enum BusParam {
     CompMix,
     /// The corner of the sidechain high-pass of its compressor, in Hz.
     CompHpf,
+    /// Its delay, in milliseconds.
+    Delay,
     /// Its peak, read only.
     Meter,
 }
@@ -342,6 +344,7 @@ impl Binding {
                     BusParam::Comp => "comp",
                     BusParam::CompMix => "comp/mix",
                     BusParam::CompHpf => "comp/hpf",
+                    BusParam::Delay => "delay",
                     BusParam::Meter => "meter",
                 };
                 format!("bus/{}/{param}", bus(index)?)
@@ -397,6 +400,7 @@ impl Binding {
                     BusParam::Comp => Value::Amount(bus.comp),
                     BusParam::CompMix => Value::Percent(bus.comp_mix),
                     BusParam::CompHpf => Value::Freq(bus.comp_hpf_hz),
+                    BusParam::Delay => Value::Delay(bus.delay_ms),
                     BusParam::Meter => Value::Peak(bus.peak_db),
                 }
             }
@@ -474,6 +478,7 @@ impl Binding {
                 Action::BusCompMix { bus, percent }
             }
             (Self::Bus(bus, BusParam::CompHpf), Value::Freq(hz)) => Action::BusCompHpf { bus, hz },
+            (Self::Bus(bus, BusParam::Delay), Value::Delay(ms)) => Action::BusDelay { bus, ms },
             (Self::Bus(bus, BusParam::EqBand(band, param)), value) => {
                 let change = match (param, value) {
                     (BandParam::Kind, Value::Kind(kind)) => BandChange::Kind(kind),
@@ -549,6 +554,7 @@ impl Binding {
             Self::Bus(index, BusParam::CompHpf) => {
                 format!("{} compressor sidechain filter", bus(index))
             }
+            Self::Bus(index, BusParam::Delay) => format!("{} delay", bus(index)),
             Self::Bus(index, BusParam::LimitCeiling) => format!("{} limiter ceiling", bus(index)),
             Self::Bus(index, BusParam::LimitLookahead) => {
                 format!("{} limiter lookahead", bus(index))

@@ -271,6 +271,10 @@ impl Param {
             Binding::Bus(_, BusParam::CompHpf) => {
                 Self::Knob(binding, Span::octaves(crate::buscomp::HPF_HZ))
             }
+            Binding::Bus(_, BusParam::Delay) => Self::Knob(
+                binding,
+                Span::even((0.0, crate::busdelay::MAX_BUS_DELAY_MS)),
+            ),
             Binding::Input(_, InputParam::AutomixWeight) => {
                 Self::Knob(binding, Span::even((-12.0, 12.0)))
             }

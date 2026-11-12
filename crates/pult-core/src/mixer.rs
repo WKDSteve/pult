@@ -159,6 +159,8 @@ pub struct BusControls {
     pub limiter: LimiterControls,
     /// The bus compressor, after the equalizer and before the gain; off at first.
     pub comp: crate::buscomp::BusCompControls,
+    /// The delay, behind the limiter; none at first.
+    pub delay: crate::busdelay::BusDelayControls,
     /// Whether solo acts on this bus: on every bus while the route has no monitor bus, else
     /// only on the monitor buses, so a talk bus keeps hearing every source. True at first.
     pub solo_here: AtomicBool,
@@ -172,6 +174,7 @@ impl Default for BusControls {
             fade_ms: AtomicU32::new(0),
             eq: EqControls::default(),
             limiter: LimiterControls::default(),
+            delay: crate::busdelay::BusDelayControls::default(),
             comp: crate::buscomp::BusCompControls::default(),
             solo_here: AtomicBool::new(true),
         }
@@ -666,6 +669,8 @@ pub struct Mixer {
     eq: Box<Equalizer>,
     /// The limiter of the bus, at its output rate.
     limiter: Box<Limiter>,
+    /// The delay of the bus, behind the limiter. Boxed: its line is large.
+    delay: Box<crate::busdelay::BusDelay>,
     /// The bus compressor, at its output rate.
     comp: Box<crate::buscomp::BusCompressor>,
     /// Resumed, and no callback yet: the next one opens the rings.
@@ -691,6 +696,7 @@ impl Mixer {
             gain: Follower::new(rate),
             eq: Box::new(Equalizer::new(rate)),
             limiter: Box::new(Limiter::new(rate, out_channels)),
+            delay: Box::new(crate::busdelay::BusDelay::new(rate, out_channels)),
             comp: Box::new(crate::buscomp::BusCompressor::new(rate)),
             inputs,
             out_channels,
@@ -720,6 +726,7 @@ impl Mixer {
         self.gain.start_over();
         self.eq.start_over();
         self.limiter.prepare(out_channels);
+        self.delay.prepare(out_channels);
         self.opening = true;
         for input in &mut self.inputs {
             input.open.store(false, Ordering::Release);
@@ -773,6 +780,8 @@ impl Mixer {
             .process(&self.controls.limiter, out, self.out_channels);
         self.stats.limited_db.record(reduced);
         self.stats.most_limited_db.record(reduced);
+        self.delay
+            .process(&self.controls.delay, out, self.out_channels);
         let clipped: u64 = out.iter_mut().map(limited).sum();
         if clipped > 0 {
             self.stats.clipped.add(clipped);

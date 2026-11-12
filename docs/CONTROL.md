@@ -83,6 +83,7 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
       "limit_db": -0.3,
       "limit_lookahead_ms": 1.0,
       "limited_db": 0.0,
+      "delay_ms": 0.0,
       "present": true,
       "peak_db": -12.1,
       "clipped": 0
@@ -106,6 +107,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
   `limited_db` sagt, wie weit er seit dem letzten Zustand höchstens zurückgedreht hat, 0 heißt gar nicht. Um die Vorschau
   verlässt der Ton den Bus später. Ein pult, das noch keinen Limiter kennt, lässt die Felder weg: `limit_on` liest sich
   dann als `false`.
+- `delay_ms` ist die Verzögerung eines Busses in Millisekunden; ein pult, das sie noch nicht kennt, lässt sie weg: Sie
+  liest sich dann als 0.
 - `gate` und `comp` sind die Regler von Gate und Kompressor des Eingangs, 0 (aus) bis 10. Ein pult, das beides noch nicht
   kennt, lässt die Felder weg; sie lesen sich dann als 0.
 - `scenes` sind die Szenen des Profils in dessen Reihenfolge.
@@ -158,6 +161,7 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `bus/<name>/comp` | Zahl, 0 (aus) bis 10: der Bus-Kompressor |
 | `bus/<name>/comp/mix` | Zahl, 0 (trocken) bis 100 (ganz komprimiert) |
 | `bus/<name>/comp/hpf` | Zahl, 20 bis 500 Hz: Hochpass im Steuersignal |
+| `bus/<name>/delay` | Zahl, 0 bis 250 ms: die Verzögerung des Busses |
 | `bus/<name>/monitor` | `true` oder `false`: der Monitor-Bus, auf dem allein Solo wirkt |
 | `send/<n>/<bus>` | Zahl, der Pegel dieser Kreuzung in dB (wie ein Gain, gleitet mit `ramp_ms`); 0 am Anfang |
 | `sendpre/<n>/<bus>` | `true` (vor dem Fader des Eingangs) oder `false` (danach, am Anfang) |

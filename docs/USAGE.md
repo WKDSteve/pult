@@ -146,6 +146,7 @@ eq_on = true               # optional: false schaltet den EQ aus, die Bänder bl
 limit_on = true            # optional: false schaltet den Limiter aus
 limit_db = -0.3            # optional: seine Decke, -20 bis 0
 limit_lookahead_ms = 1     # optional: seine Vorschau, 0 bis 5; um so viel später verlässt der Ton den Bus
+delay_ms = 0               # optional: Verzögerung des Busses, 0 bis 250 ms
 
 [[bus.eq]]                 # optional: ein Band des EQ dieses Busses
 band = 2                   # 1 bis 4
@@ -252,6 +253,12 @@ pult run --profile meinprofil.toml --log abend.csv
   Steuersignal, damit er die Summe nicht pumpen lässt. Während des Laufs `comp A1 3`, `comp A1 mix 50`,
   `comp A1 hpf 120`; im Fenster in der Ansicht **EQ** (Spalte COMPRESSOR, mit der Reduktion im Kopf); von außen
   `bus/<name>/comp`, `bus/<name>/comp/mix`, `bus/<name>/comp/hpf`.
+- **Verzögerung je Bus:** `delay_ms = 0..250` hält einen Bus zurück, etwa wenn Lautsprecher und Kopfhörer dieselbe Mischung
+  spielen, die Lautsprecher aber später ankommen (oder umgekehrt). Sie sitzt hinter dem Limiter, Meter und Loudness sehen
+  also, was das Gerät spielt. Eine neue Verzögerung springt nicht, sie blendet in 5 ms über. Während des Laufs `delay A1 12`
+  (`delay A1 off` für keine), von außen `bus/<name>/delay`, per MIDI lernbar. Die gesetzte Verzögerung steht im Zustand
+  (`delay_ms`) und in `show`. Den Versatz zwischen zwei Ausgängen misst pult noch nicht selbst; er gehört von Hand
+  bestimmt (Klatschen oder ein Klick, mit einem Mikrofon zwischen beiden aufgenommen).
 - **Loudness:** Jeder Bus wird nach EBU R128 / ITU-R BS.1770 gemessen (Momentary, Short-Term, Integrated, Range, True
   Peak), auf einem eigenen Thread. Unter dem Bus-Fader steht die Short-Term-Loudness (`-14.1 LUFS`), wenn weder Clipping
   noch der Limiter etwas zu melden haben; alle Werte stehen im Zustand (`docs/CONTROL.md`). Für Streaming-Plattformen
@@ -386,6 +393,7 @@ Unter der Statuszeile steht eine Eingabezeile (`> `). Dort nimmt pult Befehle an
 | `scene <Name>`, `scenes` | zu einer Szene des Profils wechseln (siehe 5.), die Szenen auflisten |
 | `limit <Bus> on`, `limit <Bus> off` | den Limiter eines Busses ein- oder ausschalten |
 | `limit <Bus> <dB>`, `limit <Bus> look <ms>` | seine Decke (`limit A1 -3`) und seine Vorschau (`limit A1 look 2`, siehe 5.) |
+| `delay <Bus> <ms>`, `delay <Bus> off` | die Verzögerung eines Busses, 0 bis 250 ms (an einem Eingang die des Kanalzugs) |
 | `show` | alle Eingänge und Busse mit Gain, Pan, Gate, Kompressor, EQ, Limiter und Mute; der Limiter nur, wenn er vom Standard abweicht |
 | `save <Datei>` | den aktuellen Stand als Profil schreiben, später mit `--profile` laden. Ein Profil mit denselben Bussen und Eingängen behält seine Kommentare und Reihenfolge, nur geänderte Werte werden ersetzt; jede andere Datei wird überschrieben |
 | `help` | die Befehle |

@@ -137,6 +137,7 @@ fn showcase(t: f64) -> MixerView {
             comp: [0.0, 0.0, 3.0][j],
             comp_mix: [100.0, 100.0, 50.0][j],
             comp_hpf_hz: [20.0, 20.0, 120.0][j],
+            delay_ms: 0.0,
             comp_reduction_db: [0.0, 0.0, 2.4][j],
             // The stream bus at the loudness of a streaming platform.
             loudness: LoudnessView {

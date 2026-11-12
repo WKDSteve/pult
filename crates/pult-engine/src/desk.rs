@@ -245,6 +245,7 @@ impl Desk for EngineDesk {
                 comp: spec.comp,
                 comp_mix: spec.comp_mix,
                 comp_hpf_hz: spec.comp_hpf_hz,
+                delay_ms: spec.delay_ms,
                 comp_reduction_db: bus.handle.controls.comp.reduction.take(),
                 loudness: bus
                     .loudness
@@ -359,6 +360,7 @@ impl Desk for EngineDesk {
                 self.running.bus_comp(bus, None, Some(percent), None)
             }
             Action::BusCompHpf { bus, hz } => self.running.bus_comp(bus, None, None, Some(hz)),
+            Action::BusDelay { bus, ms } => self.running.bus_delay(bus, ms),
             Action::InputAutomix { input, on } => self.running.automix(input, Some(on), None),
             Action::InputStrip { input, change } => self.running.strip(input, change),
             Action::InputAutomixWeight { input, db } => self.running.automix(input, None, Some(db)),

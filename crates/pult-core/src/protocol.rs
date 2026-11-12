@@ -204,6 +204,9 @@ pub struct BusState {
     /// The corner of the sidechain high-pass of its compressor in Hz.
     #[serde(default = "lowest_hpf")]
     pub comp_hpf_hz: f32,
+    /// Its delay in milliseconds; none from a run older than bus delays.
+    #[serde(default)]
+    pub delay_ms: f32,
     /// The most its compressor took away since the previous state, in dB.
     #[serde(default)]
     pub comp_reduction_db: f32,
@@ -377,6 +380,7 @@ impl BusState {
             comp: bus.comp,
             comp_mix: bus.comp_mix,
             comp_hpf_hz: bus.comp_hpf_hz,
+            delay_ms: bus.delay_ms,
             comp_reduction_db: bus.comp_reduction_db,
             loudness: LoudnessState {
                 momentary_lufs: bus.loudness.momentary_lufs,
@@ -513,6 +517,7 @@ impl Op {
             Command::BusComp(to, amount) => on_bus(*to, "comp", OpValue::Number(*amount))?,
             Command::BusCompMix(to, percent) => on_bus(*to, "comp/mix", OpValue::Number(*percent))?,
             Command::BusCompHpf(to, hz) => on_bus(*to, "comp/hpf", OpValue::Number(*hz))?,
+            Command::BusDelay(to, ms) => on_bus(*to, "delay", OpValue::Number(*ms))?,
             Command::Strip(input, change) => {
                 let (param, value) = strip_op(*change);
                 set(format!("input/{}/{param}", input + 1), value, 0)
@@ -676,7 +681,7 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             Ok(Value::Pan(wants_number(*pan)?))
         }
         (
-            Binding::Bus(_, BusParam::CompMix | BusParam::CompHpf)
+            Binding::Bus(_, BusParam::CompMix | BusParam::CompHpf | BusParam::Delay)
             | Binding::Input(
                 _,
                 InputParam::Hpf | InputParam::Lpf | InputParam::Delay | InputParam::Width,

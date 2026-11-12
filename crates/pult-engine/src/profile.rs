@@ -19,6 +19,7 @@
 //! comp = 0                     # optional, 0 (off) to 10: the bus compressor on the sum
 //! comp_mix = 100               # optional, 0 (dry) to 100 (all compressed): parallel compression
 //! comp_hpf_hz = 20             # optional, 20 to 500: the sidechain filter, keeps bass from pumping
+//! delay_ms = 12                # optional, 0 to 250: holds the bus back, against an offset to another output
 //! minus = 2                    # optional: a mix-minus (N-1) bus for input 2, a caller: it gets
 //!                              # everything but that input, which can never be routed to it
 //! limit_on = true              # optional: false switches the limiter off
@@ -183,6 +184,8 @@ struct BusEntry {
     comp: f32,
     comp_mix: Option<f32>,
     comp_hpf_hz: Option<f32>,
+    #[serde(default)]
+    delay_ms: f32,
     #[serde(default)]
     monitor: bool,
     minus: Option<usize>,
@@ -534,6 +537,10 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
         check_gain(&format!("bus {}", entry.name), entry.gain_db)?;
         check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
         let (comp, comp_mix, comp_hpf_hz) = bus_comp_of(&entry)?;
+        let delay_ms = match pult_core::busdelay::check_delay(entry.delay_ms) {
+            Ok(ms) => ms,
+            Err(why) => return fail(format!("bus {}: {why}", entry.name)),
+        };
         let eq = bands(&format!("bus {}", entry.name), entry.eq)?;
         let limit = LimitSettings {
             on: entry.limit_on.unwrap_or(true),
@@ -560,6 +567,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             comp,
             comp_mix,
             comp_hpf_hz,
+            delay_ms,
         });
     }
     Ok(buses)
@@ -713,6 +721,9 @@ fn render_comp(text: &mut String, bus: &BusSpec) {
     }
     if bus.comp_hpf_hz != pult_core::buscomp::HPF_HZ.0 {
         let _ = writeln!(text, "comp_hpf_hz = {}", bus.comp_hpf_hz);
+    }
+    if bus.delay_ms != 0.0 {
+        let _ = writeln!(text, "delay_ms = {}", bus.delay_ms);
     }
 }
 
@@ -994,6 +1005,7 @@ fn set_bus(table: &mut Table, bus: &BusSpec) {
         bus.comp_hpf_hz,
         pult_core::buscomp::HPF_HZ.0,
     );
+    set_number_from(table, "delay_ms", bus.delay_ms, 0.0);
     match bus.minus {
         Some(input) => {
             let number = i64::try_from(input + 1).unwrap_or(i64::MAX);

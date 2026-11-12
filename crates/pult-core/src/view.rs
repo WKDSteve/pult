@@ -196,6 +196,8 @@ pub struct BusView {
     pub comp_mix: f32,
     /// The corner of the sidechain high-pass of its compressor in Hz.
     pub comp_hpf_hz: f32,
+    /// Its delay in milliseconds, behind the limiter.
+    pub delay_ms: f32,
     /// The most its compressor took away since the previous view, in dB.
     pub comp_reduction_db: f32,
     /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
@@ -380,6 +382,13 @@ pub enum Action {
         /// Its corner in Hz.
         hz: f32,
     },
+    /// Sets the delay of a bus.
+    BusDelay {
+        /// Bus index.
+        bus: usize,
+        /// In milliseconds.
+        ms: f32,
+    },
     /// Makes a bus a monitor bus or takes that away.
     BusMonitor {
         /// Bus index.
@@ -551,6 +560,7 @@ impl FakeDesk {
             comp: 0.0,
             comp_mix: 100.0,
             comp_hpf_hz: 20.0,
+            delay_ms: 0.0,
             comp_reduction_db: 0.0,
             limited_db: 0.0,
             present: true,
@@ -946,6 +956,12 @@ impl Desk for FakeDesk {
             Action::BusEqBand { bus, band, change } => self.set_band(bus, band, change),
             Action::BusLimit { bus, change } => self.set_limit(bus, change),
             Action::BusMonitor { bus, on } => self.set_monitor(bus, on),
+            Action::BusDelay { bus, ms } => {
+                let ms = crate::busdelay::check_delay(ms)?;
+                let bus = self.bus_mut(bus)?;
+                bus.delay_ms = ms;
+                Ok(vec![format!("{} delay {ms:.1} ms", bus.name)])
+            }
             Action::BusComp { .. } | Action::BusCompMix { .. } | Action::BusCompHpf { .. } => {
                 self.set_bus_comp(&action)
             }
