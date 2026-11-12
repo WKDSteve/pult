@@ -283,6 +283,7 @@ impl Binding {
                     "limit" => BusParam::Limit,
                     "monitor" => BusParam::Monitor,
                     "comp" => BusParam::Comp,
+                    "delay" => BusParam::Delay,
                     "meter" => BusParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -660,6 +661,7 @@ mod tests {
                 Binding::Bus(1, BusParam::EqBand(3, BandParam::Q)),
             ),
             ("bus/A1/limit", Binding::Bus(0, BusParam::Limit)),
+            ("bus/A1/delay", Binding::Bus(0, BusParam::Delay)),
             (
                 "bus/A2/limit/ceiling",
                 Binding::Bus(1, BusParam::LimitCeiling),

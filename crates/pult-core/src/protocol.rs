@@ -628,6 +628,9 @@ fn setting_value(binding: Binding, number: f32, address: &str) -> Result<Value, 
         Binding::Bus(_, BusParam::CompMix) => {
             Err(format!("{address} takes 0 to 100, not {number}"))
         }
+        Binding::Bus(_, BusParam::Delay) => crate::busdelay::check_delay(number)
+            .map(Value::Delay)
+            .map_err(|why| format!("{address}: {why}")),
         _ => {
             let (low, high) = crate::buscomp::HPF_HZ;
             if (low..=high).contains(&number) {
@@ -948,6 +951,15 @@ mod tests {
         assert_eq!(
             action(r#"{"op":"set","address":"bus/A1/comp/hpf","value":120}"#),
             Ok(Action::BusCompHpf { bus: 0, hz: 120.0 })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/delay","value":12.5}"#),
+            Ok(Action::BusDelay { bus: 0, ms: 12.5 })
+        );
+        assert!(action(r#"{"op":"set","address":"bus/A1/delay","value":900}"#).is_err());
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/delay","value":0}"#),
+            Ok(Action::BusDelay { bus: 0, ms: 0.0 })
         );
         assert!(action(r#"{"op":"set","address":"bus/A1/comp/hpf","value":5}"#).is_err());
         assert_eq!(
