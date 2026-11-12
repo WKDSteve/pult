@@ -85,6 +85,12 @@ pub struct InputControls {
     /// The PRE meter of the input, once for all its rings: written by its
     /// [`crate::stage::InputStage`], at the samples of the device, routed or not.
     pub pre_peak: PeakMeter,
+    /// The most the gate took away since the desk last read it, in dB (positive).
+    pub gate_reduction: PeakMeter,
+    /// The most the compressor took away since the desk last read it, in dB (positive).
+    pub comp_reduction: PeakMeter,
+    /// Whether the gate let the sound through at the end of the last block.
+    pub gate_open: AtomicBool,
     /// The automix group of the input and its place in it ([`crate::automix`]), set once when
     /// the route is built; an input without one keeps its gain.
     pub automix: OnceLock<(Arc<AutomixGroup>, usize)>,
@@ -105,6 +111,9 @@ impl Default for InputControls {
             soloed_out: AtomicBool::new(false),
             meter_pre_fader: AtomicBool::new(false),
             pre_peak: PeakMeter::default(),
+            gate_reduction: PeakMeter::default(),
+            comp_reduction: PeakMeter::default(),
+            gate_open: AtomicBool::new(true),
             automix: OnceLock::new(),
             pan: Glide::new(0.0),
             gate: GateControls::default(),

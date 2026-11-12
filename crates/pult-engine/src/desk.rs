@@ -192,6 +192,9 @@ impl Desk for EngineDesk {
                     pan: spec.pan,
                     gate: spec.gate,
                     comp: spec.comp,
+                    gate_reduction_db: input.controls.gate_reduction.take(),
+                    gate_open: input.controls.gate_open.load(Ordering::Relaxed),
+                    comp_reduction_db: input.controls.comp_reduction.take(),
                     buses: input
                         .routes
                         .iter()

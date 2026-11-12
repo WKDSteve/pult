@@ -74,6 +74,10 @@ fn showcase(t: f64) -> MixerView {
                 pan: [0.0, -0.35, 0.25, 0.0, 0.0, 0.0, 0.0][i],
                 gate: [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 comp: [4.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0][i],
+                // Mic 1: the compressor takes 4.5 dB; Guitar: its gate is shut.
+                gate_reduction_db: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
+                gate_open: true,
+                comp_reduction_db: [4.5, 1.2, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 buses: buses.to_vec(),
                 sends: Vec::new(),
                 present: i != 6,

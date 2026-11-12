@@ -292,6 +292,23 @@ impl Gate {
         self.fresh = true;
     }
 
+    /// How many dB it takes away now (0 when open or off; a floor of silence counts as 96).
+    #[must_use]
+    pub fn reduction_db(&self) -> f32 {
+        if self.gain >= 1.0 {
+            return 0.0;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let gain = self.gain as f32;
+        (-20.0 * gain.max(1e-5).log10()).min(96.0)
+    }
+
+    /// Whether it lets the sound through: open, or switched off.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.open || !self.on
+    }
+
     /// Gates `data` (interleaved, `channels` per frame) in place as `controls` say.
     pub fn process(&mut self, controls: &GateControls, data: &mut [f32], channels: usize) {
         if channels == 0 {
@@ -537,6 +554,14 @@ impl Compressor {
     /// Lets go at once: a ring that starts to play is not turned down for what played before.
     pub fn start_over(&mut self) {
         self.reduction_db = 0.0;
+    }
+
+    /// How many dB it takes away now, before its make-up gain.
+    #[must_use]
+    pub fn reduction_db(&self) -> f32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let db = self.reduction_db as f32;
+        db.max(0.0)
     }
 
     /// Compresses `data` (interleaved, `channels` per frame) in place as `controls` say.

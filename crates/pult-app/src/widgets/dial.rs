@@ -13,7 +13,7 @@ use pult_core::limiter::{
     DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LIMIT_CEILING_DB, LIMIT_LOOKAHEAD_MS,
 };
 use pult_core::scale::{FADER_FLOOR_DB, FADER_TOP_DB, Span};
-use pult_core::view::{AMOUNT_RANGE, Action};
+use pult_core::view::{AMOUNT_RANGE, Action, MixerView};
 
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value, Values};
 use crate::theme::Theme;
@@ -280,9 +280,46 @@ pub fn labelled(
                     .font(Theme::value_font(9.0))
                     .color(p.text_dim),
             );
+            if let Some((text, active)) = reduction(values.view(), binding) {
+                let color = if active { p.accent } else { p.text_faint };
+                ui.label(
+                    RichText::new(text)
+                        .font(Theme::value_font(8.5))
+                        .color(color),
+                );
+            }
         },
     );
     action
+}
+
+/// What a gate or compressor of an input takes away now, as the line under its dial, and
+/// whether it is at work: a gate says `open` or how much its closed state takes, a compressor how
+/// many dB it takes. `None` for any other dial, and for one that is off.
+#[must_use]
+pub fn reduction(view: &MixerView, binding: Binding) -> Option<(String, bool)> {
+    match binding {
+        Binding::Input(index, InputParam::Gate) => {
+            let input = view.inputs.get(index)?;
+            if input.gate <= 0.0 {
+                return None;
+            }
+            Some(if input.gate_open && input.gate_reduction_db < 0.5 {
+                ("open".to_owned(), false)
+            } else {
+                (format!("shut -{:.0}", input.gate_reduction_db), true)
+            })
+        }
+        Binding::Input(index, InputParam::Comp) => {
+            let input = view.inputs.get(index)?;
+            if input.comp <= 0.0 {
+                return None;
+            }
+            let db = input.comp_reduction_db;
+            Some((format!("-{db:.1} dB"), db >= 0.5))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

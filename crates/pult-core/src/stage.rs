@@ -19,6 +19,7 @@
 //! [`STAGE_FRAMES`] frames, a longer callback in several pieces.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::automix::PowerFollower;
 use crate::dynamics::{Compressor, Gate};
@@ -84,6 +85,15 @@ impl InputStage {
             self.gate.process(&self.controls.gate, block, ch);
             self.compressor
                 .process(&self.controls.compressor, block, ch);
+            self.controls
+                .gate_reduction
+                .record(self.gate.reduction_db());
+            self.controls
+                .comp_reduction
+                .record(self.compressor.reduction_db());
+            self.controls
+                .gate_open
+                .store(self.gate.is_open(), Ordering::Relaxed);
             if let Some((group, index)) = self.controls.automix.get() {
                 group
                     .member(*index)
@@ -188,6 +198,9 @@ mod tests {
             let last = out[out.len() - 1];
             assert!((last - 0.5 * compressed).abs() < 2e-3, "{last}");
         }
+        // The stage says how much the compressor takes: 15 dB (three quarters of 20).
+        let taken = d.controls.comp_reduction.take();
+        assert!((taken - 15.0).abs() < 0.5, "comp takes {taken} dB");
         // The ring meters read behind compressor and fader.
         for handle in &d.handles {
             handle.stats.peak.take();
@@ -211,6 +224,14 @@ mod tests {
         let outs = d.run(0.01, 20);
         assert_eq!(outs[0][PERIOD - 1], 0.0, "the gate is closed");
         // After the fader nothing goes into the mix; before the gate the level is there.
+        assert!(
+            !d.controls.gate_open.load(Ordering::Relaxed),
+            "the stage says it is shut"
+        );
+        assert!(
+            d.controls.gate_reduction.take() > 40.0,
+            "a shut gate takes a lot"
+        );
         d.handles[0].stats.peak.take();
         d.controls.pre_peak.take();
         d.run(0.01, 2);
@@ -256,9 +277,17 @@ mod tests {
             .store(true, std::sync::atomic::Ordering::Release);
         let outs = d.run(0.01, 20);
         assert!(outs[0].iter().all(|&o| o.abs() < 1e-4));
-        // Above it, it opens.
+        // Above it, it opens, and says so.
         let outs = d.run(0.5, 20);
         assert!((outs[0][PERIOD - 1] - 0.5).abs() < 2e-3);
+        assert!(d.controls.gate_open.load(Ordering::Relaxed));
+        d.controls.gate_reduction.take();
+        d.run(0.5, 1);
+        assert_eq!(
+            d.controls.gate_reduction.take(),
+            0.0,
+            "an open gate takes nothing"
+        );
     }
 
     #[test]

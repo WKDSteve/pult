@@ -75,6 +75,7 @@ impl Default for SendView {
 
 /// One input as a channel strip shows it.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // Switches and states of a channel strip, each on its own.
 pub struct InputView {
     /// The device's or program's full name.
     pub name: String,
@@ -96,6 +97,12 @@ pub struct InputView {
     pub gate: f32,
     /// Its compressor as one knob, 0 (off) to 10: the higher, the more even and the louder.
     pub comp: f32,
+    /// The most the gate took away since the previous view, in dB (0: open or off).
+    pub gate_reduction_db: f32,
+    /// Whether the gate is open (or off) now.
+    pub gate_open: bool,
+    /// The most the compressor took away since the previous view, in dB.
+    pub comp_reduction_db: f32,
     /// The buses it feeds, as indices into [`MixerView::buses`].
     pub buses: Vec<usize>,
     /// The send to each bus, by bus index; a bus beyond the list has the default (0 dB, post).
@@ -443,6 +450,9 @@ impl FakeDesk {
             pan: 0.0,
             gate: 0.0,
             comp: 0.0,
+            gate_reduction_db: 0.0,
+            gate_open: true,
+            comp_reduction_db: 0.0,
             buses,
             sends: Vec::new(),
             present: true,

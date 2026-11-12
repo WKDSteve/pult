@@ -153,6 +153,10 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `sendpre/<n>/<bus>` | `true` (vor dem Fader des Eingangs) oder `false` (danach, am Anfang) |
 | `input/<n>/meter`, `bus/<name>/meter` | nur lesbar, im Zustand als `peak_db` |
 
+Im Zustand trägt jeder Eingang außerdem, was Gate und Kompressor wegnehmen (nur lesbar, seit dem letzten Zustand):
+`gate_reduction_db` (0 offen oder aus), `gate_open` (`true` offen oder aus), `comp_reduction_db`. Das Fenster zeigt sie unter
+den Reglern GATE und COMP: `open` oder `shut -40`, und die dB des Kompressors, hervorgehoben, solange er arbeitet.
+
 `<n>` zählt ab 1 wie `[1]` in der Eingabezeile. Eine Datei lässt sich nicht benennen: `save` schreibt nur in das Profil der
 Route.
 

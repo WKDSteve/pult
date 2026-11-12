@@ -70,6 +70,7 @@ pub enum InputSource {
 
 /// One input.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Switches and states of a channel strip, each on its own.
 pub struct InputState {
     /// Its place in the route from 1, as in the addresses (`input/2/gain`).
     pub number: usize,
@@ -95,6 +96,15 @@ pub struct InputState {
     /// Its compressor as one knob, 0 (off) to 10; 0 from a run older than compressors.
     #[serde(default)]
     pub comp: f32,
+    /// The most its gate took away since the previous state, in dB; 0 when open or off.
+    #[serde(default)]
+    pub gate_reduction_db: f32,
+    /// Whether its gate is open (or off); true from a run older than this.
+    #[serde(default = "open")]
+    pub gate_open: bool,
+    /// The most its compressor took away since the previous state, in dB.
+    #[serde(default)]
+    pub comp_reduction_db: f32,
     /// The names of the buses it feeds.
     pub buses: Vec<String>,
     /// Its send to every bus, in bus order; empty from a run older than sends.
@@ -243,6 +253,11 @@ impl State {
     }
 }
 
+/// A gate counts as open in a state that does not say.
+fn open() -> bool {
+    true
+}
+
 impl InputState {
     fn new(
         index: usize,
@@ -265,6 +280,9 @@ impl InputState {
             pan: input.pan,
             gate: input.gate,
             comp: input.comp,
+            gate_reduction_db: input.gate_reduction_db,
+            gate_open: input.gate_open,
+            comp_reduction_db: input.comp_reduction_db,
             buses: input.buses.iter().filter_map(bus_name).collect(),
             sends: (0..buses)
                 .filter_map(|bus| {
