@@ -189,8 +189,11 @@ pult run --profile meinprofil.toml --log abend.csv
   einen Eingang gleichmäßiger und insgesamt lauter: Je höher der Regler, desto tiefer die Schwelle (bis -30 dB), desto
   stärker das Verhältnis (bis 8:1) und desto mehr Pegel kommt danach dazu (bis 12 dB). Vollaussteuerung kommt dabei nie
   über Vollaussteuerung heraus. Beide messen den lautesten Kanal und regeln alle Kanäle gleich, das Stereobild bleibt.
-  Zum Einstellen der Schwelle: Das Eingangs-Meter zeigt in der Stellung PRE, was ankommt, vor Gate und Kompressor; in der
-  Stellung POST, was in den Mix geht. Im Fenster sitzen beide als kleine Regler **GATE** und **COMP** im Kanalzug.
+  Gate und Kompressor laufen einmal je Eingang, mit dessen eigener Rate, bevor er auf die Busse verteilt wird: ein
+  Eingang auf drei Bussen kostet sie einmal, nicht dreimal, und alle Busse bekommen denselben bearbeiteten Klang.
+  Zum Einstellen der Schwelle: Das Eingangs-Meter zeigt in der Stellung PRE, was ankommt, vor Gate und Kompressor, an
+  den Samples des Geräts und auch dann, wenn der Eingang auf keinen Bus geroutet ist; in der Stellung POST, was in den
+  Mix geht. Im Fenster sitzen beide als kleine Regler **GATE** und **COMP** im Kanalzug.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil

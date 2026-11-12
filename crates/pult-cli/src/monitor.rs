@@ -87,7 +87,8 @@ impl Snapshot {
                     outages: input.outages,
                     ..InputSnapshot::default()
                 };
-                input.routes.iter().fold(start, |sum, route| {
+                let pre = input.controls.pre_peak.take();
+                let sum = input.routes.iter().fold(start, |sum, route| {
                     let stats = &route.stats;
                     InputSnapshot {
                         peak: sum.peak.max(stats.peak.take()),
@@ -98,7 +99,13 @@ impl Snapshot {
                         aligned: sum.aligned + stats.aligned.get(),
                         ..sum
                     }
-                })
+                });
+                // Before the fader the input has one meter, its stage's.
+                if input.controls.meter_pre_fader.load(Ordering::Relaxed) {
+                    InputSnapshot { peak: pre, ..sum }
+                } else {
+                    sum
+                }
             })
             .collect();
         let buses = running

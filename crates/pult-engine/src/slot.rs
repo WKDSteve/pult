@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use assert_no_alloc::assert_no_alloc;
 use cpal::traits::StreamTrait;
 use cpal::{Device, ErrorKind, SupportedStreamConfig};
-use pult_core::{Capture, Counter, Mixer};
+use pult_core::{Capture, Counter, InputStage, Mixer};
 
 use crate::convert;
 use crate::process::{PROCESS_CHANNELS, ProcessStream};
@@ -34,11 +34,20 @@ pub(crate) const RETRY_EVERY: Duration = Duration::from_secs(1);
 /// callback thread, so the feed is normally there at once.
 const RECLAIM_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// What the callback of an input works on: its stage (PRE meter, gate, compressor), then its
+/// rings.
+#[derive(Debug)]
+pub(crate) struct InputFeed {
+    pub(crate) stage: InputStage,
+    /// One per bus it feeds.
+    pub(crate) captures: Vec<Capture>,
+}
+
 /// What one stream's callback works on.
 #[derive(Debug)]
 pub(crate) enum Feed {
-    /// The captures of an input, one per bus it feeds.
-    Input(Vec<Capture>),
+    /// The stage and the captures of an input.
+    Input(InputFeed),
     /// The mixer of a bus.
     Bus(Mixer),
 }
@@ -273,8 +282,8 @@ impl Slot {
             return Err(Error::Stranded { device: name });
         };
         match &mut feed {
-            Feed::Input(captures) => {
-                let expected = captures.first().map_or(channels, Capture::channels);
+            Feed::Input(input) => {
+                let expected = input.stage.channels();
                 if channels != expected {
                     self.held = Some(feed);
                     return Err(Error::LayoutChanged {
@@ -283,6 +292,9 @@ impl Slot {
                         expected,
                     });
                 }
+                // A new stream: gate and compressor start from rest, not from where the old
+                // one left them.
+                input.stage.start_over();
             }
             Feed::Bus(mixer) => mixer.resume(channels),
         }
@@ -437,10 +449,8 @@ fn input_callback(
         realtime.raise(&health);
         assert_no_alloc(|| {
             health.beats.add(1);
-            if let Some(Feed::Input(captures)) = returning.get_mut() {
-                for capture in captures {
-                    capture.push(data);
-                }
+            if let Some(Feed::Input(InputFeed { stage, captures })) = returning.get_mut() {
+                stage.feed_captures(data, captures);
             }
         });
     }

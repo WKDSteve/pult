@@ -108,6 +108,24 @@ fn peak_db(linear: f32) -> Option<f32> {
 }
 
 /// Whichever of two corrections lies further from zero.
+/// Peak, drift and dropouts of one input, read for a view. Before the fader the input has one
+/// meter, its stage's; both meters are taken, so the one switched to starts fresh.
+fn levels(input: &crate::RunningInput) -> (f32, f32, u64) {
+    let mut peak: f32 = 0.0;
+    let mut drift: f32 = 0.0;
+    let mut dropouts = 0;
+    for route in input.routes.iter().filter(|route| route.is_routed()) {
+        peak = peak.max(route.stats.peak.take());
+        drift = farther(drift, route.stats.correction_ppm.load());
+        dropouts += route.stats.underruns.get() + route.stats.resyncs.get();
+    }
+    let pre = input.controls.pre_peak.take();
+    if input.controls.meter_pre_fader.load(Ordering::Relaxed) {
+        peak = pre;
+    }
+    (peak, drift, dropouts)
+}
+
 fn farther(a: f32, b: f32) -> f32 {
     if b.abs() > a.abs() { b } else { a }
 }
@@ -146,14 +164,7 @@ impl Desk for EngineDesk {
             .zip(&running.spec.inputs)
             .zip(&self.solo)
             .map(|((input, spec), &solo)| {
-                let mut peak: f32 = 0.0;
-                let mut drift: f32 = 0.0;
-                let mut dropouts = 0;
-                for route in input.routes.iter().filter(|route| route.is_routed()) {
-                    peak = peak.max(route.stats.peak.take());
-                    drift = farther(drift, route.stats.correction_ppm.load());
-                    dropouts += route.stats.underruns.get() + route.stats.resyncs.get();
-                }
+                let (peak, drift, dropouts) = levels(input);
                 InputView {
                     name: input.name.clone(),
                     label: spec.label.clone(),

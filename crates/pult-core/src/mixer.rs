@@ -21,10 +21,12 @@
 //! [`crate::ramp`]). A ring that is switched off fades out before it closes, one that is
 //! switched on fades in once it is primed.
 //!
-//! An input passes its gate and its compressor ([`crate::dynamics`]) before its fader, in each
-//! of its rings; a bus passes its equalizer ([`crate::eq`]) after the sum and before its fader,
-//! and its limiter ([`crate::limiter`]) behind it.
-//! The input meters measure either what arrives, before all of that, or what goes into the mix.
+//! An input passes its gate and its compressor ([`crate::dynamics`]) once, in its
+//! [`crate::stage::InputStage`] before its rings, at its own rate; a bus passes its equalizer
+//! ([`crate::eq`]) after the sum and before its fader, and its limiter ([`crate::limiter`])
+//! behind it. An input has two meters: [`InputControls::pre_peak`] in the stage, what arrives
+//! before all of that, and the meter of each ring ([`InputStats::peak`]), what goes into that
+//! bus's mix.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -39,7 +41,7 @@ use rubato::{
 use rubato::Adjustable as _;
 
 use crate::drift::{DriftControl, Event};
-use crate::dynamics::{Compressor, CompressorControls, Gate, GateControls};
+use crate::dynamics::{CompressorControls, GateControls};
 use crate::eq::{EqControls, Equalizer};
 use crate::level::{AtomicF32, Counter, PeakMeter};
 use crate::limiter::{Limiter, LimiterControls};
@@ -75,9 +77,13 @@ pub struct InputControls {
     /// Silent because other inputs are soloed; the control thread sets it for every input
     /// that is not soloed while any is. Acts like `muted` without touching it.
     pub soloed_out: AtomicBool,
-    /// The peak meter measures what arrives, before gate, compressor, gain and mute (true), or
-    /// what goes into the mix, after them (false).
+    /// Which meter the desk shows for this input: [`Self::pre_peak`], what arrives before gate,
+    /// compressor, gain and mute (true), or the rings' meters, what goes into the mix (false).
+    /// Both always measure.
     pub meter_pre_fader: AtomicBool,
+    /// The PRE meter of the input, once for all its rings: written by its
+    /// [`crate::stage::InputStage`], at the samples of the device, routed or not.
+    pub pre_peak: PeakMeter,
     /// -1 (left) to 1 (right); see [`remix_add`].
     pub pan: Glide,
     /// The gate, before the compressor; off at first.
@@ -94,6 +100,7 @@ impl Default for InputControls {
             fade_ms: AtomicU32::new(0),
             soloed_out: AtomicBool::new(false),
             meter_pre_fader: AtomicBool::new(false),
+            pre_peak: PeakMeter::default(),
             pan: Glide::new(0.0),
             gate: GateControls::default(),
             compressor: CompressorControls::default(),
@@ -104,7 +111,7 @@ impl Default for InputControls {
 /// What happened to one ring of an input, counted by the audio threads.
 #[derive(Debug, Default)]
 pub struct InputStats {
-    /// Peak where the meter measures: what arrives, or what is fed into the mix.
+    /// Peak of what this ring feeds into its bus's mix, after gain, pan and mute.
     pub peak: PeakMeter,
     /// Frames the capture could not store because the ring was full.
     pub dropped_at_capture: Counter,
@@ -266,8 +273,6 @@ pub fn connect_with(
         stats: Arc::clone(&handle.stats),
         routed: Arc::clone(&handle.routed),
         playing: true,
-        gate: Gate::new(config.output_rate),
-        compressor: Compressor::new(config.output_rate),
         gain: Follower::new(config.output_rate),
         pan: Follower::new(config.output_rate),
         onset_frames: (u64::from(config.input_rate) * u64::from(MIN_RAMP_MS) / 1000).max(1)
@@ -356,9 +361,6 @@ pub struct MixerInput {
     routed: Arc<AtomicBool>,
     /// Whether the ring plays: routed, or fading out after it no longer is.
     playing: bool,
-    /// Gate and compressor of this ring, at the output rate.
-    gate: Gate,
-    compressor: Compressor,
     /// Where the gain stands, silence and the fades of the matrix included.
     gain: Follower,
     /// Where the pan stands.
@@ -410,8 +412,6 @@ impl MixerInput {
         self.resampler.reset();
         self.onset = 0;
         self.rate.reset();
-        self.gate.start_over();
-        self.compressor.start_over();
         self.stats.correction_ppm.store(0.0);
     }
 
@@ -427,20 +427,13 @@ impl MixerInput {
         self.gain
             .follow(self.controls.gain.load(), routed && !silent, fade_ms);
         self.pan.follow(self.controls.pan.load(), true, 0);
-        let pre_fader = self.controls.meter_pre_fader.load(Ordering::Relaxed);
         let ch = self.channels;
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(MAX_CHUNK);
             // A priming ring is silent, and the ramps wait: a fade-in starts with the sound.
             if self.next_chunk(n) {
-                let block = &mut self.resampled[..n * ch];
-                if pre_fader {
-                    self.stats.peak.record_scaled(block, 1.0);
-                }
-                self.gate.process(&self.controls.gate, block, ch);
-                self.compressor
-                    .process(&self.controls.compressor, block, ch);
+                // Gate and compressor ran in the input's stage, before the ring.
                 let block = &self.resampled[..n * ch];
                 let rest = &mut out[done * out_channels..];
                 let before = self.gain.ramp.value();
@@ -451,10 +444,8 @@ impl MixerInput {
                     let (gain, pan) = (&mut self.gain.ramp, &mut self.pan.ramp);
                     remix_add_ramped(block, ch, rest, out_channels, gain, pan);
                 }
-                if !pre_fader {
-                    let metered = before.max(self.gain.ramp.value());
-                    self.stats.peak.record_scaled(block, metered);
-                }
+                let metered = before.max(self.gain.ramp.value());
+                self.stats.peak.record_scaled(block, metered);
             } else {
                 self.gain.hold();
             }
@@ -689,7 +680,6 @@ fn limited(sample: &mut f32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynamics::{CompressorParams, GateParams};
     use crate::eq::{Band, BandKind};
     use crate::level::{db_to_linear, linear_to_db};
 
@@ -1158,7 +1148,7 @@ mod tests {
     }
 
     #[test]
-    fn solo_silences_like_mute_and_the_meter_can_measure_before_the_fader() {
+    fn solo_silences_like_mute_and_the_ring_meter_reads_after_the_fader() {
         let (mut a, input_a, handle_a) = connect(config(1, 0));
         let (mut b, input_b, _) = connect(config(1, 0));
         let (mut mixer, _) = Mixer::new(vec![input_a, input_b], 1);
@@ -1170,17 +1160,12 @@ mod tests {
         assert!(all_near(&out, &[0.2]), "{:?}", &out[..1]);
         assert_eq!(handle_a.stats.peak.take(), 0.0);
 
-        // Before the fader the meter shows what arrives, soloed out, muted or not.
-        handle_a
-            .controls
-            .meter_pre_fader
-            .store(true, Ordering::Relaxed);
-        run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 1);
-        assert!((handle_a.stats.peak.take() - 0.2).abs() < 2e-3);
+        // What arrives before the fader is the stage's meter (crate::stage); the ring's meter
+        // reads what goes into the mix: half of 0.2 once the solo ends.
         handle_a.controls.soloed_out.store(false, Ordering::Release);
         let out = run_dc(&mut mixer, &mut [&mut a, &mut b], 1, 0.2, 2);
         assert!(all_near(&out, &[0.3]), "{:?}", &out[..1]);
-        assert!((handle_a.stats.peak.take() - 0.2).abs() < 2e-3);
+        assert!((handle_a.stats.peak.take() - 0.1).abs() < 2e-3);
     }
 
     #[test]
@@ -1426,53 +1411,6 @@ mod tests {
         assert_eq!(handle.stats.underruns.get(), 0);
     }
 
-    #[test]
-    fn an_input_passes_its_compressor_before_its_fader() {
-        let (mut mixer, mut capture, handle, _) = playing(0.5);
-        handle.controls.compressor.set(CompressorParams {
-            threshold_db: -26.0,
-            ratio: 4.0,
-            ..CompressorParams::default()
-        });
-        handle.controls.compressor.switch(true);
-        // The fader does not move what the compressor sees: half the gain, half of its output.
-        handle.controls.gain.store(0.5);
-        let out = record(&mut mixer, &mut capture, 0.5, 200);
-        // -6 dB is 20 dB above the threshold; three quarters of that go.
-        let compressed = 0.5 * db_to_linear(-0.75 * (linear_to_db(0.5) + 26.0));
-        let last = out[out.len() - 1];
-        assert!((last - 0.5 * compressed).abs() < 2e-3, "{last}");
-        // The meter reads behind the compressor.
-        handle.stats.peak.take();
-        record(&mut mixer, &mut capture, 0.5, 1);
-        assert!((handle.stats.peak.take() - 0.5 * compressed).abs() < 2e-3);
-    }
-
-    #[test]
-    fn before_the_fader_the_meter_shows_what_arrives_at_the_gate() {
-        let (mut mixer, mut capture, handle, _) = playing(0.01);
-        handle.controls.gate.set(GateParams {
-            threshold_db: -20.0,
-            hold_ms: 0.0,
-            release_ms: 5.0,
-            ..GateParams::default()
-        });
-        handle.controls.gate.switch(true);
-        let out = record(&mut mixer, &mut capture, 0.01, 20);
-        assert_eq!(out[out.len() - 1], 0.0, "the gate is closed");
-
-        // After the fader nothing goes into the mix; before it the level is there to set it by.
-        handle.stats.peak.take();
-        record(&mut mixer, &mut capture, 0.01, 2);
-        assert_eq!(handle.stats.peak.take(), 0.0);
-        handle
-            .controls
-            .meter_pre_fader
-            .store(true, Ordering::Relaxed);
-        record(&mut mixer, &mut capture, 0.01, 2);
-        assert!((handle.stats.peak.take() - 0.01).abs() < 1e-4);
-    }
-
     /// How long a second of sound takes through one bus with two stereo rings, in ms. A
     /// measurement, not a check. The allocation check of these tests needs debug assertions, so:
     /// `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo test -p pult-core --release
@@ -1508,45 +1446,15 @@ mod tests {
     #[ignore = "a measurement, not a check"]
     fn what_the_dsp_costs() {
         let plain = time_a_second(|_, _| {});
-        let dynamics = time_a_second(|input, _| {
-            input.controls.gate.set_simple(5.0);
-            input.controls.compressor.set_simple(8.0);
-        });
-        let all = time_a_second(|input, bus| {
-            input.controls.gate.set_simple(5.0);
-            input.controls.compressor.set_simple(8.0);
+        // Gate and compressor run in the input stage now: crate::stage, what_the_stage_saves.
+        let all = time_a_second(|_, bus| {
             for band in 0..crate::eq::EQ_BANDS {
                 bus.controls.eq.set(band, Band::at(band).with_gain(3.0));
             }
         });
         println!("per second of sound, two stereo rings on one bus:");
         println!("  plain                {plain:.2} ms");
-        println!("  gate and compressor  {dynamics:.2} ms");
         println!("  with all four bands  {all:.2} ms");
-    }
-
-    #[test]
-    fn an_input_passes_its_gate_and_a_ring_that_starts_is_closed() {
-        let (mut capture, input, handle) = connect(config(1, 480));
-        let (mut mixer, _) = Mixer::new(vec![input.unrouted()], 1);
-        handle.controls.gate.set(GateParams {
-            threshold_db: -20.0,
-            ..GateParams::default()
-        });
-        handle.controls.gate.switch(true);
-        record(&mut mixer, &mut capture, 0.01, 2);
-        // Routed with a level below the threshold: it never sounds, not even while it would
-        // otherwise close.
-        handle.routed.store(true, Ordering::Release);
-        let out = record(&mut mixer, &mut capture, 0.01, 20);
-        assert!(out.iter().all(|&o| o.abs() < 1e-4), "{:?}", largest(&out));
-        // Above it, it opens.
-        let out = record(&mut mixer, &mut capture, 0.5, 20);
-        assert!((out[out.len() - 1] - 0.5).abs() < 2e-3);
-    }
-
-    fn largest(out: &[f32]) -> f32 {
-        out.iter().fold(0.0, |max: f32, o| max.max(o.abs()))
     }
 
     #[test]
@@ -1645,14 +1553,8 @@ mod tests {
                 capture.push(&data);
                 mixer.process(&mut out);
             }
-            // Gate, compressor and equalizer: set, working, and switched off again.
-            handle.controls.gate.set(GateParams::simple(8.0));
-            handle.controls.gate.switch(true);
-            handle
-                .controls
-                .compressor
-                .set(CompressorParams::simple(8.0));
-            handle.controls.compressor.switch(true);
+            // The equalizer: set, working, and switched off again (gate and compressor are the
+            // stage's, tested there).
             bus.controls.eq.set(1, Band::at(1).with_gain(6.0));
             // The limiter at work, with another lookahead, and switched off.
             bus.controls.limiter.set_all(true, -20.0, 5.0);
@@ -1661,8 +1563,6 @@ mod tests {
                     bus.controls.limiter.set_lookahead(1.0);
                 }
                 if round == 5 {
-                    handle.controls.gate.switch(false);
-                    handle.controls.compressor.switch(false);
                     bus.controls.eq.switch(false);
                     bus.controls.limiter.switch(false);
                 }

@@ -41,8 +41,8 @@ use pult_core::EQ_BANDS;
 use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
 use pult_core::{
-    Band, BusHandle, Capture, Counter, DriftControl, InputConfig, InputControls, InputStats, Mixer,
-    MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
+    Band, BusHandle, Counter, DriftControl, InputConfig, InputControls, InputStage, InputStats,
+    Mixer, MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
 };
 
 pub use desk::EngineDesk;
@@ -50,7 +50,7 @@ pub use offline::Offline;
 pub use presence::{APP_INSTANCE, Presence};
 use process::PROCESS_CHANNELS;
 pub use process::program_names;
-use slot::{Feed, Health, Slot, Source, fault_recorder};
+use slot::{Feed, Health, InputFeed, Slot, Source, fault_recorder};
 
 /// Weight of one resampler chunk in the drift control's level average: with 10 ms callbacks
 /// the average spans about 1.3 s, long enough to flatten the block jitter of virtual cables.
@@ -968,7 +968,7 @@ enum Opening {
 /// opens.
 struct FoundInput {
     opening: Opening,
-    captures: Vec<Capture>,
+    feed: InputFeed,
     running: RunningInput,
 }
 
@@ -997,23 +997,23 @@ fn find_input(
             (opening, found.name, PROCESS_CHANNELS, rate)
         }
     };
-    let (captures, running) = make_rings(input, name, channels, sample_rate, rings);
+    let (feed, running) = make_rings(input, name, channels, sample_rate, rings);
     Ok(FoundInput {
         opening,
-        captures,
+        feed,
         running,
     })
 }
 
-/// Makes the rings of one input whose device delivers `channels` at `sample_rate`: one per bus,
-/// with the controls the spec sets.
+/// Makes the stage and the rings of one input whose device delivers `channels` at
+/// `sample_rate`: one ring per bus, with the controls the spec sets.
 fn make_rings(
     input: &InputSpec,
     name: String,
     channels: u16,
     sample_rate: u32,
     rings: &mut Rings<'_>,
-) -> (Vec<Capture>, RunningInput) {
+) -> (InputFeed, RunningInput) {
     let controls = Arc::new(InputControls::default());
     controls.gain.store(db_to_linear(input.gain_db));
     controls.pan.store(input.pan);
@@ -1055,6 +1055,8 @@ fn make_rings(
             routed: handle.routed,
         });
     }
+    // Gate, compressor and the PRE meter run once for the input, at its own rate.
+    let stage = InputStage::new(Arc::clone(&controls), usize::from(channels), sample_rate);
     let running = RunningInput {
         name,
         controls,
@@ -1063,7 +1065,7 @@ fn make_rings(
         present: false,
         outages: 0,
     };
-    (captures, running)
+    (InputFeed { stage, captures }, running)
 }
 
 /// Sets the controls of a bus as the spec says.
@@ -1106,7 +1108,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     let mut opening = Vec::with_capacity(slots.capacity());
     let mut inputs = Vec::with_capacity(spec.inputs.len());
     for (input, found) in spec.inputs.iter().zip(found_inputs) {
-        let feed = Feed::Input(found.captures);
+        let feed = Feed::Input(found.feed);
         let role = match input.kind {
             InputKind::Device => Role::Input,
             InputKind::Process => Role::Process,

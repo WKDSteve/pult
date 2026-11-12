@@ -29,6 +29,7 @@ pub mod rate;
 pub mod remix;
 pub mod scale;
 pub mod select;
+pub mod stage;
 pub mod tone;
 pub mod view;
 
@@ -49,6 +50,7 @@ pub use ramp::{Follower, Glide, MAX_RAMP_MS, MIN_RAMP_MS, Ramp};
 pub use rate::RateControl;
 pub use remix::{remix_add, remix_add_ramped};
 pub use select::{SelectError, select};
+pub use stage::{InputStage, STAGE_FRAMES};
 pub use tone::Sine;
 pub use view::{
     Action, BusView, Desk, EventKind, EventView, FakeDesk, InputView, MeterPoint, MixerView, Reply,

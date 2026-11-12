@@ -5,8 +5,9 @@
 
 use std::sync::Arc;
 
-use pult_core::{Capture, Counter, Mixer, MixerInput};
+use pult_core::{Counter, Mixer, MixerInput};
 
+use crate::slot::InputFeed;
 use crate::{Error, Rings, RouteSpec, Running, make_rings, set_up_bus};
 
 /// A route whose inputs and buses are buffers.
@@ -14,7 +15,7 @@ use crate::{Error, Rings, RouteSpec, Running, make_rings, set_up_bus};
 pub struct Offline {
     running: Running,
     /// Per input, one capture per bus, as its device callback would push them.
-    captures: Vec<Vec<Capture>>,
+    inputs_fed: Vec<InputFeed>,
     /// Per bus, its mixer, as its device callback would run it.
     mixers: Vec<Mixer>,
     /// Per bus, the output of the latest [`Self::process`].
@@ -82,7 +83,7 @@ impl Offline {
         let outputs = spec.buses.iter().map(|_| Vec::new()).collect();
         Ok(Self {
             running,
-            captures,
+            inputs_fed: captures,
             mixers,
             outputs,
             channels,
@@ -95,19 +96,18 @@ impl Offline {
         &mut self.running
     }
 
-    /// One callback of every device: pushes `inputs[i]` (interleaved, the channels of
-    /// [`Self::new`]) into every ring of input `i`, then lets every bus mix `frames` frames.
+    /// One callback of every device: passes `inputs[i]` (interleaved, the channels of
+    /// [`Self::new`]) through the stage of input `i` into every ring of it, then lets every bus
+    /// mix `frames` frames.
     /// Returns what the buses put out, one interleaved buffer each.
     ///
     /// # Panics
     ///
     /// When `inputs` does not have one buffer per input.
     pub fn process(&mut self, inputs: &[&[f32]], frames: usize) -> &[Vec<f32>] {
-        assert_eq!(inputs.len(), self.captures.len(), "one buffer per input");
-        for (captures, data) in self.captures.iter_mut().zip(inputs) {
-            for capture in captures {
-                capture.push(data);
-            }
+        assert_eq!(inputs.len(), self.inputs_fed.len(), "one buffer per input");
+        for (InputFeed { stage, captures }, data) in self.inputs_fed.iter_mut().zip(inputs) {
+            stage.feed_captures(data, captures);
         }
         for (mixer, out) in self.mixers.iter_mut().zip(&mut self.outputs) {
             out.resize(frames * self.channels, 0.0);
