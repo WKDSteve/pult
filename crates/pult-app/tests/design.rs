@@ -84,6 +84,12 @@ fn showcase(t: f64) -> MixerView {
                 gate_reduction_db: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 gate_open: true,
                 comp_reduction_db: [4.5, 1.2, 0.0, 0.0, 0.0, 0.0, 0.0][i],
+                // Mic 1 with a high-pass against rumble, the Guitar turned over.
+                strip: pult_core::strip::StripSettings {
+                    hpf_hz: [80.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0][i],
+                    polarity: i == 1,
+                    ..pult_core::strip::StripSettings::default()
+                },
                 buses: buses.to_vec(),
                 sends: Vec::new(),
                 present: i != 6,

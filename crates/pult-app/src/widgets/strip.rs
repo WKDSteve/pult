@@ -1,8 +1,8 @@
 //! Channel strips: draws a [`Strip`] of the layout, an input strip or a bus (master) strip.
 //!
 //! Every strip has the same zones from top to bottom, so faders and meters of all strips line
-//! up: name, pan (or device on a bus), bus assignment, gate and compressor (or the switch of the
-//! equalizer on a bus), mute/solo, fader with meter, readout.
+//! up: name, pan (or device on a bus), bus assignment, filters and polarity, gate and compressor
+//! (or the switch of the equalizer on a bus), mute/solo, fader with meter, readout.
 //! The elements of a strip say which control goes into which zone and what it is bound to.
 
 use eframe::egui::{
@@ -25,6 +25,7 @@ const HEADER_HEIGHT: f32 = 38.0;
 const PAN_HEIGHT: f32 = 58.0;
 const ASSIGN_ROW_HEIGHT: f32 = 22.0;
 const ASSIGN_PER_ROW: usize = 3;
+const FILTER_HEIGHT: f32 = 54.0;
 const DYNAMICS_HEIGHT: f32 = 64.0;
 const DIAL_SIZE: f32 = 26.0;
 const MUTE_SOLO_HEIGHT: f32 = 30.0;
@@ -39,6 +40,7 @@ pub struct Zones {
     header: Rect,
     pan: Rect,
     assign: Rect,
+    filter: Rect,
     dynamics: Rect,
     mute_solo: Rect,
     fader: Rect,
@@ -57,6 +59,7 @@ impl Zones {
         let fixed = HEADER_HEIGHT
             + PAN_HEIGHT
             + assign_height
+            + FILTER_HEIGHT
             + DYNAMICS_HEIGHT
             + MUTE_SOLO_HEIGHT
             + READOUT_HEIGHT;
@@ -70,6 +73,7 @@ impl Zones {
         let header = take(HEADER_HEIGHT);
         let pan = take(PAN_HEIGHT);
         let assign = take(assign_height);
+        let filter = take(FILTER_HEIGHT);
         let dynamics = take(DYNAMICS_HEIGHT);
         let mute_solo = take(MUTE_SOLO_HEIGHT);
         let fader = take(fader_height);
@@ -78,6 +82,7 @@ impl Zones {
             header,
             pan,
             assign,
+            filter,
             dynamics,
             mute_solo,
             fader,
@@ -99,6 +104,7 @@ impl Zones {
             + HEADER_HEIGHT
             + PAN_HEIGHT
             + assign
+            + FILTER_HEIGHT
             + DYNAMICS_HEIGHT
             + MUTE_SOLO_HEIGHT
             + MIN_FADER_HEIGHT
@@ -112,6 +118,7 @@ impl Zones {
             Zone::Header => self.header,
             Zone::Pan => self.pan,
             Zone::Assign => self.assign,
+            Zone::Filter => self.filter,
             Zone::Dynamics => self.dynamics,
             Zone::MuteSolo => self.mute_solo,
             Zone::Fader => self.fader,
@@ -289,7 +296,7 @@ impl<'v> Draw<'_, 'v> {
                     });
                 },
             ),
-            Zone::Dynamics => within(
+            Zone::Filter | Zone::Dynamics => within(
                 ui,
                 rect.shrink2(vec2(0.0, 2.0)),
                 Layout::left_to_right(Align::Center),

@@ -13,6 +13,7 @@ use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
 use crate::control::{Command, Target};
 use crate::eq::{Band, BandChange, BandKind};
 use crate::limiter::LimitChange;
+use crate::strip::StripChange;
 use crate::view::{Action, BusView, EventKind, EventView, GAIN_RANGE_DB, InputView, MeterPoint};
 use crate::view::{MixerView, SourceKind, check_amount};
 
@@ -114,6 +115,9 @@ pub struct InputState {
     /// The most its compressor took away since the previous state, in dB.
     #[serde(default)]
     pub comp_reduction_db: f32,
+    /// Its channel strip; neutral from a run older than this.
+    #[serde(default)]
+    pub strip: crate::strip::StripSettings,
     /// The names of the buses it feeds.
     pub buses: Vec<String>,
     /// Its send to every bus, in bus order; empty from a run older than sends.
@@ -341,6 +345,7 @@ impl InputState {
             gate_reduction_db: input.gate_reduction_db,
             gate_open: input.gate_open,
             comp_reduction_db: input.comp_reduction_db,
+            strip: input.strip,
             buses: input.buses.iter().filter_map(bus_name).collect(),
             sends: (0..buses)
                 .filter_map(|bus| {
@@ -515,6 +520,10 @@ impl Op {
             Command::BusComp(to, amount) => on_bus(*to, "comp", OpValue::Number(*amount))?,
             Command::BusCompMix(to, percent) => on_bus(*to, "comp/mix", OpValue::Number(*percent))?,
             Command::BusCompHpf(to, hz) => on_bus(*to, "comp/hpf", OpValue::Number(*hz))?,
+            Command::Strip(input, change) => {
+                let (param, value) = strip_op(*change);
+                set(format!("input/{}/{param}", input + 1), value, 0)
+            }
             Command::Automix(input, on) => set(
                 format!("input/{}/automix", input + 1),
                 OpValue::Switch(*on),
@@ -588,20 +597,46 @@ impl Op {
     }
 }
 
-/// The mix (percent) or the sidechain corner (Hz) of a bus compressor, checked.
-fn comp_setting(param: BusParam, number: f32, address: &str) -> Result<Value, String> {
-    if param == BusParam::CompMix {
-        if (0.0..=100.0).contains(&number) {
+/// The address word and the value of a change of a channel strip.
+fn strip_op(change: StripChange) -> (&'static str, OpValue) {
+    match change {
+        StripChange::Polarity(on) => ("polarity", OpValue::Switch(on)),
+        StripChange::Hpf(hz) => ("hpf", OpValue::Number(hz)),
+        StripChange::Lpf(hz) => ("lpf", OpValue::Number(hz)),
+        StripChange::Delay(ms) => ("delay", OpValue::Number(ms)),
+        StripChange::Width(percent) => ("width", OpValue::Number(percent)),
+    }
+}
+
+/// A number setting of a channel strip, or the mix (percent) or the sidechain corner (Hz) of a
+/// bus compressor, checked.
+fn setting_value(binding: Binding, number: f32, address: &str) -> Result<Value, String> {
+    let strip = |change: StripChange, value: Value| {
+        change
+            .checked()
+            .map(|_| value)
+            .map_err(|why| format!("{address}: {why}"))
+    };
+    match binding {
+        Binding::Input(_, InputParam::Hpf) => strip(StripChange::Hpf(number), Value::Freq(number)),
+        Binding::Input(_, InputParam::Lpf) => strip(StripChange::Lpf(number), Value::Freq(number)),
+        Binding::Input(_, InputParam::Delay) => {
+            strip(StripChange::Delay(number), Value::Delay(number))
+        }
+        Binding::Input(..) => strip(StripChange::Width(number), Value::Percent(number)),
+        Binding::Bus(_, BusParam::CompMix) if (0.0..=100.0).contains(&number) => {
             Ok(Value::Percent(number))
-        } else {
+        }
+        Binding::Bus(_, BusParam::CompMix) => {
             Err(format!("{address} takes 0 to 100, not {number}"))
         }
-    } else {
-        let (low, high) = crate::buscomp::HPF_HZ;
-        if (low..=high).contains(&number) {
-            Ok(Value::Freq(number))
-        } else {
-            Err(format!("{address} takes {low} to {high} Hz, not {number}"))
+        _ => {
+            let (low, high) = crate::buscomp::HPF_HZ;
+            if (low..=high).contains(&number) {
+                Ok(Value::Freq(number))
+            } else {
+                Err(format!("{address} takes {low} to {high} Hz, not {number}"))
+            }
         }
     }
 }
@@ -647,9 +682,14 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         (Binding::Input(_, InputParam::Pan), OpValue::Number(pan)) => {
             Ok(Value::Pan(wants_number(*pan)?))
         }
-        (Binding::Bus(_, param @ (BusParam::CompMix | BusParam::CompHpf)), OpValue::Number(n)) => {
-            comp_setting(param, wants_number(*n)?, address)
-        }
+        (
+            Binding::Bus(_, BusParam::CompMix | BusParam::CompHpf)
+            | Binding::Input(
+                _,
+                InputParam::Hpf | InputParam::Lpf | InputParam::Delay | InputParam::Width,
+            ),
+            OpValue::Number(n),
+        ) => setting_value(binding, wants_number(*n)?, address),
         (Binding::Input(_, InputParam::Gate), OpValue::Number(amount)) => {
             check_amount("gate", wants_number(*amount)?).map(Value::Amount)
         }
@@ -681,14 +721,20 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             Err(format!("{address} takes low, bell or high"))
         }
         (
-            Binding::Input(_, InputParam::Mute | InputParam::Solo | InputParam::Automix)
+            Binding::Input(
+                _,
+                InputParam::Mute | InputParam::Solo | InputParam::Automix | InputParam::Polarity,
+            )
             | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
             | Binding::Route { .. }
             | Binding::SendPre { .. },
             OpValue::Switch(on),
         ) => Ok(Value::Switch(*on)),
         (
-            Binding::Input(_, InputParam::Mute | InputParam::Solo | InputParam::Automix)
+            Binding::Input(
+                _,
+                InputParam::Mute | InputParam::Solo | InputParam::Automix | InputParam::Polarity,
+            )
             | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
             | Binding::Route { .. }
             | Binding::SendPre { .. },
@@ -857,6 +903,36 @@ mod tests {
 
     #[test]
     fn sends_and_the_automixer_are_set_by_address() {
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/polarity","value":true}"#),
+            Ok(Action::InputStrip {
+                input: 0,
+                change: StripChange::Polarity(true)
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/2/hpf","value":80}"#),
+            Ok(Action::InputStrip {
+                input: 1,
+                change: StripChange::Hpf(80.0)
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/2/delay","value":5}"#),
+            Ok(Action::InputStrip {
+                input: 1,
+                change: StripChange::Delay(5.0)
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/width","value":0}"#),
+            Ok(Action::InputStrip {
+                input: 0,
+                change: StripChange::Width(0.0)
+            })
+        );
+        assert!(action(r#"{"op":"set","address":"input/1/lpf","value":50}"#).is_err());
+        assert!(action(r#"{"op":"set","address":"input/1/polarity","value":3}"#).is_err());
         assert_eq!(
             action(r#"{"op":"set","address":"bus/A1/comp","value":4}"#),
             Ok(Action::BusComp {

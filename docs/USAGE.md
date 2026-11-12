@@ -203,6 +203,14 @@ pult run --profile meinprofil.toml --log abend.csv
   ein Mikrofon mit 6 dB Gewicht zählt beim Teilen, als wäre es 6 dB lauter, etwa der Moderator gegen den Gast), im Profil
   `automix_weight_db = 6`, in Szenen `automix = true|false`, im Fenster der Schalter **AM** im Kanalzug, von außen
   `input/<n>/automix` und `input/<n>/automix/weight`, per MIDI `learn input/2/automix`.
+- **Kanalzug:** Jeder Eingang hat vor Gate und Kompressor einen Kanalzug wie ein SSL-Pult, am Anfang neutral:
+  `polarity = true` dreht die Polarität um (Knopf **Ø**, gegen die Auslöschung zweier Mikrofone an einer Quelle),
+  `hpf_hz = 20..1000` ist ein Hochpass (20 = aus; 80 nimmt Trittschall und Rumpeln), `lpf_hz = 1000..20000` ein
+  Tiefpass (20000 = aus), `delay_ms = 0..250` hält den Eingang zurück, um ihn mit einem anderen auszurichten, und
+  `width = 0..200` ist die Breite eines Stereo-Eingangs (0 = mono, 100 wie er kommt; ein Mono-Eingang übergeht sie).
+  Während des Laufs `polarity 2 on`, `hpf 2 80`, `lpf 2 off`, `delay 3 12.5`, `width 1 mono`; im Fenster stehen
+  **HPF**, **LPF** und **Ø** über GATE und COMP; von außen `input/<n>/polarity`, `/hpf`, `/lpf`, `/delay`, `/width`.
+  Alles läuft in der Eingangsstufe, mit der Rate des Eingangs und ohne Allokation.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil

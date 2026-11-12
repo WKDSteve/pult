@@ -308,6 +308,8 @@ pub struct InputSpec {
     pub automix_weight_db: f32,
     /// The sends that differ from the default (0 dB, after the fader), one per bus at most.
     pub sends: Vec<SendSpec>,
+    /// Its channel strip: polarity, filters, delay, width; neutral at first.
+    pub strip: pult_core::strip::StripSettings,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
     pub buses: Vec<usize>,
 }
@@ -370,6 +372,7 @@ impl InputSpec {
             automix: false,
             automix_weight_db: 0.0,
             sends: Vec::new(),
+            strip: pult_core::strip::StripSettings::default(),
             buses,
         }
     }
@@ -1163,6 +1166,7 @@ fn make_rings(
     controls.pan.store(input.pan);
     controls.gate.set_simple(input.gate);
     controls.compressor.set_simple(input.comp);
+    controls.strip.set_all(input.strip);
     controls.muted.store(input.muted, Ordering::Relaxed);
     {
         let index = rings.automix_next;

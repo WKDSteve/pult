@@ -107,26 +107,8 @@ impl Running {
                     over(*ramp_ms)
                 )])
             }
-            Command::Gate(index, amount) => {
-                let amount = check_amount("gate", *amount)?;
-                self.inputs[*index].controls.gate.set_simple(amount);
-                self.spec.inputs[*index].gate = amount;
-                Ok(vec![format!(
-                    "{}: gate {}",
-                    self.target_label(Target::Input(*index)),
-                    knob(amount)
-                )])
-            }
-            Command::Comp(index, amount) => {
-                let amount = check_amount("comp", *amount)?;
-                self.inputs[*index].controls.compressor.set_simple(amount);
-                self.spec.inputs[*index].comp = amount;
-                Ok(vec![format!(
-                    "{}: comp {}",
-                    self.target_label(Target::Input(*index)),
-                    knob(amount)
-                )])
-            }
+            Command::Gate(index, amount) => self.dynamics(*index, true, *amount),
+            Command::Comp(index, amount) => self.dynamics(*index, false, *amount),
             Command::Eq(bus, on) => {
                 self.buses[*bus].handle.controls.eq.switch(*on);
                 self.spec.buses[*bus].eq_on = *on;
@@ -156,6 +138,7 @@ impl Running {
             Command::BusComp(bus, amount) => self.bus_comp(*bus, Some(*amount), None, None),
             Command::BusCompMix(bus, percent) => self.bus_comp(*bus, None, Some(*percent), None),
             Command::BusCompHpf(bus, hz) => self.bus_comp(*bus, None, None, Some(*hz)),
+            Command::Strip(input, change) => self.strip(*input, *change),
             Command::Automix(input, on) => self.automix(*input, Some(*on), None),
             Command::AutomixWeight(input, db) => self.automix(*input, None, Some(*db)),
             Command::Send(input, bus, gain_db, ramp_ms) => {
@@ -497,6 +480,46 @@ impl Running {
         Ok(said)
     }
 
+    /// Sets the gate (`gate`) or the compressor of `index` by its one knob.
+    fn dynamics(&mut self, index: usize, gate: bool, amount: f32) -> Result<Vec<String>, String> {
+        let what = if gate { "gate" } else { "comp" };
+        let amount = check_amount(what, amount)?;
+        let controls = &self.inputs[index].controls;
+        let spec = &mut self.spec.inputs[index];
+        if gate {
+            controls.gate.set_simple(amount);
+            spec.gate = amount;
+        } else {
+            controls.compressor.set_simple(amount);
+            spec.comp = amount;
+        }
+        Ok(vec![format!(
+            "{}: {what} {}",
+            self.target_label(Target::Input(index)),
+            knob(amount)
+        )])
+    }
+
+    /// Changes one setting of the channel strip of `input`.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such input or the value is out of its range.
+    pub fn strip(
+        &mut self,
+        input: usize,
+        change: pult_core::strip::StripChange,
+    ) -> Result<Vec<String>, String> {
+        let Some(running) = self.inputs.get(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        let change = change.checked()?;
+        running.controls.strip.set(change);
+        self.spec.inputs[input].strip.apply(change);
+        let label = self.target_label(Target::Input(input));
+        Ok(vec![format!("{label}: {}", change.said())])
+    }
+
     /// Makes `bus` a monitor bus or takes that away; solo then acts where [`Self::apply_monitors`]
     /// says.
     ///
@@ -564,6 +587,28 @@ impl Running {
 
     /// One line per input and bus with its settings.
     fn show(&self) -> Vec<String> {
+        #[allow(clippy::float_cmp)] // Exactly: as it starts, or set.
+        fn strip_summary(strip: &pult_core::strip::StripSettings) -> String {
+            use pult_core::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ};
+            let mut text = String::new();
+            if strip.polarity {
+                text.push_str("  polarity over");
+            }
+            if strip.hpf_hz > HPF_RANGE_HZ.0 {
+                let _ = write!(text, "  hpf {:.0} Hz", strip.hpf_hz);
+            }
+            if strip.lpf_hz < LPF_RANGE_HZ.1 {
+                let _ = write!(text, "  lpf {:.0} Hz", strip.lpf_hz);
+            }
+            if strip.delay_ms > 0.0 {
+                let _ = write!(text, "  delay {:.1} ms", strip.delay_ms);
+            }
+            if strip.width != 100.0 {
+                let _ = write!(text, "  width {:.0} %", strip.width);
+            }
+            text
+        }
+
         let mut lines = Vec::with_capacity(self.inputs.len() + self.buses.len());
         for (index, (input, spec)) in self.inputs.iter().zip(&self.spec.inputs).enumerate() {
             let buses: Vec<&str> = input
@@ -585,6 +630,7 @@ impl Running {
                     let _ = write!(line, "  {what} {}", knob(amount));
                 }
             }
+            line.push_str(&strip_summary(&spec.strip));
             for send in &spec.sends {
                 let point = if send.pre { " pre" } else { "" };
                 let _ = write!(

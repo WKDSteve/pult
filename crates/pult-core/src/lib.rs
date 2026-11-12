@@ -33,6 +33,7 @@ pub mod remix;
 pub mod scale;
 pub mod select;
 pub mod stage;
+pub mod strip;
 pub mod tone;
 pub mod view;
 

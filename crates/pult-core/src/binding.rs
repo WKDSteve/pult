@@ -13,6 +13,7 @@ use std::fmt;
 
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
+use crate::strip::StripChange;
 use crate::view::{Action, BusView, GAIN_RANGE_DB, InputView, MixerView};
 
 /// A parameter of an input.
@@ -34,6 +35,16 @@ pub enum InputParam {
     Automix,
     /// Its priority in the automixer, in dB.
     AutomixWeight,
+    /// Its polarity, turned over or not.
+    Polarity,
+    /// The corner of its high-pass, in Hz.
+    Hpf,
+    /// The corner of its low-pass, in Hz.
+    Lpf,
+    /// Its delay, in milliseconds.
+    Delay,
+    /// The width of a stereo input, in percent.
+    Width,
     /// Its peak, read only.
     Meter,
 }
@@ -144,8 +155,10 @@ pub enum Value {
     Ceiling(f32),
     /// The lookahead of a limiter in milliseconds.
     Lookahead(f32),
-    /// A share in percent, 0 to 100.
+    /// A share in percent: the mix of a compressor, the width of an input.
     Percent(f32),
+    /// A delay in milliseconds.
+    Delay(f32),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -250,6 +263,11 @@ impl Binding {
                     "comp" => InputParam::Comp,
                     "automix" => InputParam::Automix,
                     "automix/weight" => InputParam::AutomixWeight,
+                    "polarity" => InputParam::Polarity,
+                    "hpf" => InputParam::Hpf,
+                    "lpf" => InputParam::Lpf,
+                    "delay" => InputParam::Delay,
+                    "width" => InputParam::Width,
                     "meter" => InputParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -300,6 +318,11 @@ impl Binding {
                     InputParam::Comp => "comp",
                     InputParam::Automix => "automix",
                     InputParam::AutomixWeight => "automix/weight",
+                    InputParam::Polarity => "polarity",
+                    InputParam::Hpf => "hpf",
+                    InputParam::Lpf => "lpf",
+                    InputParam::Delay => "delay",
+                    InputParam::Width => "width",
                     InputParam::Meter => "meter",
                 };
                 format!("input/{}/{param}", input(index)?)
@@ -344,6 +367,11 @@ impl Binding {
                     InputParam::Comp => Value::Amount(input.comp),
                     InputParam::Automix => Value::Switch(input.automix),
                     InputParam::AutomixWeight => Value::Gain(input.automix_weight_db),
+                    InputParam::Polarity => Value::Switch(input.strip.polarity),
+                    InputParam::Hpf => Value::Freq(input.strip.hpf_hz),
+                    InputParam::Lpf => Value::Freq(input.strip.lpf_hz),
+                    InputParam::Delay => Value::Delay(input.strip.delay_ms),
+                    InputParam::Width => Value::Percent(input.strip.width),
                     InputParam::Meter => Value::Peak(input.peak_db),
                 }
             }
@@ -421,6 +449,12 @@ impl Binding {
             (Self::Input(input, InputParam::AutomixWeight), Value::Gain(db)) => {
                 Action::InputAutomixWeight { input, db }
             }
+            (Self::Input(input, param), value) if strip_change(param, value).is_some() => {
+                Action::InputStrip {
+                    input,
+                    change: strip_change(param, value)?,
+                }
+            }
             (Self::Bus(bus, BusParam::Gain), Value::Gain(db)) => Action::BusGain {
                 bus,
                 db: action_gain(db),
@@ -492,6 +526,11 @@ impl Binding {
             Self::Input(index, InputParam::AutomixWeight) => {
                 format!("{} automix weight", input(index))
             }
+            Self::Input(index, InputParam::Polarity) => format!("{} polarity", input(index)),
+            Self::Input(index, InputParam::Hpf) => format!("{} high-pass", input(index)),
+            Self::Input(index, InputParam::Lpf) => format!("{} low-pass", input(index)),
+            Self::Input(index, InputParam::Delay) => format!("{} delay", input(index)),
+            Self::Input(index, InputParam::Width) => format!("{} width", input(index)),
             Self::Input(index, _) => input(index).to_owned(),
             Self::Bus(index, BusParam::Mute) => format!("{} mute", bus(index)),
             Self::Bus(index, BusParam::Eq) => format!("{} equalizer", bus(index)),
@@ -522,6 +561,18 @@ impl Binding {
             }
         }
     }
+}
+
+/// The change of a channel strip that `value` makes of `param`, if it is one.
+fn strip_change(param: InputParam, value: Value) -> Option<StripChange> {
+    Some(match (param, value) {
+        (InputParam::Polarity, Value::Switch(on)) => StripChange::Polarity(on),
+        (InputParam::Hpf, Value::Freq(hz)) => StripChange::Hpf(hz),
+        (InputParam::Lpf, Value::Freq(hz)) => StripChange::Lpf(hz),
+        (InputParam::Delay, Value::Delay(ms)) => StripChange::Delay(ms),
+        (InputParam::Width, Value::Percent(percent)) => StripChange::Width(percent),
+        _ => return None,
+    })
 }
 
 /// `<bus>/comp/mix` or `<bus>/comp/hpf` of a bus that `bus` finds, as its index and parameter.

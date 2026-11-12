@@ -41,6 +41,11 @@
 //! gate = 0                     # optional, 0 (off) to 10: quiet below a level
 //! comp = 0                     # optional, 0 (off) to 10: more even, and louder
 //! mute = false                 # optional
+//! polarity = false             # optional: true turns the polarity over
+//! hpf_hz = 20                  # optional, 20 (off) to 1000: the high-pass of the channel strip
+//! lpf_hz = 20000               # optional, 1000 to 20000 (off): its low-pass
+//! delay_ms = 0                 # optional, 0 to 250: holds the input back to line it up
+//! width = 100                  # optional, 0 (mono) to 200: the width of a stereo input
 //!
 //! [[input]]
 //! process = "Spotify"          # instead of device: the sound of a program
@@ -75,6 +80,7 @@ use std::fmt::Write as _;
 
 use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
+use pult_core::strip::StripSettings;
 use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
@@ -217,6 +223,29 @@ struct InputEntry {
     automix_weight_db: f32,
     #[serde(default)]
     sends: Vec<SendEntry>,
+    #[serde(default)]
+    polarity: bool,
+    hpf_hz: Option<f32>,
+    lpf_hz: Option<f32>,
+    #[serde(default)]
+    delay_ms: f32,
+    width: Option<f32>,
+}
+
+impl InputEntry {
+    /// Its channel strip, checked.
+    fn strip(&self, what: &str) -> Result<StripSettings, ProfileError> {
+        let neutral = StripSettings::default();
+        StripSettings {
+            polarity: self.polarity,
+            hpf_hz: self.hpf_hz.unwrap_or(neutral.hpf_hz),
+            lpf_hz: self.lpf_hz.unwrap_or(neutral.lpf_hz),
+            delay_ms: self.delay_ms,
+            width: self.width.unwrap_or(neutral.width),
+        }
+        .checked()
+        .map_err(|why| ProfileError(format!("{what}: {why}")))
+    }
 }
 
 /// One send of an input or of a scene's input: `{ bus = "A1", gain_db = -6, pre = true }`.
@@ -566,8 +595,8 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
     let buses = buses(file.bus)?;
 
     let mut inputs = Vec::with_capacity(file.input.len());
-    for (number, entry) in file.input.into_iter().enumerate() {
-        let (name, kind) = match (entry.device, entry.process) {
+    for (number, mut entry) in file.input.into_iter().enumerate() {
+        let (name, kind) = match (entry.device.take(), entry.process.take()) {
             (Some(device), None) => (device, InputKind::Device),
             (None, Some(program)) => (program, InputKind::Process),
             (Some(_), Some(_)) => {
@@ -599,6 +628,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             };
             routed.push(index);
         }
+        let strip = entry.strip(&what)?;
         inputs.push(InputSpec {
             device: name,
             kind,
@@ -619,6 +649,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
                 entry.automix_weight_db
             },
             sends: sends(&what, entry.sends, &buses)?,
+            strip,
             buses: routed,
         });
     }
@@ -834,6 +865,26 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
     if !input.sends.is_empty() {
         let _ = writeln!(text, "sends = [{}]", render_sends(spec, &input.sends));
     }
+    render_strip(text, &input.strip);
+}
+
+/// The lines of a channel strip that is not as it starts.
+#[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+fn render_strip(text: &mut String, strip: &StripSettings) {
+    let neutral = StripSettings::default();
+    if strip.polarity {
+        let _ = writeln!(text, "polarity = true");
+    }
+    for (key, value, start) in [
+        ("hpf_hz", strip.hpf_hz, neutral.hpf_hz),
+        ("lpf_hz", strip.lpf_hz, neutral.lpf_hz),
+        ("delay_ms", strip.delay_ms, neutral.delay_ms),
+        ("width", strip.width, neutral.width),
+    ] {
+        if value != start {
+            let _ = writeln!(text, "{key} = {value}");
+        }
+    }
 }
 
 /// The buses with their `minus` from a number from 1 to an index, checked: an input that is
@@ -900,6 +951,16 @@ pub fn merge(existing: &str, spec: &RouteSpec) -> String {
     merged(existing, spec)
         .filter(|text| parse(text).as_ref() == Ok(spec))
         .unwrap_or_else(|| render(spec))
+}
+
+/// The channel strip of an input into its table.
+fn set_strip(table: &mut Table, strip: &StripSettings) {
+    let neutral = StripSettings::default();
+    set_switch(table, "polarity", strip.polarity);
+    set_number_from(table, "hpf_hz", strip.hpf_hz, neutral.hpf_hz);
+    set_number_from(table, "lpf_hz", strip.lpf_hz, neutral.lpf_hz);
+    set_number_from(table, "delay_ms", strip.delay_ms, neutral.delay_ms);
+    set_number_from(table, "width", strip.width, neutral.width);
 }
 
 /// The settings of `bus` into its table, all but its name, device and equalizer.
@@ -1011,6 +1072,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_switch(table, "automix", input.automix);
         set_number_from(table, "automix_weight_db", input.automix_weight_db, 0.0);
         set_sends(table, spec, &input.sends);
+        set_strip(table, &input.strip);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
     let text = file.to_string();

@@ -109,6 +109,8 @@ pub struct InputView {
     pub gate_open: bool,
     /// The most the compressor took away since the previous view, in dB.
     pub comp_reduction_db: f32,
+    /// Its channel strip: polarity, filters, delay, width.
+    pub strip: crate::strip::StripSettings,
     /// The buses it feeds, as indices into [`MixerView::buses`].
     pub buses: Vec<usize>,
     /// The send to each bus, by bus index; a bus beyond the list has the default (0 dB, post).
@@ -355,6 +357,13 @@ pub enum Action {
         /// Priority in dB, -12 to 12.
         db: f32,
     },
+    /// Changes one setting of the channel strip of an input.
+    InputStrip {
+        /// Input index.
+        input: usize,
+        /// The new setting.
+        change: crate::strip::StripChange,
+    },
     /// Sets the compressor of a bus by its one knob.
     BusComp {
         /// Bus index.
@@ -523,6 +532,7 @@ impl FakeDesk {
             gate_reduction_db: 0.0,
             gate_open: true,
             comp_reduction_db: 0.0,
+            strip: crate::strip::StripSettings::default(),
             buses,
             sends: Vec::new(),
             present: true,
@@ -995,6 +1005,11 @@ impl Desk for FakeDesk {
             }
             Action::InputAutomix { input, on } => self.set_automix(input, Some(on), None),
             Action::InputAutomixWeight { input, db } => self.set_automix(input, None, Some(db)),
+            Action::InputStrip { input, change } => {
+                let change = change.checked()?;
+                self.input_mut(input)?.strip.apply(change);
+                Ok(vec![format!("[{}] {}", input + 1, change.said())])
+            }
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
             Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
             Action::Route { input, bus, on } => self.set_route(input, bus, on),

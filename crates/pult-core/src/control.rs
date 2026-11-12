@@ -8,6 +8,11 @@
 //! pan <input> <-1..1>    pan (mono) or balance (stereo) of an input
 //! gate <input> <0..10>   keep an input quiet below a level; 0 or off switches it off
 //! comp <input> <0..10>   even out an input's level and make it louder; 0 or off switches it off
+//! polarity <input> on|off turn the polarity of an input over (phase is the same)
+//! hpf <input> <Hz>|off   its high-pass, 20 to 1000; lpf <input> <Hz>|off its low-pass, 1000 to
+//!                        20000
+//! delay <input> <ms>     hold an input back, 0 to 250, to line it up with another
+//! width <input> <%>|mono the width of a stereo input, 0 (mono) to 200
 //! eq <bus> on|off        switch the equalizer of a bus
 //! eq <bus> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
@@ -36,6 +41,7 @@ use std::fmt;
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
 use crate::select::{SelectError, select};
+use crate::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ, StripChange};
 
 /// An input or a bus of the running route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +81,8 @@ pub enum Command {
     BusCompMix(usize, f32),
     /// Sets the sidechain high-pass of the compressor of a bus in Hz.
     BusCompHpf(usize, f32),
+    /// Changes one setting of the channel strip of an input.
+    Strip(usize, StripChange),
     /// Takes an input into the automixer or out of it.
     Automix(usize, bool),
     /// Sets the priority of an input in the automixer in dB.
@@ -114,6 +122,13 @@ gate <input> <0..10> keep an input quiet below a level (gate 2 3); gate 2 off un
 comp <input> <0..10> even out an input's level and make it louder; comp 2 off undoes it
 comp <bus> <0..10>   the bus compressor on the sum (comp A1 3); comp <bus> mix <0..100> blends
                      in the dry sum, comp <bus> hpf <20..500> keeps the bass from pumping
+polarity <input> on|off
+                     turn the polarity of an input over (phase 2 on)
+hpf <input> <Hz>|off the high-pass of an input, 20 to 1000 (hpf 2 80); lpf <input> <Hz>|off
+                     its low-pass, 1000 to 20000
+delay <input> <ms>   hold an input back, 0 to 250, to line it up with another (delay 3 12.5)
+width <input> <%>|mono
+                     the width of a stereo input, 0 (mono) to 200 (width 1 mono)
 eq <bus> on|off      switch the equalizer of a bus
 eq <bus> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
@@ -193,34 +208,7 @@ pub fn parse<S: AsRef<str>>(
         "show" | "list" | "ls" => no_arguments(rest, Command::Show),
         "help" | "?" | "h" => no_arguments(rest, Command::Help),
         "scenes" => no_arguments(rest, Command::Scenes),
-        "learn" | "unlearn" => {
-            // The rest of the line, so the name of a scene keeps its spaces.
-            let target = line.trim_start()[keyword.len()..].trim();
-            if target.is_empty() {
-                return error("which address? (learn input/1/gain, learn scene/abend)");
-            }
-            Ok(if keyword.eq_ignore_ascii_case("learn") {
-                Command::Learn(target.to_owned())
-            } else {
-                Command::Unlearn(target.to_owned())
-            })
-        }
-        "scene" => {
-            // The rest of the line, so a name keeps its spaces.
-            let name = line.trim_start()[keyword.len()..].trim();
-            if name.is_empty() {
-                return error("scene needs a name (scene abend); scenes lists them");
-            }
-            Ok(Command::Scene(name.to_owned()))
-        }
-        "save" => {
-            // The rest of the line as typed, so a path keeps its spaces.
-            let path = line.trim_start()[keyword.len()..].trim();
-            if path.is_empty() {
-                return error("save needs a file name (save abend.toml)");
-            }
-            Ok(Command::Save(path.to_owned()))
-        }
+        "learn" | "unlearn" | "scene" | "save" => with_text(keyword, line),
         "mute" | "unmute" => {
             let target = target(&rest.join(" "), names)?;
             Ok(Command::Mute(target, keyword.eq_ignore_ascii_case("mute")))
@@ -281,6 +269,9 @@ pub fn parse<S: AsRef<str>>(
         "send" => send(rest, names),
         "monitor" => monitor(rest, names),
         "automix" => automix(rest, names),
+        "polarity" | "phase" | "hpf" | "lpf" | "delay" | "width" => {
+            strip(&keyword.to_lowercase(), rest, names)
+        }
         other => error(format!("unknown command \"{other}\"; type help")),
     }
 }
@@ -301,6 +292,68 @@ fn bus_comp<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command
     } else {
         Command::BusCompHpf(index, value)
     })
+}
+
+/// `learn`, `unlearn`, `scene` and `save`: the rest of the line as typed, so an address, the
+/// name of a scene or a path keeps its spaces.
+fn with_text(keyword: &str, line: &str) -> Result<Command, ParseError> {
+    let text = line.trim_start()[keyword.len()..].trim().to_owned();
+    let empty = text.is_empty();
+    match keyword.to_lowercase().as_str() {
+        "learn" | "unlearn" if empty => {
+            error("which address? (learn input/1/gain, learn scene/abend)")
+        }
+        "scene" if empty => error("scene needs a name (scene abend); scenes lists them"),
+        "save" if empty => error("save needs a file name (save abend.toml)"),
+        "learn" => Ok(Command::Learn(text)),
+        "unlearn" => Ok(Command::Unlearn(text)),
+        "scene" => Ok(Command::Scene(text)),
+        _ => Ok(Command::Save(text)),
+    }
+}
+
+/// `polarity|phase <input> on|off`, `hpf|lpf <input> <Hz>|off`, `delay <input> <ms>`,
+/// `width <input> <%>|mono`; the input may have several words.
+fn strip<S: AsRef<str>>(
+    keyword: &str,
+    rest: &[&str],
+    names: Names<'_, S>,
+) -> Result<Command, ParseError> {
+    let usage = match keyword {
+        "polarity" | "phase" => "polarity <input> on|off",
+        "hpf" => "hpf <input> <Hz>|off",
+        "lpf" => "lpf <input> <Hz>|off",
+        "delay" => "delay <input> <ms>",
+        _ => "width <input> <%>|mono",
+    };
+    let Some((&value, input)) = rest.split_last() else {
+        return error(format!("usage: {usage}"));
+    };
+    if input.is_empty() {
+        return error(format!("usage: {usage}"));
+    }
+    let word = value.to_ascii_lowercase();
+    let number = || match value.parse::<f32>() {
+        Ok(number) if number.is_finite() => Ok(number),
+        _ => error(format!("\"{value}\" is not a number; usage: {usage}")),
+    };
+    let change = match (keyword, word.as_str()) {
+        ("polarity" | "phase", "on") => StripChange::Polarity(true),
+        ("polarity" | "phase", "off") => StripChange::Polarity(false),
+        ("polarity" | "phase", _) => return error(format!("usage: {usage}")),
+        ("hpf", "off") => StripChange::Hpf(HPF_RANGE_HZ.0),
+        ("hpf", _) => StripChange::Hpf(number()?),
+        ("lpf", "off") => StripChange::Lpf(LPF_RANGE_HZ.1),
+        ("lpf", _) => StripChange::Lpf(number()?),
+        ("delay", "off") => StripChange::Delay(0.0),
+        ("delay", _) => StripChange::Delay(number()?),
+        (_, "mono") => StripChange::Width(0.0),
+        _ => StripChange::Width(number()?),
+    };
+    match target(&input.join(" "), names)? {
+        Target::Input(index) => Ok(Command::Strip(index, change)),
+        Target::Bus(_) => error(format!("{keyword} works on inputs only")),
+    }
 }
 
 /// `automix <input> on|off` or `automix <input> weight <dB>`; the input may have several words.
@@ -648,6 +701,43 @@ mod tests {
         assert!(bad("gate A1 3").contains("inputs only"));
         assert!(bad("comp 2 mix 40").contains("buses only"));
         assert!(bad("comp A1 mix lots").contains("takes a number"));
+    }
+
+    #[test]
+    fn the_channel_strip_of_an_input_is_set_by_its_words() {
+        assert_eq!(
+            ok("polarity 2 on"),
+            Command::Strip(1, StripChange::Polarity(true))
+        );
+        assert_eq!(
+            ok("PHASE cable off"),
+            Command::Strip(0, StripChange::Polarity(false))
+        );
+        assert_eq!(ok("hpf 2 80"), Command::Strip(1, StripChange::Hpf(80.0)));
+        assert_eq!(
+            ok("hpf 2 off"),
+            Command::Strip(1, StripChange::Hpf(HPF_RANGE_HZ.0))
+        );
+        assert_eq!(
+            ok("lpf 2 off"),
+            Command::Strip(1, StripChange::Lpf(LPF_RANGE_HZ.1))
+        );
+        assert_eq!(
+            ok("delay 1 12.5"),
+            Command::Strip(0, StripChange::Delay(12.5))
+        );
+        assert_eq!(
+            ok("width 1 mono"),
+            Command::Strip(0, StripChange::Width(0.0))
+        );
+        assert_eq!(
+            ok("width 1 150"),
+            Command::Strip(0, StripChange::Width(150.0))
+        );
+        assert!(bad("hpf A1 80").contains("inputs only"));
+        assert!(bad("polarity 2 maybe").contains("usage: polarity"));
+        assert!(bad("delay 2 long").contains("not a number"));
+        assert!(bad("width").contains("usage: width"));
     }
 
     #[test]

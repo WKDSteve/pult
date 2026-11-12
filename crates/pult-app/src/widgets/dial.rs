@@ -13,6 +13,7 @@ use pult_core::limiter::{
     DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LIMIT_CEILING_DB, LIMIT_LOOKAHEAD_MS,
 };
 use pult_core::scale::{FADER_FLOOR_DB, FADER_TOP_DB, Span};
+use pult_core::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ, MAX_DELAY_MS, WIDTH_RANGE};
 use pult_core::view::{AMOUNT_RANGE, Action, MixerView};
 
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value, Values};
@@ -48,6 +49,27 @@ impl Dial {
                 span: Span::even(AMOUNT_RANGE),
                 home: 0.0,
                 both_ways: false,
+            }),
+            Binding::Input(_, InputParam::Hpf) => Some(Self {
+                span: Span::octaves(HPF_RANGE_HZ),
+                home: HPF_RANGE_HZ.0,
+                both_ways: false,
+            }),
+            Binding::Input(_, InputParam::Lpf) => Some(Self {
+                span: Span::octaves(LPF_RANGE_HZ),
+                home: LPF_RANGE_HZ.1,
+                // Its arc grows down from the open end, as the filter closes.
+                both_ways: true,
+            }),
+            Binding::Input(_, InputParam::Delay) => Some(Self {
+                span: Span::even((0.0, MAX_DELAY_MS)),
+                home: 0.0,
+                both_ways: false,
+            }),
+            Binding::Input(_, InputParam::Width) => Some(Self {
+                span: Span::even(WIDTH_RANGE),
+                home: 100.0,
+                both_ways: true,
             }),
             // The level of a crossing: the range of a fader, 0 dB at home.
             Binding::Send { .. } => Some(Self {
@@ -137,7 +159,8 @@ pub fn number(value: Value) -> Option<f32> {
         | Value::Width(number)
         | Value::Ceiling(number)
         | Value::Lookahead(number)
-        | Value::Percent(number) => Some(number),
+        | Value::Percent(number)
+        | Value::Delay(number) => Some(number),
         _ => None,
     }
 }
@@ -153,6 +176,7 @@ fn with_number(value: Value, number: f32) -> Value {
         Value::Ceiling(_) => Value::Ceiling(number),
         Value::Lookahead(_) => Value::Lookahead(number),
         Value::Percent(_) => Value::Percent(number),
+        Value::Delay(_) => Value::Delay(number),
         other => other,
     }
 }
@@ -169,9 +193,23 @@ pub fn format_value(value: Value) -> String {
         Value::Freq(hz) => format!("{hz:.0}"),
         Value::Width(q) => format!("{q:.2}"),
         Value::Ceiling(db) => format!("{db:.1} dB"),
-        Value::Lookahead(ms) => format!("{ms:.1} ms"),
+        Value::Lookahead(ms) | Value::Delay(ms) => format!("{ms:.1} ms"),
         Value::Percent(percent) => format!("{percent:.0} %"),
         _ => String::new(),
+    }
+}
+
+/// `value` as the dial of `binding` prints it: a filter at its open end is `off`.
+#[must_use]
+pub fn format_for(binding: Binding, value: Value) -> String {
+    match (binding, value) {
+        (Binding::Input(_, InputParam::Hpf), Value::Freq(hz)) if hz <= HPF_RANGE_HZ.0 => {
+            "off".to_owned()
+        }
+        (Binding::Input(_, InputParam::Lpf), Value::Freq(hz)) if hz >= LPF_RANGE_HZ.1 => {
+            "off".to_owned()
+        }
+        _ => format_value(value),
     }
 }
 
@@ -290,7 +328,7 @@ pub fn labelled(
                 action = values.write(binding, shown);
             }
             ui.label(
-                RichText::new(format_value(shown))
+                RichText::new(format_for(binding, shown))
                     .font(Theme::value_font(9.0))
                     .color(p.text_dim),
             );

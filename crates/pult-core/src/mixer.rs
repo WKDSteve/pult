@@ -100,6 +100,8 @@ pub struct InputControls {
     pub gate: GateControls,
     /// The compressor, before the fader; off at first.
     pub compressor: CompressorControls,
+    /// The channel strip before the gate: polarity, filters, delay, width; neutral at first.
+    pub strip: crate::strip::StripControls,
 }
 
 impl Default for InputControls {
@@ -118,6 +120,7 @@ impl Default for InputControls {
             pan: Glide::new(0.0),
             gate: GateControls::default(),
             compressor: CompressorControls::default(),
+            strip: crate::strip::StripControls::default(),
         }
     }
 }

@@ -7,9 +7,10 @@
 //! 1. the PRE meter ([`InputControls::pre_peak`]): what arrives, before everything else, at
 //!    the samples of the device (before any resampler, so an overshoot of its filter never
 //!    shows as a clip of the source), and whether the input is routed anywhere or not;
-//! 2. the gate, then the compressor ([`crate::dynamics`]);
-//! 3. the level for the automixer, when the input is in a group ([`crate::automix`]);
-//! 4. the result into every ring ([`Capture::push`]).
+//! 2. the channel strip ([`crate::strip`]): polarity, high- and low-pass, delay, width;
+//! 3. the gate, then the compressor ([`crate::dynamics`]);
+//! 4. the level for the automixer, when the input is in a group ([`crate::automix`]);
+//! 5. the result into every ring ([`Capture::push`]).
 //!
 //! Gain, pan, mute, solo and the matrix stay in the rings: they are per bus, or must glide
 //! there. Room for what belongs here too, later: noise suppression and a sidechain (an
@@ -24,17 +25,19 @@ use std::sync::atomic::Ordering;
 use crate::automix::PowerFollower;
 use crate::dynamics::{Compressor, Gate};
 use crate::mixer::{Capture, InputControls};
+use crate::strip::ChannelStrip;
 
 /// Frames the stage works on at once; a longer callback goes through in several pieces.
 pub const STAGE_FRAMES: usize = 1024;
 
-/// Gate and compressor of one input, and its PRE meter.
+/// Channel strip, gate and compressor of one input, and its PRE meter.
 #[derive(Debug)]
 pub struct InputStage {
     controls: Arc<InputControls>,
     channels: usize,
     gate: Gate,
     compressor: Compressor,
+    strip: ChannelStrip,
     follower: PowerFollower,
     block: Vec<f32>,
 }
@@ -54,6 +57,7 @@ impl InputStage {
             channels,
             gate: Gate::new(rate),
             compressor: Compressor::new(rate),
+            strip: ChannelStrip::new(channels, rate),
             follower: PowerFollower::new(rate),
             block: vec![0.0; STAGE_FRAMES * channels],
         }
@@ -69,6 +73,7 @@ impl InputStage {
     pub fn start_over(&mut self) {
         self.gate.start_over();
         self.compressor.start_over();
+        self.strip.start_over();
         self.follower.start_over();
     }
 
@@ -82,6 +87,7 @@ impl InputStage {
         for piece in data[..whole].chunks(STAGE_FRAMES * ch) {
             let block = &mut self.block[..piece.len()];
             block.copy_from_slice(piece);
+            self.strip.process(&self.controls.strip, block);
             self.gate.process(&self.controls.gate, block, ch);
             self.compressor
                 .process(&self.controls.compressor, block, ch);

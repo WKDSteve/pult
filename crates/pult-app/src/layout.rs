@@ -30,6 +30,8 @@ pub enum Zone {
     Pan,
     /// The bus assignment buttons.
     Assign,
+    /// The filters and the polarity of an input; empty on a bus.
+    Filter,
     /// Gate and compressor of an input, the switches of equalizer and limiter of a bus.
     Dynamics,
     MuteSolo,
@@ -125,8 +127,8 @@ pub fn standard(view: &MixerView) -> Vec<Element> {
     inputs.chain(buses).collect()
 }
 
-/// The strip of input `index`: header, pan, a button per bus of `view`, gate and compressor, mute
-/// and solo, fader with meter, readout.
+/// The strip of input `index`: header, pan, a button per bus of `view`, high- and low-pass with
+/// the polarity, gate and compressor, mute and solo, fader with meter, readout.
 #[must_use]
 pub fn input_strip(index: usize, view: &MixerView) -> Element {
     let at = |param| Some(Binding::Input(index, param));
@@ -140,6 +142,26 @@ pub fn input_strip(index: usize, view: &MixerView) -> Element {
         Element::toggle(Zone::Assign, &b.name, Role::Assign, route)
     }));
     parts.extend([
+        Element::part(
+            Zone::Filter,
+            Control::Dial {
+                text: "HPF".to_owned(),
+            },
+            at(InputParam::Hpf),
+        ),
+        Element::part(
+            Zone::Filter,
+            Control::Dial {
+                text: "LPF".to_owned(),
+            },
+            at(InputParam::Lpf),
+        ),
+        Element::toggle(
+            Zone::Filter,
+            "\u{d8}",
+            Role::Assign,
+            Binding::Input(index, InputParam::Polarity),
+        ),
         Element::part(
             Zone::Dynamics,
             Control::Dial {
@@ -312,7 +334,8 @@ mod tests {
         expected.extend(view.buses.iter().map(|b| format!("matrix/2/{}", b.name)));
         expected.extend(
             [
-                "gate", "comp", "mute", "solo", "automix", "gain", "meter", "gain",
+                "hpf", "lpf", "polarity", "gate", "comp", "mute", "solo", "automix", "gain",
+                "meter", "gain",
             ]
             .map(|param| format!("input/2/{param}")),
         );

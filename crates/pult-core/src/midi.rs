@@ -274,6 +274,18 @@ impl Param {
             Binding::Input(_, InputParam::AutomixWeight) => {
                 Self::Knob(binding, Span::even((-12.0, 12.0)))
             }
+            Binding::Input(_, InputParam::Hpf) => {
+                Self::Knob(binding, Span::octaves(crate::strip::HPF_RANGE_HZ))
+            }
+            Binding::Input(_, InputParam::Lpf) => {
+                Self::Knob(binding, Span::octaves(crate::strip::LPF_RANGE_HZ))
+            }
+            Binding::Input(_, InputParam::Delay) => {
+                Self::Knob(binding, Span::even((0.0, crate::strip::MAX_DELAY_MS)))
+            }
+            Binding::Input(_, InputParam::Width) => {
+                Self::Knob(binding, Span::even(crate::strip::WIDTH_RANGE))
+            }
             Binding::Bus(_, BusParam::LimitCeiling) => {
                 Self::Knob(binding, Span::even(LIMIT_CEILING_DB))
             }
@@ -283,7 +295,10 @@ impl Param {
             Binding::Bus(_, BusParam::EqBand(_, BandParam::Kind)) => {
                 return Err(format!("{target} is a word, which no control can say"));
             }
-            Binding::Input(_, InputParam::Mute | InputParam::Solo | InputParam::Automix)
+            Binding::Input(
+                _,
+                InputParam::Mute | InputParam::Solo | InputParam::Automix | InputParam::Polarity,
+            )
             | Binding::Bus(
                 _,
                 BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor,
@@ -609,7 +624,8 @@ impl Map {
                         | Value::Freq(number)
                         | Value::Width(number)
                         | Value::Ceiling(number)
-                        | Value::Lookahead(number),
+                        | Value::Lookahead(number)
+                        | Value::Delay(number),
                     ) => span.pos(number),
                     _ => return Step::default(),
                 };

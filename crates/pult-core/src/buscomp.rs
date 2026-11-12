@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::dynamics::{Compressor, CompressorControls};
 use crate::level::{AtomicF32, PeakMeter};
+use crate::strip::Biquad;
 
 /// Frames worked on at once.
 pub const PIECE_FRAMES: usize = 1024;
@@ -68,51 +69,12 @@ impl BusCompControls {
     }
 }
 
-/// A second-order high-pass (RBJ cookbook, Q 0.707) per channel.
-#[derive(Debug, Clone, Copy, Default)]
-struct HighPass {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
-    x1: f32,
-    x2: f32,
-    y1: f32,
-    y2: f32,
-}
-
-impl HighPass {
-    fn set(&mut self, hz: f32, rate: f32) {
-        let w = std::f32::consts::TAU * hz / rate;
-        let alpha = w.sin() / (2.0 * std::f32::consts::FRAC_1_SQRT_2);
-        let cos = w.cos();
-        let a0 = 1.0 + alpha;
-        self.b0 = f32::midpoint(1.0, cos) / a0;
-        self.b1 = -(1.0 + cos) / a0;
-        self.b2 = f32::midpoint(1.0, cos) / a0;
-        self.a1 = -2.0 * cos / a0;
-        self.a2 = (1.0 - alpha) / a0;
-    }
-
-    fn next(&mut self, x: f32) -> f32 {
-        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
-            - self.a1 * self.y1
-            - self.a2 * self.y2;
-        self.x2 = self.x1;
-        self.x1 = x;
-        self.y2 = self.y1;
-        self.y1 = if y.is_finite() { y } else { 0.0 };
-        self.y1
-    }
-}
-
 /// The compressor of one bus, in its output callback.
 #[derive(Debug)]
 pub struct BusCompressor {
     rate: f32,
     comp: Compressor,
-    filters: [HighPass; MAX_CHANNELS],
+    filters: [Biquad; MAX_CHANNELS],
     seen: Option<u32>,
     dry: Vec<f32>,
     key: Vec<f32>,
@@ -127,7 +89,7 @@ impl BusCompressor {
         Self {
             rate: rate_f,
             comp: Compressor::new(rate),
-            filters: [HighPass::default(); MAX_CHANNELS],
+            filters: [Biquad::default(); MAX_CHANNELS],
             seen: None,
             dry: vec![0.0; PIECE_FRAMES * MAX_CHANNELS],
             key: vec![0.0; PIECE_FRAMES * MAX_CHANNELS],
@@ -143,7 +105,7 @@ impl BusCompressor {
         if self.seen != Some(generation) {
             let hz = controls.hpf_hz.load().clamp(HPF_HZ.0, HPF_HZ.1);
             for filter in &mut self.filters {
-                filter.set(hz, self.rate);
+                filter.high_pass(hz, self.rate);
             }
             self.seen = Some(generation);
         }
