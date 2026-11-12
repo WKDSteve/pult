@@ -8,7 +8,8 @@
 //!    the samples of the device (before any resampler, so an overshoot of its filter never
 //!    shows as a clip of the source), and whether the input is routed anywhere or not;
 //! 2. the gate, then the compressor ([`crate::dynamics`]);
-//! 3. the result into every ring ([`Capture::push`]).
+//! 3. the level for the automixer, when the input is in a group ([`crate::automix`]);
+//! 4. the result into every ring ([`Capture::push`]).
 //!
 //! Gain, pan, mute, solo and the matrix stay in the rings: they are per bus, or must glide
 //! there. Room for what belongs here too, later: noise suppression and a sidechain (an
@@ -19,6 +20,7 @@
 
 use std::sync::Arc;
 
+use crate::automix::PowerFollower;
 use crate::dynamics::{Compressor, Gate};
 use crate::mixer::{Capture, InputControls};
 
@@ -32,6 +34,7 @@ pub struct InputStage {
     channels: usize,
     gate: Gate,
     compressor: Compressor,
+    follower: PowerFollower,
     block: Vec<f32>,
 }
 
@@ -50,6 +53,7 @@ impl InputStage {
             channels,
             gate: Gate::new(rate),
             compressor: Compressor::new(rate),
+            follower: PowerFollower::new(rate),
             block: vec![0.0; STAGE_FRAMES * channels],
         }
     }
@@ -64,6 +68,7 @@ impl InputStage {
     pub fn start_over(&mut self) {
         self.gate.start_over();
         self.compressor.start_over();
+        self.follower.start_over();
     }
 
     /// Meters the whole frames of `data`, gates and compresses them and hands them to `sink`,
@@ -79,6 +84,11 @@ impl InputStage {
             self.gate.process(&self.controls.gate, block, ch);
             self.compressor
                 .process(&self.controls.compressor, block, ch);
+            if let Some((group, index)) = self.controls.automix.get() {
+                group
+                    .member(*index)
+                    .store_power(self.follower.follow(block, ch));
+            }
             sink(block);
         }
     }
@@ -280,6 +290,8 @@ mod tests {
         controls.gate.switch(true);
         controls.compressor.set(CompressorParams::simple(8.0));
         controls.compressor.switch(true);
+        let group = Arc::new(crate::automix::AutomixGroup::new(2));
+        controls.automix.set((Arc::clone(&group), 1)).unwrap();
         let mut stage = InputStage::new(Arc::clone(&controls), 2, 48_000);
         let (capture, _input, _handle) = connect_with(config(2), Arc::clone(&controls));
         let mut captures = vec![capture];

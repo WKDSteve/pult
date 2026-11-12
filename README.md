@@ -28,6 +28,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Gate und Kompressor je Eingang, je ein Regler von 0 (aus) bis 10: `gate 2 3`, `comp 2 4`, im Profil, von außen, per MIDI und im Fenster (`docs/USAGE.md`) | fertig |
 | Parametrischer EQ je Bus, 4 Bänder (Kuhschwanz oder Glocke): `eq A1 2 gain 6`, im Profil als `[[bus.eq]]`, von außen, per MIDI und im Fenster auf dem Tab **EQ** (`docs/USAGE.md`) | fertig |
 | Limiter je Bus hinter dem Fader, von Anfang an an: `limit A1 -3`, `limit A1 look 2`, im Profil, von außen, per MIDI und im Fenster (`docs/USAGE.md`) | fertig |
+| Automixer für mehrere Mikrofone nach dem Gain-Sharing-Prinzip (Dugan): `automix = true` je Eingang im Profil (`docs/USAGE.md`) | fertig |
 | Limiter je Eingang, Verzögerung je Bus, Rauschunterdrückung | geplant |
 
 ## Plattformen

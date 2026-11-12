@@ -12,6 +12,7 @@
 #[global_allocator]
 static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+pub mod automix;
 mod binding;
 pub mod clicks;
 pub mod control;
@@ -33,6 +34,7 @@ pub mod stage;
 pub mod tone;
 pub mod view;
 
+pub use automix::{AutomixGroup, AutomixMember, PowerFollower};
 pub use clicks::{Click, Clicks};
 pub use drift::{DriftControl, Event, Plan};
 pub use dropouts::Dropouts;

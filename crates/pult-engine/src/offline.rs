@@ -8,7 +8,7 @@ use std::sync::Arc;
 use pult_core::{Counter, Mixer, MixerInput};
 
 use crate::slot::InputFeed;
-use crate::{Error, Rings, RouteSpec, Running, make_rings, set_up_bus};
+use crate::{Error, Rings, RouteSpec, Running, automix_group, make_rings, set_up_bus};
 
 /// A route whose inputs and buses are buffers.
 #[derive(Debug)]
@@ -43,6 +43,8 @@ impl Offline {
             bus_inputs: &mut bus_inputs,
             bus_rates: &bus_rates,
             latency_ms: spec.latency_ms,
+            automix: automix_group(spec),
+            automix_next: 0,
         };
         let mut captures = Vec::with_capacity(spec.inputs.len());
         let mut inputs = Vec::with_capacity(spec.inputs.len());

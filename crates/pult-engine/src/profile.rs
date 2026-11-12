@@ -9,6 +9,7 @@
 //! label = "Boxen"              # optional, what the window calls it
 //! gain_db = 0                  # optional
 //! mute = false                 # optional
+//! automix = false              # optional: one of the microphones that share one gain
 //! eq_on = true                 # optional: false switches the equalizer off, keeping its bands
 //! limit_on = true              # optional: false switches the limiter off
 //! limit_db = -0.3              # optional: the ceiling of the limiter, -20 to 0
@@ -188,6 +189,8 @@ struct InputEntry {
     comp: f32,
     #[serde(default)]
     mute: bool,
+    #[serde(default)]
+    automix: bool,
 }
 
 fn fail<T>(message: String) -> Result<T, ProfileError> {
@@ -527,6 +530,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             gate: entry.gate,
             comp: entry.comp,
             muted: entry.mute,
+            automix: entry.automix,
             buses: routed,
         });
     }
@@ -783,6 +787,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_number(table, "gate", input.gate);
         set_number(table, "comp", input.comp);
         set_switch(table, "mute", input.muted);
+        set_switch(table, "automix", input.automix);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
     let text = file.to_string();

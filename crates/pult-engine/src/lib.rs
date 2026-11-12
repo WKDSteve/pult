@@ -41,8 +41,8 @@ use pult_core::EQ_BANDS;
 use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
 use pult_core::{
-    Band, BusHandle, Counter, DriftControl, InputConfig, InputControls, InputStage, InputStats,
-    Mixer, MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
+    AutomixGroup, Band, BusHandle, Counter, DriftControl, InputConfig, InputControls, InputStage,
+    InputStats, Mixer, MixerInput, SelectError, Sine, connect_with, db_to_linear, select,
 };
 
 pub use desk::EngineDesk;
@@ -300,6 +300,9 @@ pub struct InputSpec {
     pub comp: f32,
     /// Starts muted.
     pub muted: bool,
+    /// In the automix group of the route: of the inputs that are, the ones spoken into are open
+    /// and the sum stays as loud as one ([`pult_core::automix`]).
+    pub automix: bool,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
     pub buses: Vec<usize>,
 }
@@ -317,6 +320,7 @@ impl InputSpec {
             gate: 0.0,
             comp: 0.0,
             muted: false,
+            automix: false,
             buses,
         }
     }
@@ -952,6 +956,17 @@ struct Rings<'a> {
     bus_rates: &'a [u32],
     /// Buffering per ring in milliseconds.
     latency_ms: u32,
+    /// The automix group of the route, one member per input with `automix`, in their order.
+    automix: Arc<AutomixGroup>,
+    /// Members of it handed out so far.
+    automix_next: usize,
+}
+
+/// The automix group of `spec`: one member for every input with `automix`.
+fn automix_group(spec: &RouteSpec) -> Arc<AutomixGroup> {
+    Arc::new(AutomixGroup::new(
+        spec.inputs.iter().filter(|input| input.automix).count(),
+    ))
 }
 
 /// What a slot opens at the start of a route.
@@ -1020,6 +1035,12 @@ fn make_rings(
     controls.gate.set_simple(input.gate);
     controls.compressor.set_simple(input.comp);
     controls.muted.store(input.muted, Ordering::Relaxed);
+    if input.automix {
+        let place = (Arc::clone(&rings.automix), rings.automix_next);
+        rings.automix_next += 1;
+        // A fresh controls: the place is free.
+        let _ = controls.automix.set(place);
+    }
     let (target, band, capacity) = buffering(sample_rate, rings.latency_ms);
     let ring = InputConfig {
         channels: usize::from(channels),
@@ -1098,6 +1119,8 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         bus_inputs: &mut bus_inputs,
         bus_rates: &bus_rates,
         latency_ms: spec.latency_ms,
+        automix: automix_group(spec),
+        automix_next: 0,
     };
     let mut found_inputs = Vec::with_capacity(spec.inputs.len());
     for input in &spec.inputs {

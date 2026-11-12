@@ -194,6 +194,12 @@ pult run --profile meinprofil.toml --log abend.csv
   Zum Einstellen der Schwelle: Das Eingangs-Meter zeigt in der Stellung PRE, was ankommt, vor Gate und Kompressor, an
   den Samples des Geräts und auch dann, wenn der Eingang auf keinen Bus geroutet ist; in der Stellung POST, was in den
   Mix geht. Im Fenster sitzen beide als kleine Regler **GATE** und **COMP** im Kanalzug.
+- **Automixer:** Eingänge mit `automix = true` im Profil teilen sich eine Verstärkung, wie beim Automixer von Dan
+  Dugan: Jedes dieser Mikrofone bekommt den Anteil an der gesamten Leistung, der seiner ist. Wer spricht, ist offen (um
+  0 dB), die anderen sind weit unten; sprechen zwei, liegt jeder um -3 dB; ist es still, teilen sich alle gleich, und der
+  Raum klingt wie durch ein einzelnes Mikrofon. Es gibt keine Schwelle und kein Klicken, die Verstärkungen gleiten mit den
+  Pegeln. Gemessen wird in der Eingangsstufe nach Gate und Kompressor, gewirkt vor dem Fader; Eingänge ohne `automix`
+  (Musik, Programme) bleiben unberührt.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil

@@ -28,8 +28,8 @@
 //! before all of that, and the meter of each ring ([`InputStats::peak`]), what goes into that
 //! bus's mix.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
@@ -40,6 +40,7 @@ use rubato::{
 // `Adjustable` brings `set_resample_ratio_relative` into scope.
 use rubato::Adjustable as _;
 
+use crate::automix::{AutomixGroup, glide_gain};
 use crate::drift::{DriftControl, Event};
 use crate::dynamics::{CompressorControls, GateControls};
 use crate::eq::{EqControls, Equalizer};
@@ -84,6 +85,9 @@ pub struct InputControls {
     /// The PRE meter of the input, once for all its rings: written by its
     /// [`crate::stage::InputStage`], at the samples of the device, routed or not.
     pub pre_peak: PeakMeter,
+    /// The automix group of the input and its place in it ([`crate::automix`]), set once when
+    /// the route is built; an input without one keeps its gain.
+    pub automix: OnceLock<(Arc<AutomixGroup>, usize)>,
     /// -1 (left) to 1 (right); see [`remix_add`].
     pub pan: Glide,
     /// The gate, before the compressor; off at first.
@@ -101,6 +105,7 @@ impl Default for InputControls {
             soloed_out: AtomicBool::new(false),
             meter_pre_fader: AtomicBool::new(false),
             pre_peak: PeakMeter::default(),
+            automix: OnceLock::new(),
             pan: Glide::new(0.0),
             gate: GateControls::default(),
             compressor: CompressorControls::default(),
@@ -275,6 +280,7 @@ pub fn connect_with(
         playing: true,
         gain: Follower::new(config.output_rate),
         pan: Follower::new(config.output_rate),
+        automix_gain: 1.0,
         onset_frames: (u64::from(config.input_rate) * u64::from(MIN_RAMP_MS) / 1000).max(1)
             as usize,
         onset: 0,
@@ -365,6 +371,8 @@ pub struct MixerInput {
     gain: Follower,
     /// Where the pan stands.
     pan: Follower,
+    /// The automix gain at the end of the last block; the next block glides from it.
+    automix_gain: f32,
     /// Input frames over which the sound fades in where it starts after a priming: what the ring
     /// gives then begins anywhere in its waveform.
     onset_frames: usize,
@@ -433,7 +441,15 @@ impl MixerInput {
             let n = (frames - done).min(MAX_CHUNK);
             // A priming ring is silent, and the ramps wait: a fade-in starts with the sound.
             if self.next_chunk(n) {
-                // Gate and compressor ran in the input's stage, before the ring.
+                // Gate and compressor ran in the input's stage, before the ring; the automix
+                // share glides over the block.
+                let share = self
+                    .controls
+                    .automix
+                    .get()
+                    .map_or(1.0, |(group, index)| group.gain(*index));
+                glide_gain(&mut self.resampled[..n * ch], ch, self.automix_gain, share);
+                self.automix_gain = share;
                 let block = &self.resampled[..n * ch];
                 let rest = &mut out[done * out_channels..];
                 let before = self.gain.ramp.value();
@@ -1513,6 +1529,10 @@ mod tests {
             settle: 4800,
             ..config(2, 480)
         });
+        // In an automix group of two: the share glides on every block.
+        let group = Arc::new(AutomixGroup::new(2));
+        group.member(1).store_power(0.01);
+        handle.controls.automix.set((group, 0)).unwrap();
         let (mut mixer, bus) = Mixer::new(vec![input], 2);
         let data = vec![0.2; PERIOD * 2];
         let flood = vec![0.2; 8000 * 2];
