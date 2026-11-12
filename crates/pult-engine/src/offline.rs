@@ -1,7 +1,10 @@
 //! A route without devices: the same rings, mixers and controls as [`crate::start`] builds, fed
 //! and drained by the caller instead of by audio callbacks. Profiles, scenes and commands work on
 //! it through [`Offline::running`] exactly as on a route that plays, so what the buses put out can
-//! be checked sample by sample (the click test of `tests/clicks.rs` does).
+//! be checked sample by sample (the click test of `tests/clicks.rs` does). Inputs may run at
+//! other rates than the buses ([`Offline::with_rates`]) and deliver any number of frames per
+//! callback (a clock that drifts, an input that runs dry), and a bus can lose its device for a
+//! while ([`Offline::suspend`], [`Offline::resume`]).
 
 use std::sync::Arc;
 
@@ -23,6 +26,8 @@ pub struct Offline {
     /// Per bus, the output of the latest [`Self::process`].
     outputs: Vec<Vec<f32>>,
     channels: usize,
+    /// Per bus, whether its device is gone: its mixer is not called and it plays silence.
+    suspended: Vec<bool>,
 }
 
 impl Offline {
@@ -33,12 +38,36 @@ impl Offline {
     ///
     /// [`Error::InvalidRoute`] when the spec does not hold together, or `channels` is zero.
     pub fn new(spec: &RouteSpec, rate: u32, channels: u16) -> Result<Self, Error> {
+        Self::with_rates(spec, &vec![rate; spec.inputs.len()], rate, channels)
+    }
+
+    /// Like [`Self::new`], but input `i` delivers at `input_rates[i]` Hz and every bus plays at
+    /// `bus_rate`: each ring resamples from its input's rate to its bus's, as with real devices.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidRoute`] when the spec does not hold together, `channels` or a rate is zero,
+    /// or `input_rates` does not have one rate per input.
+    pub fn with_rates(
+        spec: &RouteSpec,
+        input_rates: &[u32],
+        bus_rate: u32,
+        channels: u16,
+    ) -> Result<Self, Error> {
         spec.validate()?;
-        if channels == 0 || rate == 0 {
+        if channels == 0 || bus_rate == 0 || input_rates.contains(&0) {
             return Err(Error::InvalidRoute(
                 "a route without devices needs channels and a rate".to_owned(),
             ));
         }
+        if input_rates.len() != spec.inputs.len() {
+            return Err(Error::InvalidRoute(format!(
+                "{} input rates for {} inputs",
+                input_rates.len(),
+                spec.inputs.len()
+            )));
+        }
+        let rate = bus_rate;
         let bus_rates = vec![rate; spec.buses.len()];
         let mut bus_inputs: Vec<Vec<MixerInput>> = spec.buses.iter().map(|_| Vec::new()).collect();
         let mut rings = Rings {
@@ -50,9 +79,14 @@ impl Offline {
         };
         let mut captures = Vec::with_capacity(spec.inputs.len());
         let mut inputs = Vec::with_capacity(spec.inputs.len());
-        for input in &spec.inputs {
-            let (capture, mut running) =
-                make_rings(input, input.device.clone(), channels, rate, &mut rings);
+        for (input, &input_rate) in spec.inputs.iter().zip(input_rates) {
+            let (capture, mut running) = make_rings(
+                input,
+                input.device.clone(),
+                channels,
+                input_rate,
+                &mut rings,
+            );
             running.present = true;
             captures.push(capture);
             inputs.push(running);
@@ -97,6 +131,7 @@ impl Offline {
         };
         running.apply_monitors();
         let outputs = spec.buses.iter().map(|_| Vec::new()).collect();
+        let suspended = vec![false; spec.buses.len()];
         Ok(Self {
             running,
             inputs_fed: captures,
@@ -104,6 +139,7 @@ impl Offline {
             mixers,
             outputs,
             channels,
+            suspended,
         })
     }
 
@@ -113,9 +149,35 @@ impl Offline {
         &mut self.running
     }
 
+    /// The device of `bus` is gone: its mixer closes its rings (the captures discard into them)
+    /// and is not called any more, the bus plays silence, as [`crate::start`] does with a lost
+    /// output until it comes back.
+    ///
+    /// # Panics
+    ///
+    /// When there is no bus `bus`.
+    pub fn suspend(&mut self, bus: usize) {
+        self.mixers[bus].suspend();
+        self.suspended[bus] = true;
+        self.running.buses[bus].present = false;
+    }
+
+    /// The device of `bus` is back with the channels of [`Self::new`]: its next callback empties
+    /// the routed rings, primes them and fades them in.
+    ///
+    /// # Panics
+    ///
+    /// When there is no bus `bus`.
+    pub fn resume(&mut self, bus: usize) {
+        self.mixers[bus].resume(self.channels);
+        self.suspended[bus] = false;
+        self.running.buses[bus].present = true;
+    }
+
     /// One callback of every device: passes `inputs[i]` (interleaved, the channels of
-    /// [`Self::new`]) through the stage of input `i` into every ring of it, then lets every bus
-    /// mix `frames` frames.
+    /// [`Self::new`], any number of frames at the input's own rate, none for one that delivers
+    /// nothing) through the stage of input `i` into every ring of it, then lets every bus mix
+    /// `frames` frames; a suspended bus puts out silence.
     /// Returns what the buses put out, one interleaved buffer each.
     ///
     /// # Panics
@@ -126,9 +188,18 @@ impl Offline {
         for (InputFeed { stage, captures }, data) in self.inputs_fed.iter_mut().zip(inputs) {
             stage.feed_captures(data, captures);
         }
-        for (mixer, out) in self.mixers.iter_mut().zip(&mut self.outputs) {
+        for ((mixer, out), &gone) in self
+            .mixers
+            .iter_mut()
+            .zip(&mut self.outputs)
+            .zip(&self.suspended)
+        {
             out.resize(frames * self.channels, 0.0);
-            mixer.process(out);
+            if gone {
+                out.fill(0.0);
+            } else {
+                mixer.process(out);
+            }
         }
         for meter in &mut self.meters {
             meter.drain();

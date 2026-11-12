@@ -4,6 +4,7 @@
 //! run in processes of their own (the sabotage switches the smoothing off for its whole process).
 
 use std::f32::consts::TAU;
+use std::ops::Range;
 
 use pult_core::control::{Command, Target};
 use pult_core::limiter::LimitChange;
@@ -161,7 +162,95 @@ pub fn steps() -> Vec<Step> {
 pub struct Render {
     /// One per bus.
     pub buses: Vec<Vec<f32>>,
+    /// Per bus, the frames whose clicks are no change's fault: from the moment a device went
+    /// away (a bus that falls silent, an input that runs dry) until it is back. What follows its
+    /// return is checked like the rest.
+    #[allow(dead_code)] // Read by the click check, not by the sabotage probe.
+    pub excused: Vec<Option<Range<usize>>>,
+    /// Per callback, the correction of input 1's ring on A1 in ppm (the only bus it feeds).
+    #[allow(dead_code)] // Read by the drift check only.
+    pub corrections: Vec<f32>,
 }
+
+impl Render {
+    /// Whether a click at `frame` on `bus` is excused.
+    #[allow(dead_code)] // Used by the click check, not by the sabotage probe.
+    #[must_use]
+    pub fn excused(&self, bus: usize, frame: usize) -> bool {
+        self.excused[bus]
+            .as_ref()
+            .is_some_and(|gap| gap.contains(&frame))
+    }
+}
+
+/// A device that is away for a while: from `from` to `to` seconds.
+#[derive(Debug, Clone, Copy)]
+pub enum Outage {
+    /// The device of a bus (index) is gone; the route suspends the bus and resumes it.
+    Bus(usize, f64, f64),
+    /// An input (index) delivers nothing; its rings run dry, then prime and fade in again.
+    Input(usize, f64, f64),
+}
+
+impl Outage {
+    /// When it starts and ends, in seconds.
+    #[allow(dead_code)] // Used by the sabotage probe, not by the click check.
+    #[must_use]
+    pub fn span(self) -> (f64, f64) {
+        match self {
+            Self::Bus(_, from, to) | Self::Input(_, from, to) => (from, to),
+        }
+    }
+}
+
+/// How the devices behave around the sequence.
+#[derive(Debug, Clone, Copy)]
+pub struct Variant {
+    /// What the output of a test calls it.
+    pub name: &'static str,
+    /// The rate of both inputs; the buses run at [`RATE`].
+    pub input_rate: u32,
+    /// How much faster the clock of both inputs runs than the buses', in ppm.
+    pub drift_ppm: f64,
+    /// A device that goes and comes back.
+    pub outage: Option<Outage>,
+}
+
+/// Every device at [`RATE`] on one ideal clock, none goes away.
+pub const PLAIN: Variant = Variant {
+    name: "plain",
+    input_rate: RATE,
+    drift_ppm: 0.0,
+    outage: None,
+};
+
+/// The other ways the sequence is rendered: an input rate other than the buses' (44.1 kHz into
+/// 48 kHz, the resampler with its real ratio), a clock that drifts (the rate control steers),
+/// a bus whose device goes and comes back in the middle of the sequence (between the scene
+/// "leise" and the next mute, no step falls into it), and an input that runs dry while input 2
+/// is routed to A1 as well (between 12.2 and 13.0 s, no step falls into it either).
+pub const VARIANTS: [Variant; 4] = [
+    Variant {
+        name: "44.1 kHz into 48 kHz",
+        input_rate: 44_100,
+        ..PLAIN
+    },
+    Variant {
+        name: "inputs 300 ppm fast",
+        drift_ppm: 300.0,
+        ..PLAIN
+    },
+    Variant {
+        name: "A1 gone 9.3 to 9.8 s",
+        outage: Some(Outage::Bus(0, 9.3, 9.8)),
+        ..PLAIN
+    },
+    Variant {
+        name: "input 1 dry 12.4 to 12.8 s",
+        outage: Some(Outage::Input(0, 12.4, 12.8)),
+        ..PLAIN
+    },
+];
 
 /// The frame a time falls on, as the callbacks count.
 #[must_use]
@@ -171,31 +260,54 @@ pub fn frame_at(seconds: f64) -> usize {
     frame
 }
 
+/// The first frame of the callback a time falls into.
+#[must_use]
+pub fn callback_at(seconds: f64) -> usize {
+    frame_at(seconds) / PERIOD * PERIOD
+}
+
 /// The two starting phases of the tone each check renders with, in turns: a change that meets a
 /// zero crossing of the tone in one (where even a jump is no step) meets a crest in the other.
 pub const SHIFTS: [f32; 2] = [0.0, 0.25];
 
 /// Renders the profile through the sequence, one callback of [`PERIOD`] frames after another; a
 /// change is made between the two callbacks around its time, as the control thread would. The
-/// tone starts `shift` turns into its period.
+/// tone starts `shift` turns into its period. The inputs deliver what their rate and drift owe
+/// per callback (441 frames at 44.1 kHz), and `variant`'s outage takes a device away.
 ///
 /// # Panics
 ///
 /// When the profile or a command is refused.
 #[must_use]
-pub fn render(shift: f32) -> Render {
+pub fn render_with(shift: f32, variant: Variant) -> Render {
     let spec = profile::parse(PROFILE).expect("the test profile is valid");
-    let mut offline = Offline::new(&spec, RATE, CHANNELS).expect("the route builds");
+    let rates = vec![variant.input_rate; spec.inputs.len()];
+    let mut offline = Offline::with_rates(&spec, &rates, RATE, CHANNELS).expect("the route builds");
     let channels = usize::from(CHANNELS);
     let steps = steps();
     let mut next = 0;
     // Input 2 is out of phase with input 1 by a third of a turn, so they never cross zero
     // together.
     let mut phases = [TAU * shift, TAU * (shift + 1.0 / 3.0)];
-    let advance = TAU * TONE_HZ / RATE as f32;
+    let advance = TAU * TONE_HZ / variant.input_rate as f32;
     let levels = [0.25_f32, 0.25];
-    let mut feeds = vec![vec![0.0_f32; PERIOD * channels]; 2];
+    let per_callback = PERIOD as f64 * f64::from(variant.input_rate) / f64::from(RATE)
+        * (1.0 + variant.drift_ppm * 1e-6);
+    let mut owed = 0.0_f64;
+    let mut feeds = vec![Vec::new(); 2];
     let mut buses = vec![Vec::new(); spec.buses.len()];
+    // A bus that is gone, or one an input that runs dry feeds at the time (input 2 is on A1
+    // during the dry spell of input 1, so the gap counts on every bus).
+    let excused = match variant.outage {
+        Some(Outage::Bus(bus, from, to)) => (0..spec.buses.len())
+            .map(|b| (b == bus).then(|| frame_at(from)..frame_at(to)))
+            .collect(),
+        Some(Outage::Input(_, from, to)) => {
+            vec![Some(frame_at(from)..frame_at(to)); spec.buses.len()]
+        }
+        None => vec![None; spec.buses.len()],
+    };
+    let mut corrections = Vec::new();
     let callbacks = frame_at(SECONDS) / PERIOD;
     for callback in 0..callbacks {
         let frame = callback * PERIOD;
@@ -206,10 +318,32 @@ pub fn render(shift: f32) -> Render {
                 .expect("the command fits the route");
             next += 1;
         }
-        for ((feed, phase), level) in feeds.iter_mut().zip(&mut phases).zip(levels) {
+        let mut dry = None;
+        match variant.outage {
+            Some(Outage::Bus(bus, from, _)) if frame == callback_at(from) => offline.suspend(bus),
+            Some(Outage::Bus(bus, _, to)) if frame == callback_at(to) => offline.resume(bus),
+            Some(Outage::Input(input, from, to))
+                if (callback_at(from)..callback_at(to)).contains(&frame) =>
+            {
+                dry = Some(input);
+            }
+            _ => {}
+        }
+        owed += per_callback;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let frames = owed.floor() as usize;
+        owed -= frames as f64;
+        for (i, ((feed, phase), level)) in feeds.iter_mut().zip(&mut phases).zip(levels).enumerate()
+        {
+            feed.resize(frames * channels, 0.0);
             for out in feed.chunks_exact_mut(channels) {
                 out.fill(level * phase.sin());
                 *phase = (*phase + advance) % TAU;
+            }
+            if dry == Some(i) {
+                // The tone runs on meanwhile: a device that comes back does not resume where it
+                // left off.
+                feed.clear();
             }
         }
         let inputs: Vec<&[f32]> = feeds.iter().map(Vec::as_slice).collect();
@@ -217,7 +351,17 @@ pub fn render(shift: f32) -> Render {
         for (all, out) in buses.iter_mut().zip(outputs) {
             all.extend_from_slice(out);
         }
+        corrections.push(
+            offline.running().inputs[0].routes[0]
+                .stats
+                .correction_ppm
+                .load(),
+        );
     }
     assert_eq!(next, steps.len(), "every step ran");
-    Render { buses }
+    Render {
+        buses,
+        excused,
+        corrections,
+    }
 }
