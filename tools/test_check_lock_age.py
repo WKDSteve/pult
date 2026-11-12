@@ -127,6 +127,10 @@ def too_many(retry_after=None):
     return age_check.urllib.error.HTTPError("https://crates.io", 429, "Too Many Requests", headers, None)
 
 
+def unavailable():
+    return age_check.urllib.error.HTTPError("https://crates.io", 503, "Service Unavailable", {}, None)
+
+
 def answer():
     body = b'{"version": {"created_at": "2026-10-10T02:25:27Z"}}'
     response = mock.MagicMock()
@@ -155,6 +159,21 @@ class TooManyRequests(unittest.TestCase):
         with mock.patch.object(age_check.urllib.request, "urlopen", side_effect=[too_many("3600"), answer()]):
             age_check.published("x11-dl", "2.21.0", sleep=pauses.append)
         self.assertEqual(pauses, [age_check.MAX_RETRY_AFTER])
+
+    def test_a_503_is_waited_out_like_a_429(self):
+        pauses = []
+        with mock.patch.object(age_check.urllib.request, "urlopen", side_effect=[unavailable(), answer()]):
+            moment = age_check.published("x11-dl", "2.21.0", sleep=pauses.append)
+        self.assertEqual(pauses, [age_check.BACKOFF[0]])
+        self.assertEqual(moment.year, 2026)
+
+    def test_another_error_is_raised_at_once(self):
+        pauses = []
+        gone = age_check.urllib.error.HTTPError("https://crates.io", 404, "Not Found", {}, None)
+        with mock.patch.object(age_check.urllib.request, "urlopen", side_effect=[gone, answer()]):
+            with self.assertRaises(age_check.urllib.error.HTTPError):
+                age_check.published("x11-dl", "2.21.0", sleep=pauses.append)
+        self.assertEqual(pauses, [])
 
     def test_after_the_last_pause_the_429_is_raised(self):
         pauses = []

@@ -41,7 +41,9 @@ def locked_registry_packages(lock_text):
             yield name.group(1), version.group(1)
 
 
-# Waits after an answer 429 (too many requests), in seconds, when crates.io names none: about four minutes in all.
+# Answers that mean "ask again later": 429 (too many requests) and 503 (service unavailable).
+RETRY_CODES = (429, 503)
+# Waits after such an answer, in seconds, when crates.io names none: about four minutes in all.
 # A run asks for every crate of the lock file, one a second, and crates.io can still ask for a pause minutes into it.
 BACKOFF = (10, 20, 40, 60, 60, 60)
 # The longest pause taken from a Retry-After header.
@@ -60,7 +62,7 @@ def retry_after(err, default):
 
 def published(name, version, sleep=time.sleep):
     """The moment a version was published (UTC), from the crates.io API. An answer 429 is waited out (its
-    Retry-After, else BACKOFF) and asked again; anything else, or 429 after the last pause, is raised."""
+    Retry-After, else BACKOFF) and asked again, a 503 too; anything else, or 429/503 after the last pause, is raised."""
     url = f"https://crates.io/api/v1/crates/{name}/{version}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(len(BACKOFF) + 1):
@@ -69,7 +71,7 @@ def published(name, version, sleep=time.sleep):
                 text = json.load(response)["version"]["created_at"]
             return datetime.fromisoformat(text.replace("Z", "+00:00"))
         except urllib.error.HTTPError as err:
-            if err.code == 429 and attempt < len(BACKOFF):
+            if err.code in RETRY_CODES and attempt < len(BACKOFF):
                 sleep(retry_after(err, BACKOFF[attempt]))
                 continue
             raise
