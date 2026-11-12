@@ -846,7 +846,8 @@ impl Running {
             Some(bus) => self.buses[bus].sample_rate,
         };
         if slot.role == Role::Process {
-            let found = process::find(&slot.wanted)?;
+            // A pattern keeps the program the input had, if it is back; else its rule picks.
+            let found = process::find(&slot.wanted, Some(&self.inputs[index].name))?;
             let source = Source::Process {
                 pid: found.pid,
                 name: &found.name,
@@ -1123,7 +1124,7 @@ fn find_input(
             (Opening::Device(device, config), name, channels, rate)
         }
         InputKind::Process => {
-            let found = process::find(&input.device)?;
+            let found = process::find(&input.device, None)?;
             // Windows converts a program's sound to any rate; the first bus's spares the
             // resampler that bus's conversion.
             let rate = rings.bus_rates[input.buses[0]];

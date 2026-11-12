@@ -338,7 +338,14 @@ buses = ["A2"]
 ```
 
 - `pult programs` listet die Namen aller laufenden Programme. Wie bei Geräten reicht ein eindeutiger Teil, Groß- und
-  Kleinschreibung zählen nicht.
+  Kleinschreibung zählen nicht; passt der Teil auf mehrere Programme, lehnt pult ab und nennt sie.
+- **Muster:** Mit `*` (beliebig viele Zeichen) oder `?` (genau ein Zeichen) ist der Name ein Muster für den ganzen
+  Programmnamen, mit oder ohne `.exe`: `process = "discord*"` nimmt Discord, DiscordPTB oder DiscordCanary,
+  `--from "app:*spotify*"` jedes Programm mit Spotify im Namen. In der Kommandozeile das Muster in Anführungszeichen
+  setzen, sonst ersetzt die Shell den Stern.
+- **Mehrere Treffer eines Musters:** pult nimmt das Programm, das der Eingang zuletzt hatte, solange es läuft; sonst
+  das erste passende in alphabetischer Reihenfolge. Beendet sich ein Programm, sucht pult nach dem Muster neu: Ein neu
+  gestartetes Programm, das passt, landet so von selbst wieder auf seinem Eingang.
 - Mitgenommen wird das Programm samt seiner Unterprozesse; bei einem Browser also alle Tabs. Laufen mehrere getrennte
   Programme gleichen Namens, nimmt pult das erste.
 - Windows liefert den Ton als Stereo in der Abtastrate des ersten Busses, auf den das Programm geht; welche Rate das

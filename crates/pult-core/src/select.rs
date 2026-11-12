@@ -66,9 +66,66 @@ pub fn select<S: AsRef<str>>(wanted: &str, names: &[S]) -> Result<usize, SelectE
     }
 }
 
+/// Whether `wanted` is a pattern rather than a name: it holds `*` (any run of characters) or `?`
+/// (any one character).
+#[must_use]
+pub fn is_pattern(wanted: &str) -> bool {
+    wanted.contains(['*', '?'])
+}
+
+/// Whether `name` as a whole fits `pattern`, ignoring case: `*` stands for any run of characters,
+/// none included, `?` for exactly one. Everything else stands for itself.
+#[must_use]
+pub fn fits(pattern: &str, name: &str) -> bool {
+    let pattern: Vec<char> = pattern.trim().to_lowercase().chars().collect();
+    let name: Vec<char> = name.to_lowercase().chars().collect();
+    // Greedy with one point to come back to: the last star and where its run would end.
+    let (mut p, mut n) = (0, 0);
+    let mut back: Option<(usize, usize)> = None;
+    while n < name.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                back = Some((p, n));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == name[n] => {
+                p += 1;
+                n += 1;
+            }
+            _ => match back {
+                Some((star, from)) => {
+                    p = star + 1;
+                    n = from + 1;
+                    back = Some((star, from + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pattern_fits_the_whole_name_ignoring_case() {
+        assert!(is_pattern("discord*") && is_pattern("game?.exe") && !is_pattern("Spotify"));
+        assert!(fits("discord*", "DiscordPTB.exe"));
+        assert!(fits("*spot*", "Spotify.exe"));
+        assert!(fits("game?.exe", "game2.exe"));
+        assert!(!fits("game?.exe", "game.exe"));
+        assert!(!fits("game?.exe", "game12.exe"));
+        assert!(fits("*", "anything"));
+        assert!(fits("a*b*c", "aXXbYYc"));
+        assert!(!fits("a*b*c", "aXXbYY"));
+        assert!(fits("*.exe", ".exe"));
+        // The whole name: a pattern without a star at its end does not fit a longer one.
+        assert!(!fits("spot", "Spotify.exe"));
+        assert!(!fits("", "x"));
+        assert!(fits("", ""));
+    }
 
     const NAMES: [&str; 4] = [
         "Speakers (Focusrite USB Audio)",

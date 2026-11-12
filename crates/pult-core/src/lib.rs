@@ -58,7 +58,7 @@ pub use mixer::{
 pub use ramp::{Follower, Glide, MAX_RAMP_MS, MIN_RAMP_MS, Ramp};
 pub use rate::RateControl;
 pub use remix::{remix_add, remix_add_ramped};
-pub use select::{SelectError, select};
+pub use select::{SelectError, fits, is_pattern, select};
 pub use stage::{InputStage, STAGE_FRAMES};
 pub use tone::Sine;
 pub use view::{

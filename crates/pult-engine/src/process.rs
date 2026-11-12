@@ -14,7 +14,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use pult_core::{SelectError, select};
+use pult_core::{SelectError, fits, is_pattern, select};
 
 #[cfg(windows)]
 use crate::ffi;
@@ -54,17 +54,49 @@ pub(crate) struct Process {
     pub(crate) name: String,
 }
 
-/// The process `wanted` names, by executable name like a device name. Of several
-/// processes with that name it takes the first whose parent is not one of them: the root
-/// of the program's tree, which the capture includes with all its children.
-pub(crate) fn pick(processes: &[Process], wanted: &str) -> Result<Process, SelectError> {
+/// The process `wanted` names, by executable name like a device name, or by a pattern
+/// ([`pult_core::fits`]: `*` and `?`, against the whole name with or without `.exe`).
+///
+/// A name picks as devices do: equal, or else the only program whose name contains it; more
+/// than one is ambiguous. A pattern may fit several programs, and that is what it is for (say
+/// `discord*` for `Discord.exe`, `DiscordPTB.exe` and `DiscordCanary.exe`): it takes `prefer`, the program the
+/// input had last, while that one runs, and otherwise the first that fits in alphabetical
+/// order. Of several processes with the chosen name it takes the first whose parent is not one
+/// of them: the root of the program's tree, which the capture includes with all its children.
+pub(crate) fn pick(
+    processes: &[Process],
+    wanted: &str,
+    prefer: Option<&str>,
+) -> Result<Process, SelectError> {
     let mut seen = HashSet::new();
     let names: Vec<&str> = processes
         .iter()
         .map(|p| p.name.as_str())
         .filter(|name| seen.insert(name.to_lowercase()))
         .collect();
-    let name = names[select(wanted, &names)?].to_lowercase();
+    let name = if is_pattern(wanted) {
+        let mut fitting: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|name| fits(wanted, name) || fits(wanted, without_exe(name)))
+            .collect();
+        fitting.sort_by_key(|name| name.to_lowercase());
+        let kept = prefer.and_then(|prefer| {
+            fitting
+                .iter()
+                .find(|name| name.eq_ignore_ascii_case(prefer))
+        });
+        match kept.or(fitting.first()) {
+            Some(name) => name.to_lowercase(),
+            None => {
+                return Err(SelectError::NotFound {
+                    wanted: wanted.to_owned(),
+                });
+            }
+        }
+    } else {
+        names[select(wanted, &names)?].to_lowercase()
+    };
     let same: Vec<&Process> = processes
         .iter()
         .filter(|p| p.name.to_lowercase() == name)
@@ -74,6 +106,15 @@ pub(crate) fn pick(processes: &[Process], wanted: &str) -> Result<Process, Selec
         .find(|p| !same.iter().any(|q| q.pid == p.parent))
         .unwrap_or(&same[0]);
     Ok((*root).clone())
+}
+
+/// `name` without a trailing `.exe`, in any case.
+fn without_exe(name: &str) -> &str {
+    let cut = name.len().saturating_sub(4);
+    match name.get(cut..) {
+        Some(end) if end.eq_ignore_ascii_case(".exe") => &name[..cut],
+        _ => name,
+    }
 }
 
 /// The names of all running programs, each once, sorted.
@@ -92,9 +133,10 @@ pub fn program_names() -> Result<Vec<String>, Error> {
     Ok(names)
 }
 
-/// The running process `wanted` names.
-pub(crate) fn find(wanted: &str) -> Result<Process, Error> {
-    pick(&processes()?, wanted).map_err(|source| Error::Select {
+/// The running process `wanted` names (see [`pick`]); of several that fit a pattern, `prefer`
+/// while it runs.
+pub(crate) fn find(wanted: &str, prefer: Option<&str>) -> Result<Process, Error> {
+    pick(&processes()?, wanted, prefer).map_err(|source| Error::Select {
         role: Role::Process,
         source,
     })
@@ -330,19 +372,56 @@ mod tests {
             process(30, 10, "chrome.exe"),
             process(40, 1, "Spotify.exe"),
         ];
-        assert_eq!(pick(&list, "chrome").map(|p| p.pid), Ok(10));
-        assert_eq!(pick(&list, "SPOTIFY").map(|p| p.pid), Ok(40));
+        assert_eq!(pick(&list, "chrome", None).map(|p| p.pid), Ok(10));
+        assert_eq!(pick(&list, "SPOTIFY", None).map(|p| p.pid), Ok(40));
         assert!(matches!(
-            pick(&list, "vlc"),
+            pick(&list, "vlc", None),
             Err(SelectError::NotFound { .. })
         ));
         // Two different programs match: ambiguous, each named once.
         let list = [process(1, 0, "game.exe"), process(2, 0, "gamebar.exe")];
         assert!(matches!(
-            pick(&list, "game"),
+            pick(&list, "game", None),
             Err(SelectError::Ambiguous { candidates, .. }) if candidates.len() == 2
         ));
-        assert_eq!(pick(&list, "game.exe").map(|p| p.pid), Ok(1));
+        assert_eq!(pick(&list, "game.exe", None).map(|p| p.pid), Ok(1));
+    }
+
+    #[test]
+    fn a_pattern_takes_the_program_it_had_then_the_first_in_order() {
+        let list = [
+            process(4, 0, "System"),
+            process(50, 1, "DiscordPTB.exe"),
+            process(51, 50, "DiscordPTB.exe"),
+            process(60, 1, "Discord.exe"),
+            process(70, 1, "Spotify.exe"),
+        ];
+        // Several fit: the first in alphabetical order, the root of its tree.
+        assert_eq!(pick(&list, "discord*", None).map(|p| p.pid), Ok(60));
+        // The one the input had stays while it runs, whatever else fits.
+        assert_eq!(
+            pick(&list, "discord*", Some("discordptb.exe")).map(|p| p.pid),
+            Ok(50)
+        );
+        // Gone: the rule picks again.
+        assert_eq!(
+            pick(&list, "discord*", Some("DiscordCanary.exe")).map(|p| p.pid),
+            Ok(60)
+        );
+        // Against the whole name, with or without .exe; a pattern is never ambiguous.
+        assert_eq!(pick(&list, "spot?fy", None).map(|p| p.pid), Ok(70));
+        assert_eq!(pick(&list, "*.EXE", None).map(|p| p.pid), Ok(60));
+        assert!(matches!(
+            pick(&list, "spot*x", None),
+            Err(SelectError::NotFound { .. })
+        ));
+        // A plain name keeps picking as before: ambiguous among several.
+        assert!(matches!(
+            pick(&list, "discord", None),
+            Err(SelectError::Ambiguous { .. })
+        ));
+        assert_eq!(without_exe("a.EXE"), "a");
+        assert_eq!(without_exe("exe"), "exe");
     }
 
     #[test]

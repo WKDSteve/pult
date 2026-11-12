@@ -64,7 +64,8 @@ runs or it refuses, and with 2 when the words are no command for it.
 
 Device names may be a unique part of the name, ignoring case (see `pult devices`).
 --from app:<PROGRAM> captures the sound of a running program instead of a device, for
-example \"app:Spotify\" (see `pult programs`).
+example \"app:Spotify\" (see `pult programs`); with * or ? it is a pattern for the whole
+program name, for example \"app:discord*\" (quote it, so the shell leaves the star alone).
 GAIN_DB is a gain in dB, for example \"CABLE Output@-6\". --latency-ms is the buffering per
 input (default 40); raise it if you hear dropouts. --profile reads inputs, buses (several
 outputs) and which input feeds which bus from a TOML file (see examples/pult.toml).
