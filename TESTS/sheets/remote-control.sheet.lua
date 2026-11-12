@@ -4,6 +4,7 @@
 return {
   id = "pult.remote-control",
   feature = "pult.remote",
+  task = "pult/live-check-fernbedienung-gegen-den-demo-hub",
   title = "pult: the remote control against the demo hub",
   engine = "browser",
   app = "demo-hub",

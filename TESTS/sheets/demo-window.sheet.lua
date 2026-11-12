@@ -5,6 +5,7 @@
 return {
   id = "pult.demo-window",
   feature = "pult.window",
+  task = "pult/stufe-3b-native-oberflaeche",
   title = "pult: the window with the demo desk",
   engine = "desktop",
   app = "demo-window",
