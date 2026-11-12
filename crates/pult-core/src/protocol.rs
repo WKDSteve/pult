@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
 use crate::control::{Command, Target};
 use crate::eq::{Band, BandChange, BandKind};
-use crate::limiter::LimitChange;
+use crate::limiter::{LimitChange, LimitSettings};
 use crate::strip::StripChange;
 use crate::view::{Action, BusView, EventKind, EventView, GAIN_RANGE_DB, InputView, MeterPoint};
 use crate::view::{MixerView, SourceKind, check_amount};
@@ -182,15 +182,10 @@ pub struct BusState {
     /// a run older than equalizers.
     #[serde(default)]
     pub eq: Vec<Band>,
-    /// Whether its limiter is switched on; off from a run older than limiters.
-    #[serde(default)]
-    pub limit_on: bool,
-    /// The ceiling of its limiter in dB.
-    #[serde(default)]
-    pub limit_db: f32,
-    /// The lookahead of its limiter in milliseconds: this much later the sound leaves the bus.
-    #[serde(default)]
-    pub limit_lookahead_ms: f32,
+    /// Its limiter, as the fields `limit_on`, `limit_db` and `limit_lookahead_ms`; off and zero
+    /// from a run older than limiters ([`LimitSettings::OLDER_RUN`]).
+    #[serde(flatten)]
+    pub limit: LimitSettings,
     /// The monitor bus, the one solo acts on; false from a run older than this.
     #[serde(default)]
     pub monitor: bool,
@@ -376,9 +371,7 @@ impl BusState {
             muted: bus.muted,
             eq_on: bus.eq_on,
             eq: bus.eq.to_vec(),
-            limit_on: bus.limit_on,
-            limit_db: bus.limit_db,
-            limit_lookahead_ms: bus.limit_lookahead_ms,
+            limit: bus.limit,
             monitor: bus.monitor,
             minus: bus.minus.map(|input| input + 1),
             comp: bus.comp,
@@ -984,7 +977,11 @@ mod tests {
     fn what_a_limiter_reports_survives_json() {
         let mut limiter = crate::limiter::Limiter::new(48_000, 1);
         let controls = crate::limiter::LimiterControls::default();
-        controls.set_all(true, -6.0, 0.0);
+        controls.set_all(crate::limiter::LimitSettings {
+            on: true,
+            ceiling_db: -6.0,
+            lookahead_ms: 0.0,
+        });
         let mut view = view();
         view.buses[0].limited_db = limiter.process(&controls, &mut [f32::INFINITY], 1);
         let text = serde_json::to_string(&State::new(&view, Vec::new())).expect("to JSON");
@@ -1177,6 +1174,36 @@ mod tests {
     }
 
     #[test]
+    fn the_limiter_keeps_its_three_loose_fields_in_json() {
+        let state = State::new(&view(), Vec::new());
+        let json = serde_json::to_value(&state).expect("to JSON");
+        let bus = json["buses"][0].as_object().expect("a bus");
+        assert!(!bus.contains_key("limit"), "{bus:?}");
+        assert_eq!(bus["limit_on"], serde_json::json!(true));
+        assert_eq!(
+            bus["limit_db"],
+            serde_json::json!(f64::from(crate::limiter::DEFAULT_CEILING_DB))
+        );
+        assert_eq!(bus["limit_lookahead_ms"], serde_json::json!(1.0));
+        // A message as a run before the struct wrote it reads back the same.
+        let mut older = json.clone();
+        let bus = older["buses"][0].as_object_mut().expect("a bus");
+        bus.insert("limit_on".to_owned(), serde_json::json!(false));
+        bus.insert("limit_db".to_owned(), serde_json::json!(-6.0));
+        bus.insert("limit_lookahead_ms".to_owned(), serde_json::json!(2.5));
+        let read: State = serde_json::from_value(older.clone()).expect("from JSON");
+        assert_eq!(
+            read.buses[0].limit,
+            LimitSettings {
+                on: false,
+                ceiling_db: -6.0,
+                lookahead_ms: 2.5
+            }
+        );
+        assert_eq!(serde_json::to_value(&read).expect("to JSON"), older);
+    }
+
+    #[test]
     fn a_state_lists_the_scenes_and_reads_without_them() {
         let state = State::new(&view(), Vec::new());
         assert_eq!(state.scenes, ["Abend", "Laut"]);
@@ -1197,7 +1224,7 @@ mod tests {
         assert_eq!(read.scenes, Vec::<String>::new());
         assert_eq!((read.inputs[0].gate, read.inputs[0].comp), (0.0, 0.0));
         assert!(!read.buses[0].eq_on && read.buses[0].eq.is_empty());
-        assert!(!read.buses[0].limit_on);
+        assert!(!read.buses[0].limit.on);
         assert!(state.buses[0].eq_on);
         assert_eq!(state.buses[0].eq.len(), crate::eq::EQ_BANDS);
     }

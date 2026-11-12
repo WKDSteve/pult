@@ -39,7 +39,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SupportedStreamConfig};
 use pult_core::EQ_BANDS;
 use pult_core::eq::BandChange;
-use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
+use pult_core::limiter::LimitSettings;
 use pult_core::{
     AutomixGroup, Band, BusHandle, Counter, DriftControl, InputConfig, InputControls, InputStage,
     InputStats, Mixer, MixerInput, SelectError, Sine, connect_with, db_to_linear, ramp::Glide,
@@ -396,12 +396,8 @@ pub struct BusSpec {
     pub eq_on: bool,
     /// The bands of its equalizer.
     pub eq: [Band; EQ_BANDS],
-    /// Whether its limiter is switched on; off, it keeps its settings.
-    pub limit_on: bool,
-    /// The ceiling of its limiter in dB.
-    pub limit_db: f32,
-    /// The lookahead of its limiter in milliseconds: this much later the sound leaves the bus.
-    pub limit_lookahead_ms: f32,
+    /// Its limiter; switched off, it keeps its settings.
+    pub limit: LimitSettings,
     /// A monitor bus: solo acts on it, and, while the route has one, only on such buses.
     pub monitor: bool,
     /// A mix-minus (N-1) bus: the input it is for (index into [`RouteSpec::inputs`]) never goes
@@ -427,9 +423,7 @@ impl BusSpec {
             muted: false,
             eq_on: true,
             eq: Band::all_flat(),
-            limit_on: true,
-            limit_db: DEFAULT_CEILING_DB,
-            limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
+            limit: LimitSettings::default(),
             monitor: false,
             minus: None,
             comp: 0.0,
@@ -547,10 +541,7 @@ impl RouteSpec {
             }
         }
         for bus in &self.buses {
-            for change in [
-                LimitChange::Ceiling(bus.limit_db),
-                LimitChange::Lookahead(bus.limit_lookahead_ms),
-            ] {
+            for change in bus.limit.levels() {
                 if let Err(why) = change.checked() {
                     return invalid(format!("bus {}: {why}", bus.name));
                 }
@@ -1235,10 +1226,7 @@ fn set_up_bus(handle: &BusHandle, bus: &BusSpec) {
     handle.controls.gain.store(db_to_linear(bus.gain_db));
     handle.controls.muted.store(bus.muted, Ordering::Relaxed);
     handle.controls.eq.set_all(bus.eq_on, &bus.eq);
-    handle
-        .controls
-        .limiter
-        .set_all(bus.limit_on, bus.limit_db, bus.limit_lookahead_ms);
+    handle.controls.limiter.set_all(bus.limit);
     let comp = &handle.controls.comp;
     comp.comp.set_simple(bus.comp);
     comp.set_mix(bus.comp_mix / 100.0);

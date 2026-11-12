@@ -21,6 +21,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use serde::{Deserialize, Serialize};
+
 use crate::level::{AtomicF32, linear_to_db, within};
 
 /// Lowest and highest ceiling in dB.
@@ -90,6 +92,83 @@ impl LimitChange {
     }
 }
 
+/// The three settings of a bus's limiter, wherever they are kept (the route, the view, the state).
+///
+/// In JSON the fields keep the names they had as loose fields of a bus (`limit_on`, `limit_db`,
+/// `limit_lookahead_ms`), so a state flattens it unchanged; each one is missing from a run older
+/// than limiters and then reads as off and zero ([`LimitSettings::OLDER_RUN`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LimitSettings {
+    /// Switched on; off, it keeps the other two.
+    #[serde(rename = "limit_on", default)]
+    pub on: bool,
+    /// The ceiling in dB.
+    #[serde(rename = "limit_db", default)]
+    pub ceiling_db: f32,
+    /// The lookahead in milliseconds: this much later the sound leaves the bus.
+    #[serde(rename = "limit_lookahead_ms", default)]
+    pub lookahead_ms: f32,
+}
+
+impl Default for LimitSettings {
+    /// As a bus starts: on, at [`DEFAULT_CEILING_DB`] with [`DEFAULT_LOOKAHEAD_MS`].
+    fn default() -> Self {
+        Self {
+            on: true,
+            ceiling_db: DEFAULT_CEILING_DB,
+            lookahead_ms: DEFAULT_LOOKAHEAD_MS,
+        }
+    }
+}
+
+impl LimitSettings {
+    /// What a state from a run older than limiters reads as: off, zero ceiling, no lookahead.
+    pub const OLDER_RUN: Self = Self {
+        on: false,
+        ceiling_db: 0.0,
+        lookahead_ms: 0.0,
+    };
+
+    /// Makes `change`; it is not checked here (see [`LimitChange::checked`]).
+    pub fn apply(&mut self, change: LimitChange) {
+        match change {
+            LimitChange::Switch(on) => self.on = on,
+            LimitChange::Ceiling(db) => self.ceiling_db = db,
+            LimitChange::Lookahead(ms) => self.lookahead_ms = ms,
+        }
+    }
+
+    /// As a line says it: `limit off`, or `limit -0.3 dB, 1 ms`.
+    #[must_use]
+    pub fn line(&self) -> String {
+        if self.on {
+            format!("limit {:.1} dB, {} ms", self.ceiling_db, self.lookahead_ms)
+        } else {
+            "limit off".to_owned()
+        }
+    }
+
+    /// What a line of `show` says of it, behind the rest of a bus: nothing for one that stands as
+    /// it starts.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        if *self == Self::default() {
+            String::new()
+        } else {
+            format!("  {}", self.line())
+        }
+    }
+
+    /// The two changes that bring a limiter's ceiling and lookahead to these (the switch is left).
+    #[must_use]
+    pub fn levels(&self) -> [LimitChange; 2] {
+        [
+            LimitChange::Ceiling(self.ceiling_db),
+            LimitChange::Lookahead(self.lookahead_ms),
+        ]
+    }
+}
+
 /// The limiter of one bus as the control thread sets it. Off at first; a route switches it on.
 #[derive(Debug)]
 pub struct LimiterControls {
@@ -119,10 +198,10 @@ impl LimiterControls {
     }
 
     /// Sets everything at once: what a route starts with.
-    pub fn set_all(&self, on: bool, ceiling_db: f32, lookahead_ms: f32) {
-        self.set_ceiling(ceiling_db);
-        self.set_lookahead(lookahead_ms);
-        self.switch(on);
+    pub fn set_all(&self, settings: LimitSettings) {
+        self.set_ceiling(settings.ceiling_db);
+        self.set_lookahead(settings.lookahead_ms);
+        self.switch(settings.on);
     }
 
     /// Sets the ceiling, clamped to [`LIMIT_CEILING_DB`]; a NaN becomes the default.
@@ -495,7 +574,11 @@ mod tests {
 
     fn limiter(ceiling_db: f32, lookahead_ms: f32, channels: usize) -> (Limiter, LimiterControls) {
         let controls = LimiterControls::default();
-        controls.set_all(true, ceiling_db, lookahead_ms);
+        controls.set_all(LimitSettings {
+            on: true,
+            ceiling_db,
+            lookahead_ms,
+        });
         (Limiter::new(RATE, channels), controls)
     }
 
@@ -739,7 +822,11 @@ mod tests {
         let mut data = vec![1.0; 480];
         limiter.process(&controls, &mut data, 1);
         limiter.prepare(1);
-        controls.set_all(true, -12.0, 2.0);
+        controls.set_all(LimitSettings {
+            on: true,
+            ceiling_db: -12.0,
+            lookahead_ms: 2.0,
+        });
         // No slide, no crossfade, and the old sound is gone.
         let mut data = vec![0.1; 96];
         assert_eq!(limiter.process(&controls, &mut data, 1), 0.0);
@@ -766,7 +853,11 @@ mod tests {
     fn the_longest_lookahead_fits_at_every_rate() {
         for rate in [8_000, 44_100, 48_000, 96_000, 192_000, 384_000] {
             let controls = LimiterControls::default();
-            controls.set_all(true, -6.0, LIMIT_LOOKAHEAD_MS.1);
+            controls.set_all(LimitSettings {
+                on: true,
+                ceiling_db: -6.0,
+                lookahead_ms: LIMIT_LOOKAHEAD_MS.1,
+            });
             let mut limiter = Limiter::new(rate, 2);
             let mut data = noise(rate as usize / 10, 2, 8.0);
             limiter.process(&controls, &mut data, 2);

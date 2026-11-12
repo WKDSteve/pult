@@ -17,8 +17,7 @@ pub use crate::binding::{
     AddressError, BandParam, Binding, BusParam, InputParam, Value, action_gain,
 };
 pub use crate::eq::{Band, BandChange, BandKind, EQ_BANDS};
-pub use crate::limiter::LimitChange;
-use crate::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS};
+pub use crate::limiter::{LimitChange, LimitSettings};
 
 /// A snapshot of the whole mixer, taken about 30 times a second.
 #[derive(Debug, Clone, PartialEq)]
@@ -183,12 +182,8 @@ pub struct BusView {
     pub eq_on: bool,
     /// The bands of its equalizer.
     pub eq: [Band; EQ_BANDS],
-    /// Whether its limiter is switched on; off, it keeps its settings.
-    pub limit_on: bool,
-    /// The ceiling of its limiter in dB.
-    pub limit_db: f32,
-    /// The lookahead of its limiter in milliseconds.
-    pub limit_lookahead_ms: f32,
+    /// Its limiter; switched off, it keeps its settings.
+    pub limit: LimitSettings,
     /// A monitor bus: solo acts on it (and, while the route has one, only on such buses).
     pub monitor: bool,
     /// A mix-minus (N-1) bus: the input it is for, which never feeds it.
@@ -549,9 +544,7 @@ impl FakeDesk {
             muted: false,
             eq_on: true,
             eq: Band::all_flat(),
-            limit_on: true,
-            limit_db: DEFAULT_CEILING_DB,
-            limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
+            limit: LimitSettings::default(),
             monitor: false,
             minus: None,
             loudness: LoudnessView::default(),
@@ -789,17 +782,8 @@ impl FakeDesk {
     fn set_limit(&mut self, bus: usize, change: LimitChange) -> Reply {
         let change = change.checked()?;
         let bus = self.bus_mut(bus)?;
-        apply_limit(
-            &mut bus.limit_on,
-            &mut bus.limit_db,
-            &mut bus.limit_lookahead_ms,
-            change,
-        );
-        Ok(vec![format!(
-            "{} {}",
-            bus.name,
-            limit_line(bus.limit_on, bus.limit_db, bus.limit_lookahead_ms)
-        )])
+        bus.limit.apply(change);
+        Ok(vec![format!("{} {}", bus.name, bus.limit.line())])
     }
 
     fn bus_mut(&mut self, bus: usize) -> Result<&mut BusView, String> {
@@ -808,44 +792,6 @@ impl FakeDesk {
             .buses
             .get_mut(bus)
             .ok_or_else(|| format!("there is no bus {} (only {count})", bus + 1))
-    }
-}
-
-/// Makes `change` in the three settings of a limiter, wherever they are kept.
-pub fn apply_limit(
-    on: &mut bool,
-    ceiling_db: &mut f32,
-    lookahead_ms: &mut f32,
-    change: LimitChange,
-) {
-    match change {
-        LimitChange::Switch(new) => *on = new,
-        LimitChange::Ceiling(db) => *ceiling_db = db,
-        LimitChange::Lookahead(ms) => *lookahead_ms = ms,
-    }
-}
-
-/// A limiter as a line says it: `limit off`, or `limit -0.3 dB, 1 ms`.
-#[must_use]
-pub fn limit_line(on: bool, ceiling_db: f32, lookahead_ms: f32) -> String {
-    if on {
-        format!("limit {ceiling_db:.1} dB, {lookahead_ms} ms")
-    } else {
-        "limit off".to_owned()
-    }
-}
-
-/// What a line of `show` says of a limiter, to put behind the rest of a bus: nothing for one that
-/// stands as it starts.
-#[must_use]
-pub fn limit_summary(on: bool, ceiling_db: f32, lookahead_ms: f32) -> String {
-    #[allow(clippy::float_cmp)] // Exactly: as set, or not.
-    let as_it_starts =
-        on && ceiling_db == DEFAULT_CEILING_DB && lookahead_ms == DEFAULT_LOOKAHEAD_MS;
-    if as_it_starts {
-        String::new()
-    } else {
-        format!("  {}", limit_line(on, ceiling_db, lookahead_ms))
     }
 }
 
@@ -1218,8 +1164,8 @@ mod tests {
             Ok(vec!["A2 limit off".to_owned()])
         );
         let view = mixer.view();
-        assert!(!view.buses[1].limit_on);
-        assert!(view.buses[0].limit_on);
+        assert!(!view.buses[1].limit.on);
+        assert!(view.buses[0].limit.on);
         assert!(mixer.act(limit(LimitChange::Ceiling(3.0))).is_err());
         assert!(mixer.act(limit(LimitChange::Lookahead(6.0))).is_err());
         assert!(mixer.act(limit(LimitChange::Ceiling(f32::NAN))).is_err());
@@ -1227,15 +1173,16 @@ mod tests {
 
     #[test]
     fn a_line_names_a_limiter_only_when_it_differs_from_its_start() {
-        assert_eq!(
-            limit_summary(true, DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS),
-            ""
-        );
-        assert_eq!(
-            limit_summary(false, DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS),
-            "  limit off"
-        );
-        assert_eq!(limit_summary(true, -6.0, 0.0), "  limit -6.0 dB, 0 ms");
+        let start = LimitSettings::default();
+        assert_eq!(start.summary(), "");
+        let off = LimitSettings { on: false, ..start };
+        assert_eq!(off.summary(), "  limit off");
+        let set = LimitSettings {
+            on: true,
+            ceiling_db: -6.0,
+            lookahead_ms: 0.0,
+        };
+        assert_eq!(set.summary(), "  limit -6.0 dB, 0 ms");
     }
 
     #[test]

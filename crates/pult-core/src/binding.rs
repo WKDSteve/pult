@@ -390,9 +390,9 @@ impl Binding {
                             BandParam::Q => Value::Width(band.q),
                         }
                     }
-                    BusParam::Limit => Value::Switch(bus.limit_on),
-                    BusParam::LimitCeiling => Value::Ceiling(bus.limit_db),
-                    BusParam::LimitLookahead => Value::Lookahead(bus.limit_lookahead_ms),
+                    BusParam::Limit => Value::Switch(bus.limit.on),
+                    BusParam::LimitCeiling => Value::Ceiling(bus.limit.ceiling_db),
+                    BusParam::LimitLookahead => Value::Lookahead(bus.limit.lookahead_ms),
                     BusParam::Monitor => Value::Switch(bus.monitor),
                     BusParam::Comp => Value::Amount(bus.comp),
                     BusParam::CompMix => Value::Percent(bus.comp_mix),
@@ -963,9 +963,9 @@ mod tests {
     #[test]
     fn bindings_of_a_limiter_read_the_view_and_write_its_action() {
         let mut view = crate::view::FakeDesk::new().view();
-        view.buses[0].limit_on = false;
-        view.buses[0].limit_db = -3.0;
-        view.buses[0].limit_lookahead_ms = 2.0;
+        view.buses[0].limit.on = false;
+        view.buses[0].limit.ceiling_db = -3.0;
+        view.buses[0].limit.lookahead_ms = 2.0;
         let read = |param| Binding::Bus(0, param).read(&view);
         assert_eq!(read(BusParam::Limit), Some(Value::Switch(false)));
         assert_eq!(read(BusParam::LimitCeiling), Some(Value::Ceiling(-3.0)));

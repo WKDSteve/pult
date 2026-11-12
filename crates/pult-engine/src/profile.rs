@@ -79,7 +79,7 @@ use serde::Deserialize;
 use std::fmt::Write as _;
 
 use pult_core::eq::BandChange;
-use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitChange};
+use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitSettings};
 use pult_core::strip::StripSettings;
 use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
@@ -535,12 +535,12 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
         check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
         let (comp, comp_mix, comp_hpf_hz) = bus_comp_of(&entry)?;
         let eq = bands(&format!("bus {}", entry.name), entry.eq)?;
-        let limit_db = entry.limit_db.unwrap_or(DEFAULT_CEILING_DB);
-        let limit_lookahead_ms = entry.limit_lookahead_ms.unwrap_or(DEFAULT_LOOKAHEAD_MS);
-        for change in [
-            LimitChange::Ceiling(limit_db),
-            LimitChange::Lookahead(limit_lookahead_ms),
-        ] {
+        let limit = LimitSettings {
+            on: entry.limit_on.unwrap_or(true),
+            ceiling_db: entry.limit_db.unwrap_or(DEFAULT_CEILING_DB),
+            lookahead_ms: entry.limit_lookahead_ms.unwrap_or(DEFAULT_LOOKAHEAD_MS),
+        };
+        for change in limit.levels() {
             if let Err(why) = change.checked() {
                 return fail(format!("bus {}: {why}", entry.name));
             }
@@ -553,9 +553,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             muted: entry.mute,
             eq_on: entry.eq_on.unwrap_or(true),
             eq,
-            limit_on: entry.limit_on.unwrap_or(true),
-            limit_db,
-            limit_lookahead_ms,
+            limit,
             monitor: entry.monitor,
             // A number from 1 here; checked against the inputs once they are read.
             minus: entry.minus,
@@ -719,16 +717,16 @@ fn render_comp(text: &mut String, bus: &BusSpec) {
 }
 
 fn render_limit(text: &mut String, bus: &BusSpec) {
-    if !bus.limit_on {
+    if !bus.limit.on {
         text.push_str("limit_on = false\n");
     }
     #[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
-    if bus.limit_db != DEFAULT_CEILING_DB {
-        let _ = writeln!(text, "limit_db = {}", bus.limit_db);
+    if bus.limit.ceiling_db != DEFAULT_CEILING_DB {
+        let _ = writeln!(text, "limit_db = {}", bus.limit.ceiling_db);
     }
     #[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
-    if bus.limit_lookahead_ms != DEFAULT_LOOKAHEAD_MS {
-        let _ = writeln!(text, "limit_lookahead_ms = {}", bus.limit_lookahead_ms);
+    if bus.limit.lookahead_ms != DEFAULT_LOOKAHEAD_MS {
+        let _ = writeln!(text, "limit_lookahead_ms = {}", bus.limit.lookahead_ms);
     }
 }
 
@@ -976,15 +974,15 @@ fn set_bus(table: &mut Table, bus: &BusSpec) {
         .get("limit_on")
         .and_then(Item::as_bool)
         .unwrap_or(true)
-        != bus.limit_on
+        != bus.limit.on
     {
-        set(table, "limit_on", bus.limit_on.into());
+        set(table, "limit_on", bus.limit.on.into());
     }
-    set_number_from(table, "limit_db", bus.limit_db, DEFAULT_CEILING_DB);
+    set_number_from(table, "limit_db", bus.limit.ceiling_db, DEFAULT_CEILING_DB);
     set_number_from(
         table,
         "limit_lookahead_ms",
-        bus.limit_lookahead_ms,
+        bus.limit.lookahead_ms,
         DEFAULT_LOOKAHEAD_MS,
     );
     set_switch(table, "monitor", bus.monitor);
@@ -1429,16 +1427,16 @@ mod tests {
             )
         };
         let default = parse(&bus("")).expect("no limiter named");
-        assert!(default.buses[0].limit_on);
-        assert_eq!(default.buses[0].limit_db, DEFAULT_CEILING_DB);
-        assert_eq!(default.buses[0].limit_lookahead_ms, DEFAULT_LOOKAHEAD_MS);
+        assert!(default.buses[0].limit.on);
+        assert_eq!(default.buses[0].limit.ceiling_db, DEFAULT_CEILING_DB);
+        assert_eq!(default.buses[0].limit.lookahead_ms, DEFAULT_LOOKAHEAD_MS);
         let named = parse(&bus(
             "limit_on = false\nlimit_db = -6\nlimit_lookahead_ms = 2.5\n",
         ))
         .expect("a limiter");
-        assert!(!named.buses[0].limit_on);
-        assert_eq!(named.buses[0].limit_db, -6.0);
-        assert_eq!(named.buses[0].limit_lookahead_ms, 2.5);
+        assert!(!named.buses[0].limit.on);
+        assert_eq!(named.buses[0].limit.ceiling_db, -6.0);
+        assert_eq!(named.buses[0].limit.lookahead_ms, 2.5);
         // What it wrote, it reads back; what stands as it starts, it does not write.
         assert_eq!(parse(&render(&named)).expect("itself"), named);
         assert!(!render(&default).contains("limit"));
@@ -1521,17 +1519,17 @@ mod tests {
 
         // The limiter goes in only once it differs, and stays where the file named it.
         assert!(!text.contains("limit"), "{text}");
-        spec.buses[1].limit_on = false;
-        spec.buses[1].limit_db = -6.0;
-        spec.buses[1].limit_lookahead_ms = 2.5;
+        spec.buses[1].limit.on = false;
+        spec.buses[1].limit.ceiling_db = -6.0;
+        spec.buses[1].limit.lookahead_ms = 2.5;
         let text = merge(&text, &spec);
         assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
         assert!(text.contains("limit_on = false"), "{text}");
         assert!(text.contains("limit_db = -6"), "{text}");
         assert!(text.contains("# the cable"), "{text}");
-        spec.buses[1].limit_on = true;
-        spec.buses[1].limit_db = DEFAULT_CEILING_DB;
-        spec.buses[1].limit_lookahead_ms = DEFAULT_LOOKAHEAD_MS;
+        spec.buses[1].limit.on = true;
+        spec.buses[1].limit.ceiling_db = DEFAULT_CEILING_DB;
+        spec.buses[1].limit.lookahead_ms = DEFAULT_LOOKAHEAD_MS;
         let text = merge(&text, &spec);
         assert_eq!(parse(&text).as_ref(), Ok(&spec), "{text}");
     }

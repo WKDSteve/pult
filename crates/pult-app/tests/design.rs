@@ -126,9 +126,11 @@ fn showcase(t: f64) -> MixerView {
             } else {
                 pult_core::Band::all_flat()
             },
-            limit_on: j != 1,
-            limit_db: -0.3,
-            limit_lookahead_ms: 1.0,
+            limit: pult_core::view::LimitSettings {
+                on: j != 1,
+                ceiling_db: -0.3,
+                lookahead_ms: 1.0,
+            },
             monitor: false,
             minus: None,
             // The stream bus with its bus compressor at work, half parallel.

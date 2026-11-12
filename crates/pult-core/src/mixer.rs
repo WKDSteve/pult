@@ -970,7 +970,11 @@ mod tests {
     #[test]
     fn the_limiter_sits_behind_the_bus_fader_and_nothing_clips() {
         let (mut mixer, mut capture, _, bus) = playing(0.5);
-        bus.controls.limiter.set_all(true, -6.0, 0.0);
+        bus.controls.limiter.set_all(crate::limiter::LimitSettings {
+            on: true,
+            ceiling_db: -6.0,
+            lookahead_ms: 0.0,
+        });
         // Switched on, it slides down from out of the way.
         record(&mut mixer, &mut capture, 0.5, 10);
         bus.controls.gain.store(8.0);
@@ -1000,7 +1004,11 @@ mod tests {
         let (capture, input, _handle) = connect(config(1, 0));
         drop(capture);
         let (mut mixer, bus) = Mixer::new(vec![input], 1);
-        bus.controls.limiter.set_all(true, -6.0, 1.0);
+        bus.controls.limiter.set_all(crate::limiter::LimitSettings {
+            on: true,
+            ceiling_db: -6.0,
+            lookahead_ms: 1.0,
+        });
         bus.controls.gain.store(f32::NAN);
         let mut out = vec![0.0; PERIOD];
         for _ in 0..50 {
@@ -1013,7 +1021,11 @@ mod tests {
     fn a_device_back_with_more_channels_is_limited_too() {
         let (mut capture, input, _handle) = connect(config(1, 480));
         let (mut mixer, bus) = Mixer::new(vec![input], 1);
-        bus.controls.limiter.set_all(true, -6.0, 0.0);
+        bus.controls.limiter.set_all(crate::limiter::LimitSettings {
+            on: true,
+            ceiling_db: -6.0,
+            lookahead_ms: 0.0,
+        });
         bus.controls.gain.store(8.0);
         record(&mut mixer, &mut capture, 0.5, 10);
         mixer.suspend();
@@ -1715,7 +1727,11 @@ mod tests {
             // stage's, tested there).
             bus.controls.eq.set(1, Band::at(1).with_gain(6.0));
             // The limiter at work, with another lookahead, and switched off.
-            bus.controls.limiter.set_all(true, -20.0, 5.0);
+            bus.controls.limiter.set_all(crate::limiter::LimitSettings {
+                on: true,
+                ceiling_db: -20.0,
+                lookahead_ms: 5.0,
+            });
             for round in 0..10 {
                 if round == 3 {
                     bus.controls.limiter.set_lookahead(1.0);

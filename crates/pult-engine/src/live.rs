@@ -7,9 +7,7 @@ use std::sync::atomic::Ordering;
 
 use pult_core::control::{Command, HELP, Target, search_name};
 use pult_core::limiter::LimitChange;
-use pult_core::view::{
-    apply_limit, band_line, check_amount, eq_summary, limit_line, limit_summary,
-};
+use pult_core::view::{band_line, check_amount, eq_summary};
 use pult_core::{EQ_BANDS, EqControls, InputControls, MAX_RAMP_MS, db_to_linear};
 
 use crate::profile::{self, GAIN_DB};
@@ -22,13 +20,8 @@ impl Running {
     fn change_limit(&mut self, bus: usize, change: LimitChange) -> Result<Vec<String>, String> {
         let change = change.checked()?;
         let spec = &mut self.spec.buses[bus];
-        apply_limit(
-            &mut spec.limit_on,
-            &mut spec.limit_db,
-            &mut spec.limit_lookahead_ms,
-            change,
-        );
-        let line = limit_line(spec.limit_on, spec.limit_db, spec.limit_lookahead_ms);
+        spec.limit.apply(change);
+        let line = spec.limit.line();
         self.buses[bus].handle.controls.limiter.change(change);
         Ok(vec![format!("{}: {line}", self.buses[bus].name)])
     }
@@ -656,11 +649,7 @@ impl Running {
                 );
             }
             line.push_str(&eq_summary(spec.eq_on, &spec.eq));
-            line.push_str(&limit_summary(
-                spec.limit_on,
-                spec.limit_db,
-                spec.limit_lookahead_ms,
-            ));
+            line.push_str(&spec.limit.summary());
             if spec.muted {
                 line.push_str("  muted");
             }
