@@ -1,6 +1,7 @@
 -- The open hand test of slices 3 and 4 of stufe-3-ui: the rolling zip on the real machine. A person does it; the sheet asks.
 return {
   id = "pult.handtest-install",
+  feature = "pult.install",
   title = "pult: install, start with Windows, update, remove",
   task = "pult/stufe-3-ui",
   engine = "manual",

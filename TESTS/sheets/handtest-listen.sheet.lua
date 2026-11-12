@@ -1,6 +1,7 @@
 -- The hand test on the real route: what no driver can hear. A person does it; the sheet asks.
 return {
   id = "pult.handtest-listen",
+  feature = "pult.mix",
   title = "pult: listening, MIDI and the real window",
   task = "pult/handtest-hoeren-und-echtes-fenster",
   engine = "manual",

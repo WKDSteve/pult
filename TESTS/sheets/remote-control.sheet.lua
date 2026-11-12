@@ -3,6 +3,7 @@
 -- tools/page-check.mjs goes further (refusals, the policy, axe); this one is the walk a person can watch.
 return {
   id = "pult.remote-control",
+  feature = "pult.remote",
   title = "pult: the remote control against the demo hub",
   engine = "browser",
   app = "demo-hub",

@@ -4,6 +4,7 @@
 --   testing sheets step button-looks --headed
 return {
   id = "pult.button-looks",
+  feature = "pult.button-states",
   title = "pult: a filled button at rest, under the pointer and with focus, light and dark",
   task = "pult/live-check-knoepfe-der-fernbedienung-hell-und-dunkel-in-ruhe",
   engine = "browser",

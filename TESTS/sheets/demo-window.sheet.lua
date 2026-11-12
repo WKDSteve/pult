@@ -4,6 +4,7 @@
 -- runner is still an open question).
 return {
   id = "pult.demo-window",
+  feature = "pult.window",
   title = "pult: the window with the demo desk",
   engine = "desktop",
   app = "demo-window",
