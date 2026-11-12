@@ -417,6 +417,14 @@ impl Slot {
         self.refused = None;
     }
 
+    /// Brings the next look of a closed slot forward to `now` (the device alarm rang); an open
+    /// one is left alone.
+    pub(crate) fn look_now(&mut self, now: Instant) {
+        if self.stream.is_none() {
+            self.next_try = self.next_try.min(now);
+        }
+    }
+
     /// Whether a closed slot should look for its device now; if so, the next look is
     /// [`RETRY_EVERY`] later.
     pub(crate) fn retry_due(&mut self, now: Instant) -> bool {
@@ -459,6 +467,29 @@ fn input_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_device_alarm_only_brings_the_next_look_forward() {
+        let ms = Duration::from_millis;
+        let now = Instant::now();
+        let (mixer, _handle) = Mixer::new(Vec::new(), 2);
+        let mut slot = Slot::new(Role::Output, "speakers", Feed::Bus(mixer), now);
+        // Without the alarm, as always: the first look at once, then one every second.
+        assert!(slot.retry_due(now));
+        assert!(!slot.retry_due(now + ms(10)));
+        assert!(!slot.retry_due(now + RETRY_EVERY.saturating_sub(ms(1))));
+        assert!(slot.retry_due(now + RETRY_EVERY));
+        // The alarm rings: the next look now, once, then the second again.
+        let rang = now + RETRY_EVERY + ms(100);
+        slot.look_now(rang);
+        assert!(slot.retry_due(rang));
+        assert!(!slot.retry_due(rang + ms(1)));
+        assert!(slot.retry_due(rang + RETRY_EVERY));
+        // A look that was due already stays due.
+        let late = rang + 3 * RETRY_EVERY;
+        slot.look_now(rang + ms(2500));
+        assert!(slot.retry_due(late));
+    }
 
     #[test]
     fn a_callback_thread_gets_realtime_priority_and_gives_it_back() {

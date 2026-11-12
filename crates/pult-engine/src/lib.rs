@@ -15,6 +15,7 @@
 //! An input can also be the sound of one program (process loopback, see `process`); the
 //! Windows calls for that live in `ffi`, the only module with `unsafe` code.
 
+mod alarm;
 mod convert;
 mod desk;
 #[cfg(windows)]
@@ -771,6 +772,8 @@ pub struct Running {
     /// The loudness meters of the buses; `None` for a route rendered without devices, whose
     /// meters the caller drains.
     _loudness: Option<LoudnessThread>,
+    /// Rings when an audio device comes or goes, so a lost one is looked for at once.
+    alarm: alarm::Alarm,
 }
 
 impl fmt::Debug for Running {
@@ -795,6 +798,12 @@ impl Running {
     pub fn supervise(&mut self) -> Vec<Change> {
         let now = Instant::now();
         let mut changes = Vec::new();
+        // A device came or went: every lost one looks now instead of at its next second.
+        if self.alarm.rang() {
+            for slot in &mut self.slots {
+                slot.look_now(now);
+            }
+        }
         for index in 0..self.slots.len() {
             if self.slots[index].newly_slow() {
                 changes.push(Change::Slow {
@@ -1312,6 +1321,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         xruns: Arc::new(Counter::default()),
         spec: spec.clone(),
         _loudness: LoudnessThread::start(meters),
+        alarm: alarm::Alarm::watching(),
     };
     running.apply_monitors();
     // Inputs first: a ring opens with the first callback of its output, and primes faster

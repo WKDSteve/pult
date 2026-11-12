@@ -1,10 +1,13 @@
 //! The Windows calls behind process loopback: listing processes, and capturing the sound of
-//! one process tree through a WASAPI loopback client (Windows 10 2004 or later).
+//! one process tree through a WASAPI loopback client (Windows 10 2004 or later). Also the
+//! device notifications that wake the supervisor when an audio device comes or goes.
 //!
 //! This is the only module of pult with `unsafe` code. Every block names the condition it
 //! relies on; everything outside works with the safe types below.
 
 use std::mem::size_of;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -18,6 +21,7 @@ use windows::Win32::Media::Audio::{
     AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
     AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, ActivateAudioInterfaceAsync,
     IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient,
+    IMMDeviceEnumerator, IMMNotificationClient, MMDeviceEnumerator,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX,
 };
@@ -26,7 +30,8 @@ use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
 };
 use windows::Win32::System::Com::{
-    BLOB, COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemAlloc, CoUninitialize,
+    BLOB, CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemAlloc,
+    CoUninitialize,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -402,5 +407,128 @@ impl Drop for LoopbackCapture {
     fn drop(&mut self) {
         // SAFETY: stopping a started client; failure leaves nothing to clean up.
         let _ = unsafe { self.client.Stop() };
+    }
+}
+
+/// The client Windows calls when an audio endpoint appears, goes or changes its state: it only
+/// sets the alarm. Windows forbids waiting in these callbacks (they run on its own threads and
+/// block the audio service), so nothing else happens here.
+mod notify {
+    // The code `implement` generates trips these pedantic lints.
+    #![allow(clippy::ref_as_ptr, clippy::inline_always)]
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::Media::Audio::{
+        DEVICE_STATE, EDataFlow, ERole, IMMNotificationClient, IMMNotificationClient_Impl,
+    };
+    use windows::core::{PCWSTR, Result, implement};
+
+    #[implement(IMMNotificationClient)]
+    pub(super) struct Notify(pub(super) Arc<AtomicBool>);
+
+    impl Notify_Impl {
+        fn ring(&self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    impl IMMNotificationClient_Impl for Notify_Impl {
+        fn OnDeviceStateChanged(&self, _: &PCWSTR, _: DEVICE_STATE) -> Result<()> {
+            self.ring();
+            Ok(())
+        }
+
+        fn OnDeviceAdded(&self, _: &PCWSTR) -> Result<()> {
+            self.ring();
+            Ok(())
+        }
+
+        fn OnDeviceRemoved(&self, _: &PCWSTR) -> Result<()> {
+            self.ring();
+            Ok(())
+        }
+
+        fn OnDefaultDeviceChanged(&self, _: EDataFlow, _: ERole, _: &PCWSTR) -> Result<()> {
+            Ok(())
+        }
+
+        fn OnPropertyValueChanged(&self, _: &PCWSTR, _: &PROPERTYKEY) -> Result<()> {
+            Ok(())
+        }
+    }
+}
+
+/// A thread that keeps a device notification client registered until it is dropped; the client
+/// sets the alarm it was given whenever an audio device appears, goes or changes its state.
+pub(crate) struct DeviceWatch {
+    stop: Option<mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl DeviceWatch {
+    /// Registers the client on a thread of its own (with COM of its own, so whatever the
+    /// calling thread did with COM does not matter).
+    ///
+    /// # Errors
+    ///
+    /// Why it could not be registered; then nothing watches and polling alone finds devices.
+    pub(crate) fn start(alarm: Arc<AtomicBool>) -> std::result::Result<Self, String> {
+        let (ready, readied) = mpsc::channel();
+        let (stop, stopped) = mpsc::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("pult device watch".to_owned())
+            .spawn(move || {
+                let registered = Com::init().and_then(|com| {
+                    // SAFETY: COM is initialised on this thread (`com` lives below).
+                    let enumerator: IMMDeviceEnumerator =
+                        unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
+                    let client: IMMNotificationClient = notify::Notify(alarm).into();
+                    // SAFETY: `client` is a live COM object; the enumerator holds a reference
+                    // until it is unregistered below, before either is dropped.
+                    unsafe { enumerator.RegisterEndpointNotificationCallback(&client)? };
+                    Ok((com, enumerator, client))
+                });
+                match registered {
+                    Ok((com, enumerator, client)) => {
+                        let _ = ready.send(Ok(()));
+                        // Until the route ends (or the sender is gone).
+                        let _ = stopped.recv();
+                        // SAFETY: the client was registered on this enumerator above.
+                        let _ =
+                            unsafe { enumerator.UnregisterEndpointNotificationCallback(&client) };
+                        drop(client);
+                        drop(enumerator);
+                        drop(com);
+                    }
+                    Err(err) => {
+                        let _ = ready.send(Err(err.message()));
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        match readied.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(())) => Ok(Self {
+                stop: Some(stop),
+                thread: Some(thread),
+            }),
+            Ok(Err(why)) => {
+                let _ = thread.join();
+                Err(why)
+            }
+            // Hung in COM: leave the thread, it ends with the process.
+            Err(_) => Err("registering for device notifications took too long".to_owned()),
+        }
+    }
+}
+
+impl Drop for DeviceWatch {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }

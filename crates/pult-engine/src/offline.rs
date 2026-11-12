@@ -128,6 +128,7 @@ impl Offline {
             xruns: Arc::new(Counter::default()),
             spec: spec.clone(),
             _loudness: None,
+            alarm: crate::alarm::Alarm::silent(),
         };
         running.apply_monitors();
         let outputs = spec.buses.iter().map(|_| Vec::new()).collect();
