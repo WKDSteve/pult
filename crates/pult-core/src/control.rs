@@ -67,6 +67,8 @@ pub enum Command {
     EqBand(usize, usize, BandChange),
     /// Changes one setting of the limiter of a bus.
     Limit(usize, LimitChange),
+    /// Makes a bus a monitor bus (the one solo acts on) or takes that away.
+    Monitor(usize, bool),
     /// Routes an input (first index) to a bus (second index), or takes it off.
     Route(usize, usize, bool),
     /// Sets the level of a crossing (input, bus) in dB, reached in so many milliseconds: what of
@@ -109,6 +111,7 @@ limit <bus> <dB>     its ceiling, -20 to 0 (limit A1 -3)
 limit <bus> look <ms>
                      its lookahead, 0 to 5: gentler, and the sound leaves that much later
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
+monitor <bus> on|off make a bus the monitor: solo acts only there, a talk bus keeps hearing all
 send <input> <bus> <dB>
                      the level of that crossing, -60 to 12 (send 2 B1 -6): a mix of its own
                      per bus; send <input> <bus> pre|post takes it before or after the fader
@@ -254,7 +257,25 @@ pub fn parse<S: AsRef<str>>(
             Ok(Command::Route(input, bus, on))
         }
         "send" => send(rest, names),
+        "monitor" => monitor(rest, names),
         other => error(format!("unknown command \"{other}\"; type help")),
+    }
+}
+
+/// `monitor <bus> on|off`; the bus may have several words.
+fn monitor<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let usage = "usage: monitor <bus> on|off";
+    let Some((switch, bus)) = rest.split_last() else {
+        return error(usage);
+    };
+    let on = match switch.to_ascii_lowercase().as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return error(usage),
+    };
+    match target(&bus.join(" "), names)? {
+        Target::Bus(index) => Ok(Command::Monitor(index, on)),
+        Target::Input(_) => error("monitor works on buses only"),
     }
 }
 
@@ -540,6 +561,14 @@ mod tests {
 
     fn bad(line: &str) -> String {
         parse(line, &INPUTS, &BUSES, &NO_LABELS).expect_err(line).0
+    }
+
+    #[test]
+    fn monitor_switches_a_bus() {
+        assert_eq!(ok("monitor B2 on"), Command::Monitor(1, true));
+        assert_eq!(ok("MONITOR a1 OFF"), Command::Monitor(0, false));
+        assert!(bad("monitor 2 on").contains("buses only"));
+        assert!(bad("monitor A1").contains("usage: monitor"));
     }
 
     #[test]

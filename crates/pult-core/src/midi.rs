@@ -276,7 +276,10 @@ impl Param {
                 return Err(format!("{target} is a word, which no control can say"));
             }
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit)
+            | Binding::Bus(
+                _,
+                BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor,
+            )
             | Binding::Route { .. }
             | Binding::SendPre { .. } => Self::Switch(binding),
             Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter) => {

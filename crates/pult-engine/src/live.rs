@@ -152,6 +152,7 @@ impl Running {
                 )])
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
+            Command::Monitor(bus, on) => self.monitor(*bus, *on),
             Command::Send(input, bus, gain_db, ramp_ms) => {
                 self.send(*input, *bus, *gain_db, *ramp_ms)
             }
@@ -382,6 +383,42 @@ impl Running {
             self.target_label(Target::Input(input)),
             self.buses[bus].name
         )])
+    }
+
+    /// Makes `bus` a monitor bus or takes that away; solo then acts where [`Self::apply_monitors`]
+    /// says.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such bus.
+    pub fn monitor(&mut self, bus: usize, on: bool) -> Result<Vec<String>, String> {
+        let Some(spec) = self.spec.buses.get_mut(bus) else {
+            return Err(format!("there is no bus {}", bus + 1));
+        };
+        spec.monitor = on;
+        self.apply_monitors();
+        let name = &self.buses[bus].name;
+        let any = self.spec.buses.iter().any(|b| b.monitor);
+        Ok(vec![if on {
+            format!("{name} is the monitor: solo acts only on monitor buses")
+        } else if any {
+            format!("{name} is no monitor bus")
+        } else {
+            format!("{name} is no monitor bus; without one, solo acts on every bus")
+        }])
+    }
+
+    /// Where solo acts: on every bus while no bus is a monitor bus, else only on the monitor
+    /// buses (a talk bus keeps hearing every source).
+    pub fn apply_monitors(&self) {
+        let any = self.spec.buses.iter().any(|bus| bus.monitor);
+        for (running, spec) in self.buses.iter().zip(&self.spec.buses) {
+            running
+                .handle
+                .controls
+                .solo_here
+                .store(!any || spec.monitor, Ordering::Release);
+        }
     }
 
     /// The ring of `input` on `bus`.

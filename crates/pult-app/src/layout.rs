@@ -202,6 +202,12 @@ pub fn bus_strip(index: usize) -> Element {
             Binding::Bus(index, BusParam::Limit),
         ),
         Element::toggle(
+            Zone::Dynamics,
+            "MON",
+            Role::Assign,
+            Binding::Bus(index, BusParam::Monitor),
+        ),
+        Element::toggle(
             Zone::MuteSolo,
             "MUTE",
             Role::Mute,
@@ -325,6 +331,7 @@ mod tests {
             [
                 "bus/A1/eq",
                 "bus/A1/limit",
+                "bus/A1/monitor",
                 "bus/A1/mute",
                 "bus/A1/gain",
                 "bus/A1/meter",

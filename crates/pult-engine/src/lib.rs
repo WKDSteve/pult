@@ -374,6 +374,7 @@ impl InputSpec {
 
 /// One bus of a route: a mix played on one output device.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // Switches of a console, each on its own.
 pub struct BusSpec {
     /// Short name shown in the status line and the log (`A1`).
     pub name: String,
@@ -395,6 +396,8 @@ pub struct BusSpec {
     pub limit_db: f32,
     /// The lookahead of its limiter in milliseconds: this much later the sound leaves the bus.
     pub limit_lookahead_ms: f32,
+    /// A monitor bus: solo acts on it, and, while the route has one, only on such buses.
+    pub monitor: bool,
 }
 
 impl BusSpec {
@@ -412,6 +415,7 @@ impl BusSpec {
             limit_on: true,
             limit_db: DEFAULT_CEILING_DB,
             limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
+            monitor: false,
         }
     }
 }
@@ -1224,6 +1228,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         xruns: Arc::new(Counter::default()),
         spec: spec.clone(),
     };
+    running.apply_monitors();
     // Inputs first: a ring opens with the first callback of its output, and primes faster
     // when its input already delivers.
     for (index, opening) in opening.iter().enumerate() {

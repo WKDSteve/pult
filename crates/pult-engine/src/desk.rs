@@ -222,6 +222,7 @@ impl Desk for EngineDesk {
                 limit_on: spec.limit_on,
                 limit_db: spec.limit_db,
                 limit_lookahead_ms: spec.limit_lookahead_ms,
+                monitor: spec.monitor,
                 limited_db: bus.handle.stats.limited_db.take(),
                 present: bus.present,
                 peak_db: peak_db(bus.handle.stats.peak.take()),
@@ -319,6 +320,7 @@ impl Desk for EngineDesk {
                 Ok(lines)
             }
             Action::Route { input, bus, on } => self.running.route(input, bus, on),
+            Action::BusMonitor { bus, on } => self.running.monitor(bus, on),
             Action::Send {
                 input,
                 bus,

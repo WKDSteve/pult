@@ -159,6 +159,8 @@ pub struct BusView {
     pub limit_db: f32,
     /// The lookahead of its limiter in milliseconds.
     pub limit_lookahead_ms: f32,
+    /// A monitor bus: solo acts on it (and, while the route has one, only on such buses).
+    pub monitor: bool,
     /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
     pub limited_db: f32,
     /// Whether the device is there; false while it is gone.
@@ -298,6 +300,13 @@ pub enum Action {
         bus: usize,
         /// The new setting.
         change: LimitChange,
+    },
+    /// Makes a bus a monitor bus or takes that away.
+    BusMonitor {
+        /// Bus index.
+        bus: usize,
+        /// Monitor or not.
+        on: bool,
     },
     /// Routes an input to a bus or takes it off (a matrix button).
     Route {
@@ -451,6 +460,7 @@ impl FakeDesk {
             limit_on: true,
             limit_db: DEFAULT_CEILING_DB,
             limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
+            monitor: false,
             limited_db: 0.0,
             present: true,
             peak_db: None,
@@ -512,6 +522,18 @@ impl FakeDesk {
             0.0
         };
         -24.0 + 8.0 * phase.sin() + beat
+    }
+
+    /// Makes `bus` a monitor bus or takes that away.
+    fn set_monitor(&mut self, bus: usize, on: bool) -> Result<Vec<String>, String> {
+        let bus = self.bus_mut(bus)?;
+        bus.monitor = on;
+        let state = if on {
+            "is a monitor bus"
+        } else {
+            "is no monitor bus"
+        };
+        Ok(vec![format!("{} {state}", bus.name)])
     }
 
     /// Sets the level and/or the point of the send of `input` to `bus`.
@@ -798,6 +820,7 @@ impl Desk for FakeDesk {
             Action::BusEq { bus, on } => self.set_eq(bus, on),
             Action::BusEqBand { bus, band, change } => self.set_band(bus, band, change),
             Action::BusLimit { bus, change } => self.set_limit(bus, change),
+            Action::BusMonitor { bus, on } => self.set_monitor(bus, on),
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
             Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
             Action::Route { input, bus, on } => {

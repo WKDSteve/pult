@@ -145,6 +145,9 @@ pub struct BusControls {
     pub eq: EqControls,
     /// The limiter, behind the gain; off until a route switches it on.
     pub limiter: LimiterControls,
+    /// Whether solo acts on this bus: on every bus while the route has no monitor bus, else
+    /// only on the monitor buses, so a talk bus keeps hearing every source. True at first.
+    pub solo_here: AtomicBool,
 }
 
 impl Default for BusControls {
@@ -155,6 +158,7 @@ impl Default for BusControls {
             fade_ms: AtomicU32::new(0),
             eq: EqControls::default(),
             limiter: LimiterControls::default(),
+            solo_here: AtomicBool::new(true),
         }
     }
 }
@@ -450,12 +454,13 @@ impl MixerInput {
 
     /// Resamples `frames` output frames from the ring, chunk by chunk, and adds them into
     /// `out`.
-    fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize) {
+    fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize, solo_here: bool) {
         let Some(routed) = self.follow_routing() else {
             return;
         };
+        // Soloed out only where solo acts: a talk bus beside a monitor bus hears every source.
         let silent = self.controls.muted.load(Ordering::Acquire)
-            || self.controls.soloed_out.load(Ordering::Acquire);
+            || (solo_here && self.controls.soloed_out.load(Ordering::Acquire));
         let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
         let aim = self.crossing_aim(fade_ms);
         self.gain.follow(aim, routed && !silent, fade_ms);
@@ -698,8 +703,9 @@ impl Mixer {
             }
         }
         let frames = out.len() / self.out_channels;
+        let solo_here = self.controls.solo_here.load(Ordering::Acquire);
         for input in &mut self.inputs {
-            input.mix_into(out, self.out_channels, frames);
+            input.mix_into(out, self.out_channels, frames, solo_here);
         }
         self.eq.process(&self.controls.eq, out, self.out_channels);
         let sounding = !self.controls.muted.load(Ordering::Acquire);

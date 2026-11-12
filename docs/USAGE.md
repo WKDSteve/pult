@@ -220,6 +220,10 @@ pult run --profile meinprofil.toml --log abend.csv
   zur Grundstellung. Frequenz und Breite eines Bandes gehen oktavweise.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
   ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
+- **Monitor-Bus:** `monitor = true` an einem Bus macht ihn zum Abhör-Bus. Solo wirkt dann nur dort; ein Gesprächs- oder
+  Stream-Bus hört weiter alle Quellen, auch während man auf dem Kopfhörer eine Quelle allein abhört. Ohne Monitor-Bus
+  wirkt Solo wie bisher auf allen Bussen. Während des Laufs `monitor B1 on|off`, im Fenster der Schalter **MON** am Bus,
+  von außen `bus/<name>/monitor`.
 - **Sends (Pegel je Kreuzung):** Jeder Bus bekommt von jedem Eingang einen eigenen Pegel, wie die Aux-Wege großer Pulte:
   `sends = [{ bus = "B1", gain_db = -6, pre = true }]` am Eingang, nur für die Busse, die vom Standard (0 dB, nach dem
   Fader) abweichen. Nach dem Fader (`post`) wirkt der Eingangs-Fader zusätzlich; vor dem Fader (`pre = true`) bleibt der

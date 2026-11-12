@@ -428,6 +428,11 @@ impl Op {
                 OpValue::Switch(*on),
                 0,
             ),
+            Command::Monitor(to, on) => set(
+                format!("bus/{}/monitor", bus(*to)?),
+                OpValue::Switch(*on),
+                0,
+            ),
             Command::Send(input, to, db, ramp_ms) => set(
                 format!("send/{}/{}", input + 1, bus(*to)?),
                 OpValue::Number(*db),
@@ -552,13 +557,13 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         }
         (
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
             | Binding::Route { .. },
             OpValue::Switch(on),
         ) => Ok(Value::Switch(*on)),
         (
             Binding::Input(_, InputParam::Mute | InputParam::Solo)
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit)
+            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
             | Binding::Route { .. },
             _,
         ) => Err(format!("{address} takes true or false")),

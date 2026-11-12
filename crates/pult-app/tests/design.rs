@@ -113,6 +113,7 @@ fn showcase(t: f64) -> MixerView {
             limit_on: j != 1,
             limit_db: -0.3,
             limit_lookahead_ms: 1.0,
+            monitor: false,
             limited_db: if j == 0 { 2.5 } else { 0.0 },
             present: true,
             peak_db: Some((-10.0 + gain_db + wobble(seed, t) * 6.0).min(0.0)),

@@ -51,6 +51,8 @@ pub enum BusParam {
     LimitCeiling,
     /// The lookahead of its limiter.
     LimitLookahead,
+    /// Whether it is a monitor bus, the one solo acts on.
+    Monitor,
     /// Its peak, read only.
     Meter,
 }
@@ -239,6 +241,7 @@ impl Binding {
                     "mute" => BusParam::Mute,
                     "eq" => BusParam::Eq,
                     "limit" => BusParam::Limit,
+                    "monitor" => BusParam::Monitor,
                     "meter" => BusParam::Meter,
                     other => return Err(AddressError::NoParam(other.to_owned())),
                 };
@@ -289,6 +292,7 @@ impl Binding {
                     BusParam::Limit => "limit",
                     BusParam::LimitCeiling => "limit/ceiling",
                     BusParam::LimitLookahead => "limit/lookahead",
+                    BusParam::Monitor => "monitor",
                     BusParam::Meter => "meter",
                 };
                 format!("bus/{}/{param}", bus(index)?)
@@ -333,6 +337,7 @@ impl Binding {
                     BusParam::Limit => Value::Switch(bus.limit_on),
                     BusParam::LimitCeiling => Value::Ceiling(bus.limit_db),
                     BusParam::LimitLookahead => Value::Lookahead(bus.limit_lookahead_ms),
+                    BusParam::Monitor => Value::Switch(bus.monitor),
                     BusParam::Meter => Value::Peak(bus.peak_db),
                 }
             }
@@ -388,6 +393,9 @@ impl Binding {
                 Action::BusMute { bus, muted }
             }
             (Self::Bus(bus, BusParam::Eq), Value::Switch(on)) => Action::BusEq { bus, on },
+            (Self::Bus(bus, BusParam::Monitor), Value::Switch(on)) => {
+                Action::BusMonitor { bus, on }
+            }
             (Self::Bus(bus, BusParam::EqBand(band, param)), value) => {
                 let change = match (param, value) {
                     (BandParam::Kind, Value::Kind(kind)) => BandChange::Kind(kind),
@@ -448,6 +456,7 @@ impl Binding {
                 )
             }
             Self::Bus(index, BusParam::Limit) => format!("{} limiter", bus(index)),
+            Self::Bus(index, BusParam::Monitor) => format!("{} monitor", bus(index)),
             Self::Bus(index, BusParam::LimitCeiling) => format!("{} limiter ceiling", bus(index)),
             Self::Bus(index, BusParam::LimitLookahead) => {
                 format!("{} limiter lookahead", bus(index))

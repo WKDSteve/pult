@@ -14,6 +14,7 @@
 //!                              # optional: the level of a crossing (an aux send); pre = before
 //!                              # the fader, so it keeps its level when the fader moves
 //! eq_on = true                 # optional: false switches the equalizer off, keeping its bands
+//! monitor = false              # optional: the monitor bus, the only one solo acts on
 //! limit_on = true              # optional: false switches the limiter off
 //! limit_db = -0.3              # optional: the ceiling of the limiter, -20 to 0
 //! limit_lookahead_ms = 1       # optional: how much later the sound leaves, 0 to 5
@@ -165,6 +166,8 @@ struct BusEntry {
     limit_on: Option<bool>,
     limit_db: Option<f32>,
     limit_lookahead_ms: Option<f32>,
+    #[serde(default)]
+    monitor: bool,
     #[serde(default)]
     eq: Vec<EqEntry>,
 }
@@ -501,6 +504,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             limit_on: entry.limit_on.unwrap_or(true),
             limit_db,
             limit_lookahead_ms,
+            monitor: entry.monitor,
         });
     }
     Ok(buses)
@@ -640,6 +644,9 @@ pub fn render(spec: &RouteSpec) -> String {
         );
         if !bus.eq_on {
             text.push_str("eq_on = false\n");
+        }
+        if bus.monitor {
+            text.push_str("monitor = true\n");
         }
         render_limit(&mut text, bus);
         // Only the bands that are not as they start: most buses have none.
@@ -831,6 +838,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
             bus.limit_lookahead_ms,
             DEFAULT_LOOKAHEAD_MS,
         );
+        set_switch(table, "monitor", bus.monitor);
         set_bands(table, &bus.eq)?;
     }
 

@@ -82,6 +82,7 @@ impl Offline {
             xruns: Arc::new(Counter::default()),
             spec: spec.clone(),
         };
+        running.apply_monitors();
         let outputs = spec.buses.iter().map(|_| Vec::new()).collect();
         Ok(Self {
             running,
