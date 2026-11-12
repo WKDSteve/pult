@@ -317,6 +317,11 @@ impl Running {
         };
         let label = self.target_label(Target::Input(input));
         let bus_name = self.buses[bus].name.clone();
+        if on && self.spec.buses[bus].minus == Some(input) {
+            return Err(format!(
+                "{bus_name} is the mix-minus of {label}: it hears everything but {label}"
+            ));
+        }
         if !on && route.is_routed() && running.routes.iter().filter(|r| r.is_routed()).count() == 1
         {
             return Err(format!("{label} would feed no bus; mute it instead"));

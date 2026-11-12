@@ -223,6 +223,7 @@ impl Desk for EngineDesk {
                 limit_db: spec.limit_db,
                 limit_lookahead_ms: spec.limit_lookahead_ms,
                 monitor: spec.monitor,
+                minus: spec.minus,
                 limited_db: bus.handle.stats.limited_db.take(),
                 present: bus.present,
                 peak_db: peak_db(bus.handle.stats.peak.take()),

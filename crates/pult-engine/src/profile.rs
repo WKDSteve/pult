@@ -15,6 +15,8 @@
 //!                              # the fader, so it keeps its level when the fader moves
 //! eq_on = true                 # optional: false switches the equalizer off, keeping its bands
 //! monitor = false              # optional: the monitor bus, the only one solo acts on
+//! minus = 2                    # optional: a mix-minus (N-1) bus for input 2, a caller: it gets
+//!                              # everything but that input, which can never be routed to it
 //! limit_on = true              # optional: false switches the limiter off
 //! limit_db = -0.3              # optional: the ceiling of the limiter, -20 to 0
 //! limit_lookahead_ms = 1       # optional: how much later the sound leaves, 0 to 5
@@ -168,6 +170,7 @@ struct BusEntry {
     limit_lookahead_ms: Option<f32>,
     #[serde(default)]
     monitor: bool,
+    minus: Option<usize>,
     #[serde(default)]
     eq: Vec<EqEntry>,
 }
@@ -309,6 +312,12 @@ fn scene_input(
                 routed.push(bus);
             }
             routed.sort_unstable();
+            if let Some(&bus) = routed.iter().find(|&&bus| buses[bus].minus == Some(index)) {
+                return fail(format!(
+                    "{place} routes the input to {}, its mix-minus bus",
+                    buses[bus].name
+                ));
+            }
             Some(routed)
         }
         None => None,
@@ -505,6 +514,8 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             limit_db,
             limit_lookahead_ms,
             monitor: entry.monitor,
+            // A number from 1 here; checked against the inputs once they are read.
+            minus: entry.minus,
         });
     }
     Ok(buses)
@@ -586,6 +597,8 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         });
     }
 
+    let buses = minus_buses(buses, &inputs)?;
+
     let mut scenes: Vec<SceneSpec> = Vec::with_capacity(file.scene.len());
     for entry in file.scene {
         let scene = scene(entry, inputs.len(), &buses)?;
@@ -647,6 +660,9 @@ pub fn render(spec: &RouteSpec) -> String {
         }
         if bus.monitor {
             text.push_str("monitor = true\n");
+        }
+        if let Some(input) = bus.minus {
+            let _ = writeln!(text, "minus = {}", input + 1);
         }
         render_limit(&mut text, bus);
         // Only the bands that are not as they start: most buses have none.
@@ -751,6 +767,33 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
     }
 }
 
+/// The buses with their `minus` from a number from 1 to an index, checked: an input that is
+/// there, and that does not feed the bus it is the caller of.
+fn minus_buses(
+    mut buses: Vec<BusSpec>,
+    inputs: &[InputSpec],
+) -> Result<Vec<BusSpec>, ProfileError> {
+    for (index, bus) in buses.iter_mut().enumerate() {
+        let Some(number) = bus.minus else { continue };
+        if number == 0 || number > inputs.len() {
+            return fail(format!(
+                "bus {}: minus = {number} names no input (inputs are 1 to {})",
+                bus.name,
+                inputs.len()
+            ));
+        }
+        let input = number - 1;
+        if inputs[input].buses.contains(&index) {
+            return fail(format!(
+                "bus {} is the mix-minus of input {number}, which must not feed it",
+                bus.name
+            ));
+        }
+        bus.minus = Some(input);
+    }
+    Ok(buses)
+}
+
 /// Sends as the inline tables of a profile: `{ bus = "A1", gain_db = -6, pre = true }, ...`.
 fn render_sends(spec: &RouteSpec, sends: &[SendSpec]) -> String {
     sends
@@ -839,6 +882,17 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
             DEFAULT_LOOKAHEAD_MS,
         );
         set_switch(table, "monitor", bus.monitor);
+        match bus.minus {
+            Some(input) => {
+                let number = i64::try_from(input + 1).unwrap_or(i64::MAX);
+                if table.get("minus").and_then(Item::as_integer) != Some(number) {
+                    set(table, "minus", number.into());
+                }
+            }
+            None => {
+                table.remove("minus");
+            }
+        }
         set_bands(table, &bus.eq)?;
     }
 

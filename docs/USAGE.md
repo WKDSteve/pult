@@ -220,6 +220,21 @@ pult run --profile meinprofil.toml --log abend.csv
   zur Grundstellung. Frequenz und Breite eines Bandes gehen oktavweise.
 - **Gemutet:** Ein gemuteter Eingang oder Bus spielt Stille, sein Puffer läuft aber weiter, damit er beim Einschalten
   ohne Versatz einsetzt. Umschalten geht auch während des Laufs (siehe 7.).
+- **Mix-Minus (N-1):** Ein Bus für einen Anrufer bekommt alles außer dessen eigener Stimme: `minus = 2` am Bus nennt den
+  Eingang des Anrufers (Nummer wie in Szenen). Dieser Eingang kann den Bus nie speisen: Das Profil lehnt `buses` und
+  Szenen ab, die ihn dorthin legen, `route` ebenso, und die Matrix zeigt an der Kreuzung **N-1** statt eines Knopfs. Mehrere
+  Anrufer: je ein Bus mit seinem `minus`.
+
+  ```toml
+  [[bus]]
+  name = "Call"
+  device = "CABLE Input"     # das Mikrofon, das Discord hört
+  minus = 2                  # Discord ist Eingang 2
+
+  [[input]]
+  process = "Discord"
+  buses = ["A1"]             # nie "Call"
+  ```
 - **Monitor-Bus:** `monitor = true` an einem Bus macht ihn zum Abhör-Bus. Solo wirkt dann nur dort; ein Gesprächs- oder
   Stream-Bus hört weiter alle Quellen, auch während man auf dem Kopfhörer eine Quelle allein abhört. Ohne Monitor-Bus
   wirkt Solo wie bisher auf allen Bussen. Während des Laufs `monitor B1 on|off`, im Fenster der Schalter **MON** am Bus,

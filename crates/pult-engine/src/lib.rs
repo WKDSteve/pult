@@ -398,6 +398,9 @@ pub struct BusSpec {
     pub limit_lookahead_ms: f32,
     /// A monitor bus: solo acts on it, and, while the route has one, only on such buses.
     pub monitor: bool,
+    /// A mix-minus (N-1) bus: the input it is for (index into [`RouteSpec::inputs`]) never goes
+    /// into its sum, so a caller hears everything but their own voice.
+    pub minus: Option<usize>,
 }
 
 impl BusSpec {
@@ -416,6 +419,7 @@ impl BusSpec {
             limit_db: DEFAULT_CEILING_DB,
             limit_lookahead_ms: DEFAULT_LOOKAHEAD_MS,
             monitor: false,
+            minus: None,
         }
     }
 }

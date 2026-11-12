@@ -114,6 +114,10 @@ fn grid(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
                 .line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], (1.0, p.line));
         }
         for column in 0..view.buses.len() {
+            if view.buses[column].minus == Some(row) {
+                mix_minus(ui, cell(row, column));
+                continue;
+            }
             let route = Binding::Route {
                 input: row,
                 bus: column,
@@ -220,6 +224,19 @@ fn row_head(ui: &Ui, rect: Rect, row: usize, input: &InputView) {
         vec2(BAR_SIZE[0], BAR_SIZE[1]),
     );
     crate::widgets::meter::level_bar(painter, bar, input.peak_db);
+}
+
+/// The crossing of a caller and their own mix-minus bus: never routed, so no button, only the
+/// mark that says why.
+fn mix_minus(ui: &Ui, rect: Rect) {
+    let p = &Theme::current().palette;
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        "N-1",
+        Theme::label_font(11.0),
+        p.text_faint,
+    );
 }
 
 /// The send of a crosspoint that is on: PRE at its left, the level dial at its right.
