@@ -37,18 +37,36 @@ def locked_registry_packages(lock_text):
             yield name.group(1), version.group(1)
 
 
-def published(name, version):
-    """The moment a version was published (UTC), from the crates.io API."""
+# Waits after an answer 429 (too many requests), in seconds, when crates.io names none: about four minutes in all.
+# A run asks for every crate of the lock file, one a second, and crates.io can still ask for a pause minutes into it.
+BACKOFF = (10, 20, 40, 60, 60, 60)
+# The longest pause taken from a Retry-After header.
+MAX_RETRY_AFTER = 120
+
+
+def retry_after(err, default):
+    """The pause crates.io asks for (Retry-After, in seconds) within MAX_RETRY_AFTER, else `default`."""
+    value = (err.headers or {}).get("Retry-After") if hasattr(err, "headers") else None
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(seconds, MAX_RETRY_AFTER))
+
+
+def published(name, version, sleep=time.sleep):
+    """The moment a version was published (UTC), from the crates.io API. An answer 429 is waited out (its
+    Retry-After, else BACKOFF) and asked again; anything else, or 429 after the last pause, is raised."""
     url = f"https://crates.io/api/v1/crates/{name}/{version}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    for attempt in range(4):
+    for attempt in range(len(BACKOFF) + 1):
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 text = json.load(response)["version"]["created_at"]
             return datetime.fromisoformat(text.replace("Z", "+00:00"))
         except urllib.error.HTTPError as err:
-            if err.code == 429 and attempt < 3:
-                time.sleep(5 * (attempt + 1))
+            if err.code == 429 and attempt < len(BACKOFF):
+                sleep(retry_after(err, BACKOFF[attempt]))
                 continue
             raise
     raise RuntimeError("unreachable")
