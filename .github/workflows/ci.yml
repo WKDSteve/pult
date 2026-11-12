@@ -110,13 +110,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           repository: WKDSteve/testing.nvim
-          ref: 78154eb0a694ebf85cb10f75a5bfa0641e3200c7
+          ref: d9d2d35f06b15c55774fcc4ea9d0d889a2fdb4bf
           path: .deps/testing.nvim
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
         with:
           repository: WKDSteve/lib.nvim
-          ref: e2653cad3479a976e610049fe91fde2116810ae3
+          ref: 2baab0efd90c86505412bd6f3f188b72e37ec6b9
           path: .deps/lib.nvim
           persist-credentials: false
       - run: nvim -n -i NONE --headless -u NONE -l .deps/testing.nvim/scripts/testing.lua sheets run --all --root . --engine browser --strict
