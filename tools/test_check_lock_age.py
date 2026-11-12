@@ -39,7 +39,7 @@ class Main(unittest.TestCase):
             path = os.path.join(folder, "Cargo.lock")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(LOCK)
-            argv = ["check-lock-age.py", "--lock", path, "--min-days", "7"]
+            argv = ["check-lock-age.py", "--lock", path, "--min-days", "7", "--cache", os.path.join(folder, "c.json")]
             with mock.patch.object(sys, "argv", argv), mock.patch.object(
                 age_check, "published", side_effect=published
             ), mock.patch.object(age_check.time, "sleep"), mock.patch("builtins.print"):
@@ -76,6 +76,50 @@ class Published(unittest.TestCase):
         with mock.patch.object(age_check.urllib.request, "urlopen", return_value=response):
             moment = age_check.published("smallvec", "1.16.3")
         self.assertEqual(moment, datetime(2026, 10, 10, 2, 25, 27, 123456, tzinfo=timezone.utc))
+
+
+class Cache(unittest.TestCase):
+    def run_twice(self, first, second):
+        """Two runs on one cache file; what each asked crates.io for."""
+        with tempfile.TemporaryDirectory() as folder:
+            lock = os.path.join(folder, "Cargo.lock")
+            with open(lock, "w", encoding="utf-8") as handle:
+                handle.write(LOCK)
+            argv = ["x", "--lock", lock, "--cache", os.path.join(folder, "sub", "c.json")]
+            results = []
+            for published in (first, second):
+                asked = []
+
+                def ask(name, version, published=published, asked=asked):
+                    asked.append(name)
+                    return published(name, version)
+
+                with mock.patch.object(sys, "argv", argv), mock.patch.object(age_check, "published", side_effect=ask),                         mock.patch.object(age_check.time, "sleep"), mock.patch("builtins.print"):
+                    results.append((age_check.main(), asked))
+            return results
+
+    def test_a_known_date_is_not_asked_again(self):
+        old = lambda name, version: datetime.now(timezone.utc) - timedelta(days=30)  # noqa: E731
+        never = lambda name, version: (_ for _ in ()).throw(AssertionError("asked again"))  # noqa: E731
+        (first, asked_first), (second, asked_second) = self.run_twice(old, never)
+        self.assertEqual((first, asked_first), (0, ["serde"]))
+        self.assertEqual((second, asked_second), (0, []))
+
+    def test_a_cached_young_version_is_still_too_young(self):
+        young = lambda name, version: datetime.now(timezone.utc) - timedelta(days=1)  # noqa: E731
+        never = lambda name, version: (_ for _ in ()).throw(AssertionError("asked again"))  # noqa: E731
+        (first, _), (second, asked) = self.run_twice(young, never)
+        self.assertEqual((first, second, asked), (1, 1, []))
+
+    def test_a_broken_cache_file_is_an_empty_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "c.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("{not json")
+            self.assertEqual(age_check.load_cache(path), {})
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('["a list"]')
+            self.assertEqual(age_check.load_cache(path), {})
 
 
 def too_many(retry_after=None):

@@ -12,11 +12,15 @@ Exit 0: every version is old enough. Exit 1: the young ones are listed;
 take an older version with `cargo update -p <crate> --precise <version>`.
 Exit 2: the check itself could not run (network, API); that is not a pass.
 
-crates.io asks for one request per second and an identifying User-Agent.
+crates.io asks for one request per second and an identifying User-Agent. When a publication date has been read
+once, it is kept in a cache file (it never changes): `--cache`, else `$LOCK_AGE_CACHE`, else
+`~/.cache/lock-age/crates-io.json`. A run then only asks for the versions it has not seen, which keeps a runner that
+checks several repositories below the rate limit of crates.io.
 """
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -72,6 +76,46 @@ def published(name, version, sleep=time.sleep):
     raise RuntimeError("unreachable")
 
 
+def default_cache():
+    """Where the publication dates are kept between runs."""
+    return os.environ.get("LOCK_AGE_CACHE") or os.path.join(os.path.expanduser("~"), ".cache", "lock-age", "crates-io.json")
+
+
+def load_cache(path):
+    """The cache as {"name version": "ISO time"}; empty when missing or unreadable (it is only a cache)."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def save_cache(path, cache):
+    """Writes the cache through a temporary file, so a run that is cut off leaves the old one."""
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        temp = f"{path}.{os.getpid()}.tmp"
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(cache, handle, sort_keys=True)
+        os.replace(temp, path)
+    except OSError as err:
+        print(f"cache not written ({path}): {err}", file=sys.stderr)
+
+
+def published_cached(name, version, cache, ask=None):
+    """The publication date from the cache, or asked (and then kept)."""
+    key = f"{name} {version}"
+    if key in cache:
+        try:
+            return datetime.fromisoformat(cache[key]), False
+        except ValueError:
+            pass
+    moment = (ask or published)(name, version)
+    cache[key] = moment.isoformat()
+    return moment, True
+
+
 def too_young(age, min_days):
     """Is a version of this age (the time since it was published) younger than `min_days` days?
 
@@ -84,24 +128,33 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--min-days", type=int, default=7)
     parser.add_argument("--lock", default="Cargo.lock")
+    parser.add_argument("--cache", default=None, help="file of known publication dates")
     args = parser.parse_args()
+    cache_path = args.cache or default_cache()
+    cache = load_cache(cache_path)
 
     with open(args.lock, encoding="utf-8") as handle:
         packages = sorted(set(locked_registry_packages(handle.read())))
     now = datetime.now(timezone.utc)
 
     young = []
+    asked = 0
     for name, version in packages:
         try:
-            age = now - published(name, version)
+            moment, fresh = published_cached(name, version, cache)
         except Exception as err:  # noqa: BLE001 - any failure means "not checked"
+            save_cache(cache_path, cache)
             print(f"cannot check {name} {version}: {err}", file=sys.stderr)
             return 2
+        age = now - moment
         if too_young(age, args.min_days):
             young.append((age.total_seconds() / 86400, name, version))
-        time.sleep(1.05)
+        if fresh:
+            asked += 1
+            time.sleep(1.05)
+    save_cache(cache_path, cache)
 
-    print(f"{len(packages)} registry crates checked, minimum age {args.min_days} days")
+    print(f"{len(packages)} registry crates checked ({asked} asked, the rest from the cache), minimum age {args.min_days} days")
     for age, name, version in sorted(young):
         print(f"  too young: {name} {version} ({age:.1f} days)")
     return 1 if young else 0
