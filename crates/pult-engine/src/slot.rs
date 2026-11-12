@@ -30,6 +30,9 @@ pub(crate) const STALL_AFTER: Duration = Duration::from_secs(2);
 /// How often a lost device is looked for again.
 pub(crate) const RETRY_EVERY: Duration = Duration::from_secs(1);
 
+/// The least time between two looks for a lost device that the device alarm brings forward.
+pub(crate) const EARLY_GAP: Duration = Duration::from_millis(100);
+
 /// How long a dropped stream may take to hand its feed back. Dropping a stream joins its
 /// callback thread, so the feed is normally there at once.
 const RECLAIM_TIMEOUT: Duration = Duration::from_secs(1);
@@ -417,11 +420,18 @@ impl Slot {
         self.refused = None;
     }
 
-    /// Brings the next look of a closed slot forward to `now` (the device alarm rang); an open
-    /// one is left alone.
+    /// Brings the next look of a closed slot forward to `now` (the device alarm rang), but no
+    /// closer than [`EARLY_GAP`] to the last one: a flood of notifications (a device that keeps
+    /// changing its state) must not have the control thread enumerate devices on every tick. An
+    /// open slot is left alone.
     pub(crate) fn look_now(&mut self, now: Instant) {
         if self.stream.is_none() {
-            self.next_try = self.next_try.min(now);
+            // The last look was RETRY_EVERY before the next one.
+            let earliest = self
+                .next_try
+                .checked_sub(RETRY_EVERY.saturating_sub(EARLY_GAP))
+                .unwrap_or(now);
+            self.next_try = self.next_try.min(now.max(earliest));
         }
     }
 
@@ -483,6 +493,12 @@ mod tests {
         let rang = now + RETRY_EVERY + ms(100);
         slot.look_now(rang);
         assert!(slot.retry_due(rang));
+        assert!(!slot.retry_due(rang + ms(1)));
+        // A flood of rings: at most one early look every EARLY_GAP, none lost.
+        slot.look_now(rang + ms(1));
+        assert!(!slot.retry_due(rang + ms(50)));
+        assert!(slot.retry_due(rang + EARLY_GAP));
+        let rang = rang + EARLY_GAP;
         assert!(!slot.retry_due(rang + ms(1)));
         assert!(slot.retry_due(rang + RETRY_EVERY));
         // A look that was due already stays due.
