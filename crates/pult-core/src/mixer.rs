@@ -553,8 +553,11 @@ impl MixerInput {
             ms = ms.max(fade_ms.max(MIN_RAMP_MS));
         }
         // A ramp that is under way keeps the time it has left: a send that moves while the fader
-        // glides must not bring the fader to its goal at once.
-        ms = ms.max(self.gain.ramp.left_ms());
+        // glides must not bring the fader to its goal at once. A fader that moves itself says
+        // its own time: a hand on it during a long blend is followed at once.
+        if fader == self.seen_fader {
+            ms = ms.max(self.gain.ramp.left_ms());
+        }
         let base = if pre { 1.0 } else { fader.value() };
         self.seen_fader = fader;
         self.seen_send = send;
@@ -1141,6 +1144,21 @@ mod tests {
         assert!(
             (out[out.len() - 1] - 0.05).abs() < 2e-3,
             "arrived: {}",
+            out[out.len() - 1]
+        );
+    }
+
+    #[test]
+    fn a_fader_moved_during_a_long_ramp_is_followed_at_once() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        handle.controls.gain.ramp_to(0.2, 2000);
+        record(&mut mixer, &mut capture, 0.5, 10);
+        // A hand on the fader: no time given, so the shortest ramp, not the 1.9 s left.
+        handle.controls.gain.store(0.8);
+        let out = record(&mut mixer, &mut capture, 0.5, 3);
+        assert!(
+            (out[out.len() - 1] - 0.4).abs() < 2e-3,
+            "there at once: {}",
             out[out.len() - 1]
         );
     }
