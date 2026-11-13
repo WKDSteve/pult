@@ -43,6 +43,27 @@ pub struct MixerView {
     pub scenes: Vec<String>,
     /// The MIDI controller, where someone runs one for this desk.
     pub midi: Option<crate::midi::MidiStatus>,
+    /// Someone talks: the talkback microphones are open and the monitor buses dimmed.
+    pub talk: bool,
+}
+
+/// Range of the dim level of a bus in dB: how far its dim switch turns it down.
+pub const DIM_RANGE_DB: (f32, f32) = (0.0, 60.0);
+/// The dim level a bus starts with.
+pub const DEFAULT_DIM_DB: f32 = 20.0;
+
+/// `db` as a dim level.
+///
+/// # Errors
+///
+/// A message naming the range when it is outside [`DIM_RANGE_DB`].
+pub fn check_dim(db: f32) -> Result<f32, String> {
+    let (low, high) = DIM_RANGE_DB;
+    if (low..=high).contains(&db) {
+        Ok(db)
+    } else {
+        Err(format!("a dim level is {low} to {high} dB, not {db}"))
+    }
 }
 
 /// What an input captures.
@@ -110,6 +131,8 @@ pub struct InputView {
     pub comp_reduction_db: f32,
     /// Its channel strip: polarity, filters, delay, width.
     pub strip: crate::strip::StripSettings,
+    /// A talkback microphone: silent until someone talks ([`MixerView::talk`]).
+    pub talkback: bool,
     /// Its ducker: the input that turns it down, how far and how fast.
     pub duck: crate::duck::DuckSettings,
     /// The most its ducker took away since the previous view, in dB.
@@ -202,6 +225,11 @@ pub struct BusView {
     pub comp_hpf_hz: f32,
     /// Its delay in milliseconds, behind the limiter.
     pub delay_ms: f32,
+    /// Its dim switch: turned down by [`Self::dim_db`]. A monitor bus is dimmed too while
+    /// someone talks, without this switch.
+    pub dim: bool,
+    /// How far dim turns it down, in dB.
+    pub dim_db: f32,
     /// The most its compressor took away since the previous view, in dB.
     pub comp_reduction_db: f32,
     /// Its multiband compressor: the knob of each band and the two corners between them.
@@ -368,6 +396,32 @@ pub enum Action {
         input: usize,
         /// The new setting.
         change: crate::strip::StripChange,
+    },
+    /// Makes an input a talkback microphone or a plain input again.
+    InputTalkback {
+        /// Input index.
+        input: usize,
+        /// Talkback or not.
+        on: bool,
+    },
+    /// Dims a bus or lets it back.
+    BusDim {
+        /// Bus index.
+        bus: usize,
+        /// Dimmed or not.
+        on: bool,
+    },
+    /// Sets how far dim turns a bus down.
+    BusDimLevel {
+        /// Bus index.
+        bus: usize,
+        /// In dB, [`DIM_RANGE_DB`].
+        db: f32,
+    },
+    /// Opens the talkback microphones and dims the monitor buses, or ends that.
+    Talk {
+        /// Talking or not.
+        on: bool,
     },
     /// Changes one setting of the multiband compressor of a bus.
     BusMultiband {
@@ -561,6 +615,7 @@ impl FakeDesk {
             strip: crate::strip::StripSettings::default(),
             duck: crate::duck::DuckSettings::default(),
             duck_reduction_db: 0.0,
+            talkback: false,
             buses,
             sends: Vec::new(),
             present: true,
@@ -585,6 +640,8 @@ impl FakeDesk {
             comp_mix: 100.0,
             comp_hpf_hz: 20.0,
             delay_ms: 0.0,
+            dim: false,
+            dim_db: DEFAULT_DIM_DB,
             comp_reduction_db: 0.0,
             multiband: crate::multiband::MultibandSettings::default(),
             multiband_reduction_db: [0.0; crate::multiband::BANDS],
@@ -599,6 +656,7 @@ impl FakeDesk {
                 dropouts_per_hour: 0.0,
                 glitches: 0,
                 meter_point: MeterPoint::PostFader,
+                talk: false,
                 inputs: vec![
                     input(
                         "CABLE Output (VB-Audio Virtual Cable)",
@@ -674,6 +732,33 @@ impl FakeDesk {
             input + 1,
             if on { "->" } else { "off" }
         )])
+    }
+
+    /// Dim and talkback.
+    fn set_monitoring(&mut self, action: &Action) -> Result<Vec<String>, String> {
+        let on_off = |on: bool| if on { "on" } else { "off" };
+        match *action {
+            Action::InputTalkback { input, on } => {
+                self.input_mut(input)?.talkback = on;
+                Ok(vec![format!("[{}] talkback {}", input + 1, on_off(on))])
+            }
+            Action::BusDim { bus, on } => {
+                let bus = self.bus_mut(bus)?;
+                bus.dim = on;
+                Ok(vec![format!("{} dim {}", bus.name, on_off(on))])
+            }
+            Action::BusDimLevel { bus, db } => {
+                let db = check_dim(db)?;
+                let bus = self.bus_mut(bus)?;
+                bus.dim_db = db;
+                Ok(vec![format!("{} dim level {db:.0} dB", bus.name)])
+            }
+            Action::Talk { on } => {
+                self.view.talk = on;
+                Ok(vec![format!("talk {}", on_off(on))])
+            }
+            _ => Err("not for dim or talkback".to_owned()),
+        }
     }
 
     /// One setting of the multiband compressor of `bus`.
@@ -1026,6 +1111,10 @@ impl Desk for FakeDesk {
             }
             Action::InputDuck { input, change } => self.set_duck(input, change),
             Action::BusMultiband { bus, change } => self.set_multiband(bus, change),
+            Action::InputTalkback { .. }
+            | Action::BusDim { .. }
+            | Action::BusDimLevel { .. }
+            | Action::Talk { .. } => self.set_monitoring(&action),
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
             Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
             Action::Route { input, bus, on } => self.set_route(input, bus, on),

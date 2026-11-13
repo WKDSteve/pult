@@ -285,6 +285,16 @@ pult run --profile meinprofil.toml --log abend.csv
   Stream-Bus hört weiter alle Quellen, auch während man auf dem Kopfhörer eine Quelle allein abhört. Ohne Monitor-Bus
   wirkt Solo wie bisher auf allen Bussen. Während des Laufs `monitor B1 on|off`, im Fenster der Schalter **MON** am Bus,
   von außen `bus/<name>/monitor`.
+- **Dim:** Jeder Bus hat einen Dim-Schalter, der ihn um seinen Dim-Pegel leiser macht (`dim_db = 0..60` am Bus, Standard
+  20 dB), ohne den Fader zu bewegen: `dim A1 on|off`, `dim A1 12` setzt den Pegel, im Fenster der Schalter **DIM** neben
+  MUTE, von außen `bus/<name>/dim` und `bus/<name>/dim/level`. Der Schalter selbst steht nicht im Profil, eine Route
+  beginnt ungedimmt. Die Absenkung gleitet in 50 ms.
+- **Talkback:** `talkback = true` macht einen Eingang zum Talkback-Mikrofon: Er ist auf seinen Bussen still, bis jemand
+  spricht. `talk on` öffnet alle Talkback-Mikrofone und dimmt zugleich jeden Monitor-Bus um dessen Dim-Pegel, damit der
+  Lautsprecher nicht ins Mikrofon zurückkommt; `talk off` beendet beides. Der eigene Mute des Mikrofons zählt weiter.
+  Typisch: das Mikrofon nur auf den Kopfhörer-Bus der Musiker routen. Während des Laufs `talkback 3 on|off`, im Fenster
+  trägt der Zug eines Talkback-Mikrofons den Knopf **TB** (an der Stelle von AM), von außen `input/<n>/talkback` und
+  `talk`; `learn talk` legt ihn auf eine Taste des MIDI-Controllers.
 - **Sends (Pegel je Kreuzung):** Jeder Bus bekommt von jedem Eingang einen eigenen Pegel, wie die Aux-Wege großer Pulte:
   `sends = [{ bus = "B1", gain_db = -6, pre = true }]` am Eingang, nur für die Busse, die vom Standard (0 dB, nach dem
   Fader) abweichen. Nach dem Fader (`post`) wirkt der Eingangs-Fader zusätzlich; vor dem Fader (`pre = true`) bleibt der

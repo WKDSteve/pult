@@ -48,6 +48,9 @@ pub struct State {
     /// The MIDI controller, where one runs; none from a run older than that.
     #[serde(default)]
     pub midi: Option<crate::midi::MidiStatus>,
+    /// Someone talks: the talkback microphones are open and the monitor buses dimmed.
+    #[serde(default)]
+    pub talk: bool,
 }
 
 /// Where the input meters measure.
@@ -119,6 +122,9 @@ pub struct InputState {
     /// Its channel strip; neutral from a run older than this.
     #[serde(default)]
     pub strip: crate::strip::StripSettings,
+    /// A talkback microphone: silent until someone talks.
+    #[serde(default)]
+    pub talkback: bool,
     /// Its ducker; off from a run older than ducking. `key` is the number of the input that
     /// ducks it, 0 for none.
     #[serde(default)]
@@ -215,6 +221,12 @@ pub struct BusState {
     /// Its delay in milliseconds; none from a run older than bus delays.
     #[serde(default)]
     pub delay_ms: f32,
+    /// Its dim switch.
+    #[serde(default)]
+    pub dim: bool,
+    /// How far dim turns it down, in dB.
+    #[serde(default = "dim_level")]
+    pub dim_db: f32,
     /// The most its compressor took away since the previous state, in dB.
     #[serde(default)]
     pub comp_reduction_db: f32,
@@ -310,6 +322,7 @@ impl State {
             events,
             scenes: view.scenes.clone(),
             midi: view.midi.clone(),
+            talk: view.talk,
         }
     }
 }
@@ -358,6 +371,7 @@ impl InputState {
             gate_open: input.gate_open,
             comp_reduction_db: input.comp_reduction_db,
             strip: input.strip,
+            talkback: input.talkback,
             duck: input.duck,
             duck_reduction_db: input.duck_reduction_db,
             buses: input.buses.iter().filter_map(bus_name).collect(),
@@ -397,6 +411,8 @@ impl BusState {
             comp_mix: bus.comp_mix,
             comp_hpf_hz: bus.comp_hpf_hz,
             delay_ms: bus.delay_ms,
+            dim: bus.dim,
+            dim_db: bus.dim_db,
             comp_reduction_db: bus.comp_reduction_db,
             multiband: bus.multiband,
             multiband_reduction_db: bus.multiband_reduction_db,
@@ -546,6 +562,10 @@ impl Op {
                 on_input(*input, "automix/weight", OpValue::Number(*db))
             }
             Command::Monitor(to, on) => on_bus(*to, "monitor", OpValue::Switch(*on))?,
+            Command::Dim(to, on) => on_bus(*to, "dim", OpValue::Switch(*on))?,
+            Command::DimLevel(to, db) => on_bus(*to, "dim/level", OpValue::Number(*db))?,
+            Command::Talkback(input, on) => on_input(*input, "talkback", OpValue::Switch(*on)),
+            Command::Talk(on) => set("talk".to_owned(), OpValue::Switch(*on), 0),
             Command::Send(input, to, db, ramp_ms) => set(
                 format!("send/{}/{}", input + 1, bus(*to)?),
                 OpValue::Number(*db),
@@ -608,13 +628,38 @@ impl Op {
     }
 }
 
+/// Whether `binding` is a switch.
+fn is_switch(binding: Binding) -> bool {
+    use BusParam as B;
+    use InputParam as I;
+    matches!(
+        binding,
+        Binding::Input(
+            _,
+            I::Mute | I::Solo | I::Automix | I::Polarity | I::Talkback
+        ) | Binding::Bus(_, B::Mute | B::Eq | B::Limit | B::Monitor | B::Dim)
+            | Binding::Route { .. }
+            | Binding::SendPre { .. }
+            | Binding::Talk
+    )
+}
+
+/// The dim level a bus has when a state does not say.
+fn dim_level() -> f32 {
+    crate::view::DEFAULT_DIM_DB
+}
+
 /// Whether [`setting_value`] checks the number of `binding`.
 fn is_setting(binding: Binding) -> bool {
     matches!(
         binding,
         Binding::Bus(
             _,
-            BusParam::CompMix | BusParam::CompHpf | BusParam::Delay | BusParam::Multiband(_),
+            BusParam::CompMix
+                | BusParam::CompHpf
+                | BusParam::Delay
+                | BusParam::Multiband(_)
+                | BusParam::DimLevel,
         ) | Binding::Input(
             _,
             InputParam::Hpf | InputParam::Lpf | InputParam::Delay | InputParam::Width,
@@ -643,6 +688,9 @@ fn setting_value(binding: Binding, number: f32, address: &str) -> Result<Value, 
             .map_err(|why| format!("{address}: {why}"))
     };
     match binding {
+        Binding::Bus(_, BusParam::DimLevel) => crate::view::check_dim(number)
+            .map(Value::Gain)
+            .map_err(|why| format!("{address}: {why}")),
         Binding::Bus(_, BusParam::Multiband(param)) => param
             .change(number)
             .checked()
@@ -757,26 +805,8 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         (Binding::Bus(_, EqBand(_, BandParam::Kind)), _) => {
             Err(format!("{address} takes low, bell or high"))
         }
-        (
-            Binding::Input(
-                _,
-                InputParam::Mute | InputParam::Solo | InputParam::Automix | InputParam::Polarity,
-            )
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
-            | Binding::Route { .. }
-            | Binding::SendPre { .. },
-            OpValue::Switch(on),
-        ) => Ok(Value::Switch(*on)),
-        (
-            Binding::Input(
-                _,
-                InputParam::Mute | InputParam::Solo | InputParam::Automix | InputParam::Polarity,
-            )
-            | Binding::Bus(_, BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor)
-            | Binding::Route { .. }
-            | Binding::SendPre { .. },
-            _,
-        ) => Err(format!("{address} takes true or false")),
+        (binding, OpValue::Switch(on)) if is_switch(binding) => Ok(Value::Switch(*on)),
+        (binding, _) if is_switch(binding) => Err(format!("{address} takes true or false")),
         _ => Err(format!("{address} takes a number")),
     }
 }
@@ -936,6 +966,28 @@ mod tests {
             action(r#"{"op":"save"}"#),
             Ok(Action::SaveProfile { path: None })
         );
+    }
+
+    #[test]
+    fn dim_and_talkback_are_set_by_address() {
+        assert_eq!(
+            action(r#"{"op":"set","address":"talk","value":true}"#),
+            Ok(Action::Talk { on: true })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/dim","value":true}"#),
+            Ok(Action::BusDim { bus: 0, on: true })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/dim/level","value":12}"#),
+            Ok(Action::BusDimLevel { bus: 0, db: 12.0 })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/2/talkback","value":true}"#),
+            Ok(Action::InputTalkback { input: 1, on: true })
+        );
+        assert!(action(r#"{"op":"set","address":"bus/A1/dim/level","value":90}"#).is_err());
+        assert!(action(r#"{"op":"set","address":"talk","value":1}"#).is_err());
     }
 
     #[test]

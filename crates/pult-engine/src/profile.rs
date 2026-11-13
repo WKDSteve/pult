@@ -19,6 +19,8 @@
 //! comp = 0                     # optional, 0 (off) to 10: the bus compressor on the sum
 //! comp_mix = 100               # optional, 0 (dry) to 100 (all compressed): parallel compression
 //! comp_hpf_hz = 20             # optional, 20 to 500: the sidechain filter, keeps bass from pumping
+//! dim_db = 20                  # optional, 0 to 60: how far `dim` (and talking, on a monitor bus)
+//!                              # turns it down
 //! mb_low = 0                   # optional, 0 (off) to 10: the low band of the multiband compressor;
 //! mb_mid = 0                   # its middle band and
 //! mb_high = 0                  # its high band
@@ -47,6 +49,7 @@
 //! gate = 0                     # optional, 0 (off) to 10: quiet below a level
 //! comp = 0                     # optional, 0 (off) to 10: more even, and louder
 //! mute = false                 # optional
+//! talkback = false             # optional: a talkback microphone, silent until `talk on`
 //! polarity = false             # optional: true turns the polarity over
 //! hpf_hz = 20                  # optional, 20 (off) to 1000: the high-pass of the channel strip
 //! lpf_hz = 20000               # optional, 1000 to 20000 (off): its low-pass
@@ -205,6 +208,7 @@ struct BusEntry {
     mb_high: f32,
     mb_low_hz: Option<f32>,
     mb_high_hz: Option<f32>,
+    dim_db: Option<f32>,
     #[serde(default)]
     delay_ms: f32,
     #[serde(default)]
@@ -224,6 +228,7 @@ struct EqEntry {
     q: Option<f32>,
 }
 
+#[allow(clippy::struct_excessive_bools)] // The switches of an input, each a key of its own.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputEntry {
@@ -247,6 +252,8 @@ struct InputEntry {
     automix_weight_db: f32,
     #[serde(default)]
     sends: Vec<SendEntry>,
+    #[serde(default)]
+    talkback: bool,
     #[serde(default)]
     polarity: bool,
     hpf_hz: Option<f32>,
@@ -585,6 +592,10 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
         check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
         let (comp, comp_mix, comp_hpf_hz) = bus_comp_of(&entry)?;
         let multiband = multiband_of(&entry)?;
+        let dim_db = match entry.dim_db.map(pult_core::view::check_dim).transpose() {
+            Ok(db) => db.unwrap_or(pult_core::view::DEFAULT_DIM_DB),
+            Err(why) => return fail(format!("bus {}: {why}", entry.name)),
+        };
         let delay_ms = match pult_core::busdelay::check_delay(entry.delay_ms) {
             Ok(ms) => ms,
             Err(why) => return fail(format!("bus {}: {why}", entry.name)),
@@ -616,6 +627,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             comp_mix,
             comp_hpf_hz,
             multiband,
+            dim_db,
             delay_ms,
         });
     }
@@ -706,6 +718,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             },
             sends: sends(&what, entry.sends, &buses)?,
             strip,
+            talkback: entry.talkback,
             duck,
             buses: routed,
         });
@@ -801,6 +814,9 @@ fn render_comp(text: &mut String, bus: &BusSpec) {
         if value != start {
             let _ = writeln!(text, "{key} = {value}");
         }
+    }
+    if bus.dim_db != pult_core::view::DEFAULT_DIM_DB {
+        let _ = writeln!(text, "dim_db = {}", bus.dim_db);
     }
     if bus.delay_ms != 0.0 {
         let _ = writeln!(text, "delay_ms = {}", bus.delay_ms);
@@ -955,6 +971,9 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
         let _ = writeln!(text, "sends = [{}]", render_sends(spec, &input.sends));
     }
     render_strip(text, &input.strip);
+    if input.talkback {
+        let _ = writeln!(text, "talkback = true");
+    }
     render_duck(text, &input.duck);
 }
 
@@ -1143,6 +1162,7 @@ fn set_bus(table: &mut Table, bus: &BusSpec) {
     for (key, value, start) in multiband_keys(&bus.multiband) {
         set_number_from(table, key, value, start);
     }
+    set_number_from(table, "dim_db", bus.dim_db, pult_core::view::DEFAULT_DIM_DB);
     set_number_from(table, "delay_ms", bus.delay_ms, 0.0);
     match bus.minus {
         Some(input) => {
@@ -1221,6 +1241,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_number_from(table, "automix_weight_db", input.automix_weight_db, 0.0);
         set_sends(table, spec, &input.sends);
         set_strip(table, &input.strip);
+        set_switch(table, "talkback", input.talkback);
         set_duck(table, &input.duck);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.

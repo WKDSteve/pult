@@ -75,8 +75,9 @@ fn showcase_strip(input: usize) -> pult_core::strip::StripSettings {
     }
 }
 
-fn showcase(t: f64) -> MixerView {
-    let inputs: Vec<InputView> = INPUTS
+/// The inputs of the showcase at time `t`.
+fn showcase_inputs(t: f64) -> Vec<InputView> {
+    INPUTS
         .iter()
         .enumerate()
         .map(|(i, &(name, kind, sample_rate, gain_db, buses, base))| {
@@ -104,6 +105,8 @@ fn showcase(t: f64) -> MixerView {
                 duck: pult_core::duck::DuckSettings::default(),
                 duck_reduction_db: 0.0,
                 strip: showcase_strip(i),
+                // The cable carries the talkback microphone.
+                talkback: i == 5,
                 buses: buses.to_vec(),
                 sends: Vec::new(),
                 present: i != 6,
@@ -113,8 +116,12 @@ fn showcase(t: f64) -> MixerView {
                 dropouts: if i == 5 { 3 } else { 0 },
             }
         })
-        .collect();
-    let buses = [
+        .collect()
+}
+
+/// The buses of the showcase at time `t`.
+fn showcase_buses(t: f64) -> Vec<BusView> {
+    [
         ("A1", "Scarlett 2i2", 0.0),
         ("A2", "Headphones", -6.0),
         ("B1", "Stream (CABLE In)", -2.0),
@@ -152,6 +159,9 @@ fn showcase(t: f64) -> MixerView {
             comp_mix: [100.0, 100.0, 50.0][j],
             comp_hpf_hz: [20.0, 20.0, 120.0][j],
             delay_ms: 0.0,
+            // The headphones dimmed.
+            dim: j == 1,
+            dim_db: 20.0,
             comp_reduction_db: [0.0, 0.0, 2.4][j],
             multiband: showcase_multiband(j),
             multiband_reduction_db: [[0.0; 3], [0.0; 3], [3.1, 0.0, 0.6]][j],
@@ -167,7 +177,12 @@ fn showcase(t: f64) -> MixerView {
             clipped: 0,
         }
     })
-    .collect();
+    .collect()
+}
+
+fn showcase(t: f64) -> MixerView {
+    let inputs = showcase_inputs(t);
+    let buses = showcase_buses(t);
     MixerView {
         elapsed: Duration::from_secs(2 * 3600 + 14 * 60 + 7) + Duration::from_secs_f64(t),
         dropouts_per_hour: 0.4,
@@ -179,6 +194,7 @@ fn showcase(t: f64) -> MixerView {
         profile: Some(PathBuf::from(r"C:\Users\me\pult\studio.toml")),
         scenes: Vec::new(),
         midi: None,
+        talk: false,
     }
 }
 

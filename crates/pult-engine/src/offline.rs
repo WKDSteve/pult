@@ -129,6 +129,8 @@ impl Offline {
             xruns: Arc::new(Counter::default()),
             spec: spec.clone(),
             _loudness: None,
+            dim: vec![false; spec.buses.len()],
+            talk: false,
             alarm: crate::alarm::Alarm::silent(),
         };
         running.apply_monitors();

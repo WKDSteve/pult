@@ -169,6 +169,10 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `bus/<name>/mb/low`, `/mb/mid`, `/mb/high` | Zahl, 0 (aus) bis 10: die Bänder des Multiband-Kompressors |
 | `bus/<name>/mb/xlow` | Zahl, 60 bis 1000 Hz: Trennfrequenz zwischen unten und Mitte |
 | `bus/<name>/mb/xhigh` | Zahl, 1000 bis 10000 Hz: Trennfrequenz zwischen Mitte und oben |
+| `bus/<name>/dim` | `true` oder `false`: der Bus ist um seinen Dim-Pegel leiser |
+| `bus/<name>/dim/level` | Zahl, 0 bis 60 dB: der Dim-Pegel |
+| `input/<n>/talkback` | `true` oder `false`: Talkback-Mikrofon, still bis `talk` |
+| `talk` | `true` oder `false`: Talkback-Mikrofone offen, Monitor-Busse gedimmt |
 | `bus/<name>/monitor` | `true` oder `false`: der Monitor-Bus, auf dem allein Solo wirkt |
 | `send/<n>/<bus>` | Zahl, der Pegel dieser Kreuzung in dB (wie ein Gain, gleitet mit `ramp_ms`); 0 am Anfang |
 | `sendpre/<n>/<bus>` | `true` (vor dem Fader des Eingangs) oder `false` (danach, am Anfang) |

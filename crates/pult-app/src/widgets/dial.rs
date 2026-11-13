@@ -95,6 +95,11 @@ impl Dial {
                 home: 2000.0,
                 both_ways: true,
             }),
+            Binding::Bus(_, BusParam::DimLevel) => Some(Self {
+                span: Span::even(pult_core::view::DIM_RANGE_DB),
+                home: pult_core::view::DEFAULT_DIM_DB,
+                both_ways: false,
+            }),
             Binding::Bus(_, BusParam::CompHpf) => Some(Self {
                 span: Span::octaves(pult_core::buscomp::HPF_HZ),
                 home: pult_core::buscomp::HPF_HZ.0,

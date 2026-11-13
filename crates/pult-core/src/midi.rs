@@ -317,16 +317,24 @@ impl Param {
             Binding::Bus(_, BusParam::EqBand(_, BandParam::Kind)) => {
                 return Err(format!("{target} is a word, which no control can say"));
             }
+            Binding::Bus(_, BusParam::DimLevel) => {
+                Self::Knob(binding, Span::even(crate::view::DIM_RANGE_DB))
+            }
             Binding::Input(
                 _,
-                InputParam::Mute | InputParam::Solo | InputParam::Automix | InputParam::Polarity,
+                InputParam::Mute
+                | InputParam::Solo
+                | InputParam::Automix
+                | InputParam::Polarity
+                | InputParam::Talkback,
             )
             | Binding::Bus(
                 _,
-                BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor,
+                BusParam::Mute | BusParam::Eq | BusParam::Limit | BusParam::Monitor | BusParam::Dim,
             )
             | Binding::Route { .. }
-            | Binding::SendPre { .. } => Self::Switch(binding),
+            | Binding::SendPre { .. }
+            | Binding::Talk => Self::Switch(binding),
             Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter) => {
                 return Err(format!("{target} can only be read"));
             }

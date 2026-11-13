@@ -188,12 +188,22 @@ pub fn input_strip(index: usize, view: &MixerView) -> Element {
             Role::Solo,
             Binding::Input(index, InputParam::Solo),
         ),
-        Element::toggle(
-            Zone::MuteSolo,
-            "AM",
-            Role::Assign,
-            Binding::Input(index, InputParam::Automix),
-        ),
+    ]);
+    // A talkback microphone carries the button that opens it, where the others have the switch of
+    // the automixer: it is silent until someone talks, so it has no share to take there.
+    parts.push(
+        if view.inputs.get(index).is_some_and(|input| input.talkback) {
+            Element::toggle(Zone::MuteSolo, "TB", Role::Solo, Binding::Talk)
+        } else {
+            Element::toggle(
+                Zone::MuteSolo,
+                "AM",
+                Role::Assign,
+                Binding::Input(index, InputParam::Automix),
+            )
+        },
+    );
+    parts.extend([
         Element::part(Zone::Fader, Control::Fader, at(InputParam::Gain)),
         Element::part(Zone::Fader, Control::Meter, at(InputParam::Meter)),
         Element::part(Zone::Readout, Control::Readout, at(InputParam::Gain)),
@@ -240,6 +250,12 @@ pub fn bus_strip(index: usize) -> Element {
             "MUTE",
             Role::Mute,
             Binding::Bus(index, BusParam::Mute),
+        ),
+        Element::toggle(
+            Zone::MuteSolo,
+            "DIM",
+            Role::Solo,
+            Binding::Bus(index, BusParam::Dim),
         ),
         Element::part(Zone::Fader, Control::Fader, at(BusParam::Gain)),
         Element::part(Zone::Fader, Control::Meter, at(BusParam::Meter)),
@@ -349,6 +365,20 @@ mod tests {
     }
 
     #[test]
+    fn a_talkback_microphone_carries_the_talk_button() {
+        let mut view = FakeDesk::new().view();
+        let talk = |view: &MixerView| {
+            strip(&input_strip(1, view))
+                .parts
+                .iter()
+                .any(|part| part.bind == Some(Binding::Talk))
+        };
+        assert!(!talk(&view));
+        view.inputs[1].talkback = true;
+        assert!(talk(&view));
+    }
+
+    #[test]
     fn a_bus_strip_binds_its_bus() {
         let view = FakeDesk::new().view();
         let element = bus_strip(0);
@@ -364,6 +394,7 @@ mod tests {
                 "bus/A1/limit",
                 "bus/A1/monitor",
                 "bus/A1/mute",
+                "bus/A1/dim",
                 "bus/A1/gain",
                 "bus/A1/meter",
                 "bus/A1/gain"

@@ -15,6 +15,32 @@ use crate::{
     BusSpec, InputSpec, RouteSpec, Running, RunningRoute, SceneBus, SceneInput, SceneSpec, SendSpec,
 };
 
+/// What of a channel strip is not as it starts, for `show`.
+#[allow(clippy::float_cmp)] // Exactly: as it starts, or set.
+fn strip_summary(strip: &pult_core::strip::StripSettings) -> String {
+    use pult_core::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ};
+    let mut text = String::new();
+    if strip.polarity {
+        text.push_str("  polarity over");
+    }
+    if strip.hpf_hz > HPF_RANGE_HZ.0 {
+        let _ = write!(text, "  hpf {:.0} Hz", strip.hpf_hz);
+    }
+    if strip.lpf_hz < LPF_RANGE_HZ.1 {
+        let _ = write!(text, "  lpf {:.0} Hz", strip.lpf_hz);
+    }
+    if strip.delay_ms > 0.0 {
+        let _ = write!(text, "  delay {:.1} ms", strip.delay_ms);
+    }
+    if strip.width != 100.0 {
+        let _ = write!(text, "  width {:.0} %", strip.width);
+    }
+    text
+}
+
+/// Milliseconds a dim or the talkback takes to come and go.
+const DIM_MS: u32 = 50;
+
 impl Running {
     /// Sets the delay of `bus` in milliseconds, and returns what to show for it.
     ///
@@ -143,6 +169,10 @@ impl Running {
             }
             Command::Route(input, bus, on) => self.route(*input, *bus, *on),
             Command::Monitor(bus, on) => self.monitor(*bus, *on),
+            Command::Dim(bus, on) => self.dim(*bus, Some(*on), None),
+            Command::DimLevel(bus, db) => self.dim(*bus, None, Some(*db)),
+            Command::Talkback(input, on) => self.talkback(*input, *on),
+            Command::Talk(on) => Ok(self.talk(*on)),
             Command::BusComp(bus, amount) => self.bus_comp(*bus, Some(*amount), None, None),
             Command::BusCompMix(bus, percent) => self.bus_comp(*bus, None, Some(*percent), None),
             Command::BusCompHpf(bus, hz) => self.bus_comp(*bus, None, None, Some(*hz)),
@@ -179,12 +209,8 @@ impl Running {
                 self.spec.inputs[index].gain_db = gain_db;
             }
             Target::Bus(index) => {
-                self.buses[index]
-                    .handle
-                    .controls
-                    .gain
-                    .ramp_to(linear, ramp_ms);
                 self.spec.buses[index].gain_db = gain_db;
+                self.apply_bus_gain(index, ramp_ms);
             }
         }
     }
@@ -193,10 +219,8 @@ impl Running {
     fn set_mute(&mut self, target: Target, muted: bool, fade_ms: u32) {
         match target {
             Target::Input(index) => {
-                let controls = &self.inputs[index].controls;
-                controls.fade_ms.store(fade_ms, Ordering::Relaxed);
-                controls.muted.store(muted, Ordering::Release);
                 self.spec.inputs[index].muted = muted;
+                self.apply_input_mute(index, fade_ms);
             }
             Target::Bus(index) => {
                 let controls = &self.buses[index].handle.controls;
@@ -205,6 +229,110 @@ impl Running {
                 self.spec.buses[index].muted = muted;
             }
         }
+    }
+
+    /// The gain of bus `index` as its fader and its dim say, reached in `ramp_ms`: dimmed by its
+    /// switch, or, a monitor bus, while someone talks.
+    fn apply_bus_gain(&self, index: usize, ramp_ms: u32) {
+        let spec = &self.spec.buses[index];
+        let dimmed = self.dim[index] || (self.talk && spec.monitor);
+        let db = spec.gain_db - if dimmed { spec.dim_db } else { 0.0 };
+        self.buses[index]
+            .handle
+            .controls
+            .gain
+            .ramp_to(db_to_linear(db), ramp_ms);
+    }
+
+    /// The mute of input `index` as its switch and the talkback say, fading for `fade_ms`: a
+    /// talkback microphone is silent until someone talks.
+    fn apply_input_mute(&self, index: usize, fade_ms: u32) {
+        let spec = &self.spec.inputs[index];
+        let controls = &self.inputs[index].controls;
+        controls.fade_ms.store(fade_ms, Ordering::Relaxed);
+        controls.muted.store(
+            spec.muted || (spec.talkback && !self.talk),
+            Ordering::Release,
+        );
+    }
+
+    /// Whether the dim switch of `bus` is on.
+    #[must_use]
+    pub fn is_dimmed(&self, bus: usize) -> bool {
+        self.dim.get(bus).copied().unwrap_or(false)
+    }
+
+    /// Whether someone talks.
+    #[must_use]
+    pub fn is_talking(&self) -> bool {
+        self.talk
+    }
+
+    /// Switches the dim of `bus` and/or sets how far it turns down, in dB.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such bus or the level is out of its range.
+    pub fn dim(
+        &mut self,
+        bus: usize,
+        on: Option<bool>,
+        level_db: Option<f32>,
+    ) -> Result<Vec<String>, String> {
+        if bus >= self.buses.len() {
+            return Err(format!("there is no bus {}", bus + 1));
+        }
+        let level_db = level_db.map(pult_core::view::check_dim).transpose()?;
+        let mut said = Vec::new();
+        if let Some(db) = level_db {
+            self.spec.buses[bus].dim_db = db;
+            said.push(format!("{}: dim level {db:.0} dB", self.buses[bus].name));
+        }
+        if let Some(on) = on {
+            self.dim[bus] = on;
+            let state = if on { "dimmed" } else { "no longer dimmed" };
+            said.push(format!("{}: {state}", self.buses[bus].name));
+        }
+        self.apply_bus_gain(bus, DIM_MS);
+        Ok(said)
+    }
+
+    /// Makes `input` a talkback microphone (silent until someone talks) or a plain input again.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such input.
+    pub fn talkback(&mut self, input: usize, on: bool) -> Result<Vec<String>, String> {
+        let Some(spec) = self.spec.inputs.get_mut(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        spec.talkback = on;
+        self.apply_input_mute(input, DIM_MS);
+        let label = self.target_label(Target::Input(input));
+        Ok(vec![if on {
+            format!("{label}: a talkback microphone, silent until talk on")
+        } else {
+            format!("{label}: no talkback microphone")
+        }])
+    }
+
+    /// Opens the talkback microphones and dims the monitor buses, or ends that.
+    pub fn talk(&mut self, on: bool) -> Vec<String> {
+        self.talk = on;
+        for input in 0..self.inputs.len() {
+            if self.spec.inputs[input].talkback {
+                self.apply_input_mute(input, DIM_MS);
+            }
+        }
+        for bus in 0..self.buses.len() {
+            self.apply_bus_gain(bus, DIM_MS);
+        }
+        let microphones = self.spec.inputs.iter().filter(|i| i.talkback).count();
+        vec![match (on, microphones) {
+            (true, 0) => "talk on, but no input is a talkback microphone".to_owned(),
+            (true, _) => "talk on".to_owned(),
+            (false, _) => "talk off".to_owned(),
+        }]
     }
 
     /// Sets a pan, reached in `ramp_ms`; the range is the caller's to check.
@@ -587,6 +715,8 @@ impl Running {
         };
         spec.monitor = on;
         self.apply_monitors();
+        // A monitor bus is dimmed while someone talks.
+        self.apply_bus_gain(bus, DIM_MS);
         let name = &self.buses[bus].name;
         let any = self.spec.buses.iter().any(|b| b.monitor);
         Ok(vec![if on {
@@ -642,28 +772,6 @@ impl Running {
 
     /// One line per input and bus with its settings.
     fn show(&self) -> Vec<String> {
-        #[allow(clippy::float_cmp)] // Exactly: as it starts, or set.
-        fn strip_summary(strip: &pult_core::strip::StripSettings) -> String {
-            use pult_core::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ};
-            let mut text = String::new();
-            if strip.polarity {
-                text.push_str("  polarity over");
-            }
-            if strip.hpf_hz > HPF_RANGE_HZ.0 {
-                let _ = write!(text, "  hpf {:.0} Hz", strip.hpf_hz);
-            }
-            if strip.lpf_hz < LPF_RANGE_HZ.1 {
-                let _ = write!(text, "  lpf {:.0} Hz", strip.lpf_hz);
-            }
-            if strip.delay_ms > 0.0 {
-                let _ = write!(text, "  delay {:.1} ms", strip.delay_ms);
-            }
-            if strip.width != 100.0 {
-                let _ = write!(text, "  width {:.0} %", strip.width);
-            }
-            text
-        }
-
         let mut lines = Vec::with_capacity(self.inputs.len() + self.buses.len());
         for (index, (input, spec)) in self.inputs.iter().zip(&self.spec.inputs).enumerate() {
             let buses: Vec<&str> = input
@@ -686,6 +794,13 @@ impl Running {
                 }
             }
             line.push_str(&strip_summary(&spec.strip));
+            if spec.talkback {
+                line.push_str(if self.talk {
+                    "  talkback (open)"
+                } else {
+                    "  talkback"
+                });
+            }
             line.push_str(&spec.duck.summary());
             for send in &spec.sends {
                 let point = if send.pre { " pre" } else { "" };
@@ -700,7 +815,7 @@ impl Running {
             }
             lines.push(line);
         }
-        for (bus, spec) in self.buses.iter().zip(&self.spec.buses) {
+        for (index, (bus, spec)) in self.buses.iter().zip(&self.spec.buses).enumerate() {
             let mut line = format!("{} {}  gain {:.1} dB", bus.name, bus.device, spec.gain_db);
             if spec.comp > 0.0 {
                 let _ = write!(
@@ -710,6 +825,9 @@ impl Running {
                     spec.comp_mix,
                     spec.comp_hpf_hz
                 );
+            }
+            if self.dim[index] || (self.talk && spec.monitor) {
+                let _ = write!(line, "  dimmed {:.0} dB", spec.dim_db);
             }
             if spec.multiband.is_on() {
                 let [low, mid, high] = spec.multiband.bands;

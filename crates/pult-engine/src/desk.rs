@@ -150,6 +150,7 @@ fn input_view(input: &crate::RunningInput, spec: &crate::InputSpec, solo: bool) 
         gate_open: input.controls.gate_open.load(Ordering::Relaxed),
         comp_reduction_db: input.controls.comp_reduction.take(),
         strip: spec.strip,
+        talkback: spec.talkback,
         duck: spec.duck,
         duck_reduction_db: input.controls.duck_reduction.take(),
         buses: input
@@ -232,7 +233,8 @@ impl Desk for EngineDesk {
             .buses
             .iter()
             .zip(&running.spec.buses)
-            .map(|(bus, spec)| BusView {
+            .enumerate()
+            .map(|(index, (bus, spec))| BusView {
                 name: bus.name.clone(),
                 label: spec.label.clone(),
                 device: bus.device.clone(),
@@ -248,6 +250,8 @@ impl Desk for EngineDesk {
                 comp_mix: spec.comp_mix,
                 comp_hpf_hz: spec.comp_hpf_hz,
                 delay_ms: spec.delay_ms,
+                dim: running.is_dimmed(index),
+                dim_db: spec.dim_db,
                 comp_reduction_db: bus.handle.controls.comp.reduction.take(),
                 multiband: spec.multiband,
                 multiband_reduction_db: std::array::from_fn(|band| {
@@ -280,6 +284,7 @@ impl Desk for EngineDesk {
             profile: self.profile.clone(),
             scenes: running.spec.scenes.iter().map(|s| s.name.clone()).collect(),
             midi: None,
+            talk: running.is_talking(),
         }
     }
 
@@ -361,6 +366,10 @@ impl Desk for EngineDesk {
             }
             Action::Route { input, bus, on } => self.running.route(input, bus, on),
             Action::BusMonitor { bus, on } => self.running.monitor(bus, on),
+            Action::BusDim { bus, on } => self.running.dim(bus, Some(on), None),
+            Action::BusDimLevel { bus, db } => self.running.dim(bus, None, Some(db)),
+            Action::InputTalkback { input, on } => self.running.talkback(input, on),
+            Action::Talk { on } => Ok(self.running.talk(on)),
             Action::BusComp { bus, amount } => self.running.bus_comp(bus, Some(amount), None, None),
             Action::BusCompMix { bus, percent } => {
                 self.running.bus_comp(bus, None, Some(percent), None)

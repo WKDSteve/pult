@@ -21,6 +21,10 @@
 //! mb <bus> low|mid|high <0..10>
 //!                        the multiband compressor of a bus, one knob per band; mb <bus> split
 //!                        low|high <Hz> moves the corners between them
+//! dim <bus> on|off       turn a bus down by its dim level; dim <bus> <dB> sets that level
+//! talkback <input> on|off
+//!                        make an input a talkback microphone: silent until `talk on`, which
+//!                        also dims the monitor buses; talk off ends it
 //! eq <bus> on|off        switch the equalizer of a bus
 //! eq <bus> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
@@ -85,6 +89,14 @@ pub enum Command {
     Limit(usize, LimitChange),
     /// Makes a bus a monitor bus (the one solo acts on) or takes that away.
     Monitor(usize, bool),
+    /// Dims a bus or lets it back.
+    Dim(usize, bool),
+    /// Sets how far dim turns a bus down, in dB.
+    DimLevel(usize, f32),
+    /// Makes an input a talkback microphone or a plain input again.
+    Talkback(usize, bool),
+    /// Opens the talkback microphones and dims the monitor buses, or ends that.
+    Talk(bool),
     /// Sets the compressor of a bus by its one knob, 0 (off) to 10.
     BusComp(usize, f32),
     /// Sets the mix of the compressor of a bus in percent.
@@ -153,6 +165,11 @@ mb <bus> low|mid|high <0..10>
                      the multiband compressor of a bus: one knob per band, so a loud bass no
                      longer turns the voices down (mb A1 low 4, mb A1 mid off); mb <bus> split
                      low|high <Hz> moves the corners, 60 to 1000 and 1000 to 10000
+dim <bus> on|off     turn a bus down by its dim level, 20 dB at first; dim <bus> <dB> sets
+                     the level, 0 to 60
+talkback <input> on|off
+                     make an input a talkback microphone: it is silent until talk on, which
+                     opens it on its buses and dims the monitor buses; talk off ends it
 eq <bus> on|off      switch the equalizer of a bus
 eq <bus> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
@@ -292,6 +309,7 @@ pub fn parse<S: AsRef<str>>(
         }
         "send" => send(rest, names),
         "monitor" => monitor(rest, names),
+        "dim" | "talkback" | "talk" => monitoring(&keyword.to_lowercase(), rest, names),
         "automix" => automix(rest, names),
         "mb" | "multiband" => multiband(rest, names),
         "duck" => duck(rest, names),
@@ -502,6 +520,48 @@ fn automix<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command,
         return error(usage);
     }
     Ok(Command::Automix(only_input(input)?, on))
+}
+
+/// `dim <bus> on|off|<dB>`, `talkback <input> on|off` and `talk on|off`; a bus or input may have
+/// several words.
+fn monitoring<S: AsRef<str>>(
+    keyword: &str,
+    rest: &[&str],
+    names: Names<'_, S>,
+) -> Result<Command, ParseError> {
+    let usage = match keyword {
+        "dim" => "usage: dim <bus> on|off, or dim <bus> <dB>",
+        "talkback" => "usage: talkback <input> on|off",
+        _ => "usage: talk on|off",
+    };
+    let Some((value, name)) = rest.split_last() else {
+        return error(usage);
+    };
+    let on = match value.to_ascii_lowercase().as_str() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    };
+    if keyword == "talk" {
+        return match on {
+            Some(on) if name.is_empty() => Ok(Command::Talk(on)),
+            _ => error(usage),
+        };
+    }
+    if name.is_empty() {
+        return error(usage);
+    }
+    match (keyword, target(&name.join(" "), names)?, on) {
+        ("dim", Target::Bus(index), Some(on)) => Ok(Command::Dim(index, on)),
+        ("dim", Target::Bus(index), None) => match value.parse::<f32>() {
+            Ok(db) if db.is_finite() => Ok(Command::DimLevel(index, db)),
+            _ => error(format!("\"{value}\" is no level in dB; {usage}")),
+        },
+        ("dim", Target::Input(_), _) => error("dim works on buses only"),
+        (_, Target::Input(index), Some(on)) => Ok(Command::Talkback(index, on)),
+        (_, Target::Input(_), None) => error(usage),
+        (_, Target::Bus(_), _) => error("talkback works on inputs only"),
+    }
 }
 
 /// `monitor <bus> on|off`; the bus may have several words.
@@ -892,6 +952,23 @@ mod tests {
         assert!(bad("polarity 2 maybe").contains("usage: polarity"));
         assert!(bad("delay 2 long").contains("not a number"));
         assert!(bad("width").contains("usage: width"));
+    }
+
+    #[test]
+    fn dim_and_talkback_are_said_in_their_words() {
+        assert_eq!(ok("dim A1 on"), Command::Dim(0, true));
+        assert_eq!(ok("DIM b2 OFF"), Command::Dim(1, false));
+        assert_eq!(ok("dim A1 12"), Command::DimLevel(0, 12.0));
+        assert_eq!(ok("talkback 2 on"), Command::Talkback(1, true));
+        assert_eq!(ok("talkback cable off"), Command::Talkback(0, false));
+        assert_eq!(ok("talk on"), Command::Talk(true));
+        assert_eq!(ok("TALK off"), Command::Talk(false));
+        assert!(bad("dim 2 on").contains("buses only"));
+        assert!(bad("dim A1 loud").contains("no level in dB"));
+        assert!(bad("talkback A1 on").contains("inputs only"));
+        assert!(bad("talkback 2 maybe").contains("usage: talkback"));
+        assert!(bad("talk").contains("usage: talk"));
+        assert!(bad("talk 2 on").contains("usage: talk"));
     }
 
     #[test]

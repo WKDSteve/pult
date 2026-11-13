@@ -49,6 +49,8 @@ pub enum InputParam {
     Width,
     /// One setting of its ducker.
     Duck(DuckParam),
+    /// Whether it is a talkback microphone: silent until someone talks.
+    Talkback,
     /// Its peak, read only.
     Meter,
 }
@@ -72,6 +74,10 @@ pub enum BusParam {
     LimitLookahead,
     /// Whether it is a monitor bus, the one solo acts on.
     Monitor,
+    /// Its dim switch: turned down by its dim level.
+    Dim,
+    /// How far dim turns it down, in dB.
+    DimLevel,
     /// Its compressor, as one knob.
     Comp,
     /// The mix of its compressor, dry to compressed, in percent.
@@ -138,6 +144,8 @@ pub enum Binding {
         /// Bus index.
         bus: usize,
     },
+    /// Whether someone talks into the talkback microphones: `talk`.
+    Talk,
 }
 
 /// The value of a parameter.
@@ -218,6 +226,9 @@ impl Binding {
                 .ok_or_else(|| AddressError::NoBus(name.to_owned()))
         };
         let malformed = || AddressError::Malformed(address.to_owned());
+        if address == "talk" {
+            return Ok(Self::Talk);
+        }
         // A bus name may hold a slash: it is all between the input or kind and the parameter.
         let (kind, rest) = address.split_once('/').ok_or_else(malformed)?;
         // A band of an equalizer, unless no bus has that name: then the words belong to a name.
@@ -275,6 +286,7 @@ impl Binding {
                     "eq" => BusParam::Eq,
                     "limit" => BusParam::Limit,
                     "monitor" => BusParam::Monitor,
+                    "dim" => BusParam::Dim,
                     "comp" => BusParam::Comp,
                     "delay" => BusParam::Delay,
                     "meter" => BusParam::Meter,
@@ -320,6 +332,7 @@ impl Binding {
                     InputParam::Delay => "delay",
                     InputParam::Width => "width",
                     InputParam::Duck(duck) => duck.address(),
+                    InputParam::Talkback => "talkback",
                     InputParam::Meter => "meter",
                 };
                 format!("input/{}/{param}", input(index)?)
@@ -339,6 +352,8 @@ impl Binding {
                     BusParam::LimitCeiling => "limit/ceiling",
                     BusParam::LimitLookahead => "limit/lookahead",
                     BusParam::Monitor => "monitor",
+                    BusParam::Dim => "dim",
+                    BusParam::DimLevel => "dim/level",
                     BusParam::Comp => "comp",
                     BusParam::CompMix => "comp/mix",
                     BusParam::CompHpf => "comp/hpf",
@@ -350,6 +365,7 @@ impl Binding {
             Self::Route { input: i, bus: b } => format!("matrix/{}/{}", input(i)?, bus(b)?),
             Self::Send { input: i, bus: b } => format!("send/{}/{}", input(i)?, bus(b)?),
             Self::SendPre { input: i, bus: b } => format!("sendpre/{}/{}", input(i)?, bus(b)?),
+            Self::Talk => "talk".to_owned(),
         })
     }
 
@@ -374,6 +390,7 @@ impl Binding {
                     InputParam::Delay => Value::Delay(input.strip.delay_ms),
                     InputParam::Width => Value::Percent(input.strip.width),
                     InputParam::Duck(duck) => Value::Duck(duck.read(&input.duck)),
+                    InputParam::Talkback => Value::Switch(input.talkback),
                     InputParam::Meter => Value::Peak(input.peak_db),
                 }
             }
@@ -396,6 +413,8 @@ impl Binding {
                     BusParam::LimitCeiling => Value::Ceiling(bus.limit.ceiling_db),
                     BusParam::LimitLookahead => Value::Lookahead(bus.limit.lookahead_ms),
                     BusParam::Monitor => Value::Switch(bus.monitor),
+                    BusParam::Dim => Value::Switch(bus.dim),
+                    BusParam::DimLevel => Value::Gain(bus.dim_db),
                     BusParam::Comp => Value::Amount(bus.comp),
                     BusParam::CompMix => Value::Percent(bus.comp_mix),
                     BusParam::CompHpf => Value::Freq(bus.comp_hpf_hz),
@@ -419,6 +438,7 @@ impl Binding {
                 view.buses.get(bus)?;
                 Value::Switch(view.inputs.get(input)?.send(bus).pre)
             }
+            Self::Talk => Value::Switch(view.talk),
         })
     }
 
@@ -523,6 +543,21 @@ impl Binding {
             (Self::SendPre { input, bus }, Value::Switch(pre)) => {
                 Action::SendPre { input, bus, pre }
             }
+            _ => return self.write_monitoring(value),
+        })
+    }
+
+    /// [`Self::write`] for what belongs to listening and talking: dim and talkback.
+    fn write_monitoring(self, value: Value) -> Option<Action> {
+        Some(match (self, value) {
+            (Self::Input(input, InputParam::Talkback), Value::Switch(on)) => {
+                Action::InputTalkback { input, on }
+            }
+            (Self::Bus(bus, BusParam::Dim), Value::Switch(on)) => Action::BusDim { bus, on },
+            (Self::Bus(bus, BusParam::DimLevel), Value::Gain(db)) => {
+                Action::BusDimLevel { bus, db }
+            }
+            (Self::Talk, Value::Switch(on)) => Action::Talk { on },
             _ => return None,
         })
     }
@@ -559,6 +594,7 @@ impl Binding {
                 };
                 format!("{} {what}", input(index))
             }
+            Self::Input(index, InputParam::Talkback) => format!("{} talkback", input(index)),
             Self::Input(index, _) => input(index).to_owned(),
             Self::Bus(index, BusParam::Mute) => format!("{} mute", bus(index)),
             Self::Bus(index, BusParam::Eq) => format!("{} equalizer", bus(index)),
@@ -572,6 +608,9 @@ impl Binding {
             }
             Self::Bus(index, BusParam::Limit) => format!("{} limiter", bus(index)),
             Self::Bus(index, BusParam::Monitor) => format!("{} monitor", bus(index)),
+            Self::Bus(index, BusParam::Dim) => format!("{} dim", bus(index)),
+            Self::Bus(index, BusParam::DimLevel) => format!("{} dim level", bus(index)),
+            Self::Talk => "talk".to_owned(),
             Self::Bus(index, BusParam::Comp) => format!("{} compressor", bus(index)),
             Self::Bus(index, BusParam::CompMix) => format!("{} compressor mix", bus(index)),
             Self::Bus(index, BusParam::CompHpf) => {
@@ -624,6 +663,7 @@ fn input_param(word: &str) -> Option<InputParam> {
         "delay" => InputParam::Delay,
         "width" => InputParam::Width,
         "meter" => InputParam::Meter,
+        "talkback" => InputParam::Talkback,
         other => InputParam::Duck(DuckParam::from_address(other)?),
     })
 }
@@ -650,6 +690,9 @@ fn comp_setting<E>(
     if let Some(name) = before.strip_suffix("/mb") {
         let param = MultibandParam::from_word(setting)?;
         return Some((bus(name).ok()?, BusParam::Multiband(param)));
+    }
+    if let Some(name) = before.strip_suffix("/dim") {
+        return (setting == "level").then_some((bus(name).ok()?, BusParam::DimLevel));
     }
     let index = bus(before.strip_suffix("/comp")?).ok()?;
     let param = match setting {

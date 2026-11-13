@@ -311,6 +311,8 @@ pub struct InputSpec {
     pub sends: Vec<SendSpec>,
     /// Its channel strip: polarity, filters, delay, width; neutral at first.
     pub strip: pult_core::strip::StripSettings,
+    /// A talkback microphone: silent until someone talks ([`Running::talk`]).
+    pub talkback: bool,
     /// Its ducker ([`pult_core::duck`]): the input that turns it down, how far and how fast; off
     /// at first.
     pub duck: pult_core::duck::DuckSettings,
@@ -377,6 +379,7 @@ impl InputSpec {
             automix_weight_db: 0.0,
             sends: Vec::new(),
             strip: pult_core::strip::StripSettings::default(),
+            talkback: false,
             duck: pult_core::duck::DuckSettings::default(),
             buses,
         }
@@ -416,6 +419,8 @@ pub struct BusSpec {
     pub comp_hpf_hz: f32,
     /// Its multiband compressor, behind the bus compressor; off at first.
     pub multiband: pult_core::multiband::MultibandSettings,
+    /// How far its dim switch (and, on a monitor bus, talking) turns it down, in dB.
+    pub dim_db: f32,
     /// Its delay in milliseconds, behind the limiter.
     pub delay_ms: f32,
 }
@@ -439,6 +444,7 @@ impl BusSpec {
             comp_mix: 100.0,
             comp_hpf_hz: pult_core::buscomp::HPF_HZ.0,
             multiband: pult_core::multiband::MultibandSettings::default(),
+            dim_db: pult_core::view::DEFAULT_DIM_DB,
             delay_ms: 0.0,
         }
     }
@@ -789,6 +795,10 @@ pub struct Running {
     /// The loudness meters of the buses; `None` for a route rendered without devices, whose
     /// meters the caller drains.
     _loudness: Option<LoudnessThread>,
+    /// The dim switch of every bus; not part of the spec, a route starts undimmed.
+    dim: Vec<bool>,
+    /// Someone talks: the talkback microphones are open and the monitor buses dimmed.
+    talk: bool,
     /// Rings when an audio device comes or goes, so a lost one is looked for at once.
     alarm: alarm::Alarm,
 }
@@ -1193,7 +1203,10 @@ fn make_rings(
     controls.gate.set_simple(input.gate);
     controls.compressor.set_simple(input.comp);
     controls.strip.set_all(input.strip);
-    controls.muted.store(input.muted, Ordering::Relaxed);
+    // A talkback microphone is silent until someone talks.
+    controls
+        .muted
+        .store(input.muted || input.talkback, Ordering::Relaxed);
     {
         let index = rings.automix_next;
         rings.automix_next += 1;
@@ -1351,6 +1364,8 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         xruns: Arc::new(Counter::default()),
         spec: spec.clone(),
         _loudness: LoudnessThread::start(meters),
+        dim: vec![false; spec.buses.len()],
+        talk: false,
         alarm: alarm::Alarm::watching(),
     };
     running.apply_monitors();
