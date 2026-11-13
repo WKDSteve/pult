@@ -268,6 +268,18 @@ impl Param {
             }
             Binding::Bus(_, BusParam::Comp) => Self::Knob(binding, Span::even(AMOUNT_RANGE)),
             Binding::Bus(_, BusParam::CompMix) => Self::Knob(binding, Span::even((0.0, 100.0))),
+            Binding::Bus(_, BusParam::Multiband(param)) => Self::Knob(
+                binding,
+                match param {
+                    crate::multiband::MultibandParam::Band(_) => Span::even(AMOUNT_RANGE),
+                    crate::multiband::MultibandParam::LowSplit => {
+                        Span::octaves(crate::multiband::LOW_SPLIT_HZ)
+                    }
+                    crate::multiband::MultibandParam::HighSplit => {
+                        Span::octaves(crate::multiband::HIGH_SPLIT_HZ)
+                    }
+                },
+            ),
             Binding::Bus(_, BusParam::CompHpf) => {
                 Self::Knob(binding, Span::octaves(crate::buscomp::HPF_HZ))
             }

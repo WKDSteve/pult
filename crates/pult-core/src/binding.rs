@@ -14,6 +14,7 @@ use std::fmt;
 use crate::duck::{DuckChange, DuckParam};
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
+use crate::multiband::MultibandParam;
 use crate::strip::StripChange;
 use crate::view::{Action, BusView, GAIN_RANGE_DB, InputView, MixerView};
 
@@ -77,6 +78,8 @@ pub enum BusParam {
     CompMix,
     /// The corner of the sidechain high-pass of its compressor, in Hz.
     CompHpf,
+    /// One setting of its multiband compressor.
+    Multiband(MultibandParam),
     /// Its delay, in milliseconds.
     Delay,
     /// Its peak, read only.
@@ -324,11 +327,14 @@ impl Binding {
             Self::Bus(index, BusParam::EqBand(band, param)) => {
                 format!("bus/{}/eq/{}/{}", bus(index)?, band + 1, param.word())
             }
+            Self::Bus(index, BusParam::Multiband(param)) => {
+                format!("bus/{}/mb/{}", bus(index)?, param.word())
+            }
             Self::Bus(index, param) => {
                 let param = match param {
                     BusParam::Gain => "gain",
                     BusParam::Mute => "mute",
-                    BusParam::Eq | BusParam::EqBand(..) => "eq",
+                    BusParam::Eq | BusParam::EqBand(..) | BusParam::Multiband(..) => "eq",
                     BusParam::Limit => "limit",
                     BusParam::LimitCeiling => "limit/ceiling",
                     BusParam::LimitLookahead => "limit/lookahead",
@@ -393,6 +399,10 @@ impl Binding {
                     BusParam::Comp => Value::Amount(bus.comp),
                     BusParam::CompMix => Value::Percent(bus.comp_mix),
                     BusParam::CompHpf => Value::Freq(bus.comp_hpf_hz),
+                    BusParam::Multiband(param @ MultibandParam::Band(_)) => {
+                        Value::Amount(param.read(&bus.multiband))
+                    }
+                    BusParam::Multiband(param) => Value::Freq(param.read(&bus.multiband)),
                     BusParam::Delay => Value::Delay(bus.delay_ms),
                     BusParam::Meter => Value::Peak(bus.peak_db),
                 }
@@ -476,6 +486,10 @@ impl Binding {
                 Action::BusCompMix { bus, percent }
             }
             (Self::Bus(bus, BusParam::CompHpf), Value::Freq(hz)) => Action::BusCompHpf { bus, hz },
+            (Self::Bus(bus, BusParam::Multiband(param)), value) => Action::BusMultiband {
+                bus,
+                change: param.change(multiband_number(param, value)?),
+            },
             (Self::Bus(bus, BusParam::Delay), Value::Delay(ms)) => Action::BusDelay { bus, ms },
             (Self::Bus(bus, BusParam::EqBand(band, param)), value) => {
                 let change = match (param, value) {
@@ -564,6 +578,9 @@ impl Binding {
                 format!("{} compressor sidechain filter", bus(index))
             }
             Self::Bus(index, BusParam::Delay) => format!("{} delay", bus(index)),
+            Self::Bus(index, BusParam::Multiband(param)) => {
+                format!("{} multiband {}", bus(index), param.title())
+            }
             Self::Bus(index, BusParam::LimitCeiling) => format!("{} limiter ceiling", bus(index)),
             Self::Bus(index, BusParam::LimitLookahead) => {
                 format!("{} limiter lookahead", bus(index))
@@ -575,6 +592,18 @@ impl Binding {
                 format!("{} send to {} before the fader", input(i), bus(b))
             }
         }
+    }
+}
+
+/// The number `value` gives a setting of a multiband compressor: an amount for a band, a
+/// frequency for a split.
+fn multiband_number(param: MultibandParam, value: Value) -> Option<f32> {
+    match (param, value) {
+        (MultibandParam::Band(_), Value::Amount(number))
+        | (MultibandParam::LowSplit | MultibandParam::HighSplit, Value::Freq(number)) => {
+            Some(number)
+        }
+        _ => None,
     }
 }
 
@@ -611,12 +640,17 @@ fn strip_change(param: InputParam, value: Value) -> Option<StripChange> {
     })
 }
 
-/// `<bus>/comp/mix` or `<bus>/comp/hpf` of a bus that `bus` finds, as its index and parameter.
+/// `<bus>/comp/mix`, `<bus>/comp/hpf` or `<bus>/mb/<setting>` of a bus that `bus` finds, as its
+/// index and parameter.
 fn comp_setting<E>(
     rest: &str,
     bus: &impl Fn(&str) -> Result<usize, E>,
 ) -> Option<(usize, BusParam)> {
     let (before, setting) = rest.rsplit_once('/')?;
+    if let Some(name) = before.strip_suffix("/mb") {
+        let param = MultibandParam::from_word(setting)?;
+        return Some((bus(name).ok()?, BusParam::Multiband(param)));
+    }
     let index = bus(before.strip_suffix("/comp")?).ok()?;
     let param = match setting {
         "mix" => BusParam::CompMix,

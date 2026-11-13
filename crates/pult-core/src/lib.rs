@@ -31,6 +31,7 @@ pub mod limiter;
 pub mod loudness;
 pub mod midi;
 pub mod mixer;
+pub mod multiband;
 pub mod protocol;
 pub mod ramp;
 pub mod rate;

@@ -146,6 +146,7 @@ impl Running {
             Command::BusComp(bus, amount) => self.bus_comp(*bus, Some(*amount), None, None),
             Command::BusCompMix(bus, percent) => self.bus_comp(*bus, None, Some(*percent), None),
             Command::BusCompHpf(bus, hz) => self.bus_comp(*bus, None, None, Some(*hz)),
+            Command::Multiband(bus, change) => self.multiband(*bus, *change),
             Command::BusDelay(bus, ms) => self.bus_delay(*bus, *ms),
             Command::Strip(input, change) => self.strip(*input, *change),
             Command::Duck(input, change) => self.duck(*input, *change),
@@ -510,6 +511,25 @@ impl Running {
         )])
     }
 
+    /// Changes one setting of the multiband compressor of `bus`.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such bus or band, or the value is out of its range.
+    pub fn multiband(
+        &mut self,
+        bus: usize,
+        change: pult_core::multiband::MultibandChange,
+    ) -> Result<Vec<String>, String> {
+        let Some(running) = self.buses.get(bus) else {
+            return Err(format!("there is no bus {}", bus + 1));
+        };
+        let change = change.checked()?;
+        running.handle.controls.multiband.set(change);
+        self.spec.buses[bus].multiband.apply(change);
+        Ok(vec![format!("{}: {}", running.name, change.said())])
+    }
+
     /// Changes one setting of the channel strip of `input`.
     ///
     /// # Errors
@@ -689,6 +709,18 @@ impl Running {
                     knob(spec.comp),
                     spec.comp_mix,
                     spec.comp_hpf_hz
+                );
+            }
+            if spec.multiband.is_on() {
+                let [low, mid, high] = spec.multiband.bands;
+                let _ = write!(
+                    line,
+                    "  mb {}/{}/{} split {:.0}/{:.0} Hz",
+                    knob(low),
+                    knob(mid),
+                    knob(high),
+                    spec.multiband.low_hz,
+                    spec.multiband.high_hz
                 );
             }
             line.push_str(&eq_summary(spec.eq_on, &spec.eq));

@@ -18,6 +18,9 @@
 //! duck <input> depth <dB>
 //!                        how far, 0 to 60; also threshold <dB>, attack <ms>, hold <ms>,
 //!                        release <ms>
+//! mb <bus> low|mid|high <0..10>
+//!                        the multiband compressor of a bus, one knob per band; mb <bus> split
+//!                        low|high <Hz> moves the corners between them
 //! eq <bus> on|off        switch the equalizer of a bus
 //! eq <bus> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
@@ -46,6 +49,7 @@ use std::fmt;
 use crate::duck::DuckChange;
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
+use crate::multiband::{BAND_WORDS, MultibandChange};
 use crate::select::{SelectError, select};
 use crate::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ, StripChange};
 
@@ -87,6 +91,8 @@ pub enum Command {
     BusCompMix(usize, f32),
     /// Sets the sidechain high-pass of the compressor of a bus in Hz.
     BusCompHpf(usize, f32),
+    /// Changes one setting of the multiband compressor of a bus.
+    Multiband(usize, MultibandChange),
     /// Sets the delay of a bus in milliseconds.
     BusDelay(usize, f32),
     /// Changes one setting of the channel strip of an input.
@@ -143,6 +149,10 @@ duck <input> by <key>
                      turn an input down while another one sounds (duck music by mic);
                      duck <input> off undoes it; duck <input> depth <dB> says how far, 0 to
                      60, and threshold <dB>, attack <ms>, hold <ms>, release <ms> set the rest
+mb <bus> low|mid|high <0..10>
+                     the multiband compressor of a bus: one knob per band, so a loud bass no
+                     longer turns the voices down (mb A1 low 4, mb A1 mid off); mb <bus> split
+                     low|high <Hz> moves the corners, 60 to 1000 and 1000 to 10000
 eq <bus> on|off      switch the equalizer of a bus
 eq <bus> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
@@ -283,6 +293,7 @@ pub fn parse<S: AsRef<str>>(
         "send" => send(rest, names),
         "monitor" => monitor(rest, names),
         "automix" => automix(rest, names),
+        "mb" | "multiband" => multiband(rest, names),
         "duck" => duck(rest, names),
         "polarity" | "phase" | "hpf" | "lpf" | "delay" | "width" => {
             strip(&keyword.to_lowercase(), rest, names)
@@ -419,6 +430,48 @@ fn duck<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, Pa
         other => return error(format!("\"{other}\" is no setting of a ducker; {usage}")),
     };
     Ok(Command::Duck(only_input(input, "duck works on")?, change))
+}
+
+/// `mb <bus> low|mid|high <0..10|off>` or `mb <bus> split low|high <Hz>`; the bus may have
+/// several words.
+fn multiband<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let usage = "usage: mb <bus> low|mid|high <0..10|off>, or mb <bus> split low|high <Hz>";
+    let [before @ .., word, value] = rest else {
+        return error(usage);
+    };
+    let word = word.to_ascii_lowercase();
+    let number = || match value.parse::<f32>() {
+        Ok(number) if number.is_finite() => Ok(number),
+        _ => error(format!("\"{value}\" is not a number; {usage}")),
+    };
+    let (bus, change) = match before {
+        [bus @ .., split] if split.eq_ignore_ascii_case("split") && !bus.is_empty() => {
+            let change = match word.as_str() {
+                "low" => MultibandChange::LowSplit(number()?),
+                "high" => MultibandChange::HighSplit(number()?),
+                _ => return error(usage),
+            };
+            (bus, change)
+        }
+        bus => {
+            let Some(band) = BAND_WORDS.iter().position(|&w| w == word) else {
+                return error(usage);
+            };
+            let amount = if value.eq_ignore_ascii_case("off") {
+                0.0
+            } else {
+                number()?
+            };
+            (bus, MultibandChange::Band(band, amount))
+        }
+    };
+    if bus.is_empty() {
+        return error(usage);
+    }
+    match target(&bus.join(" "), names)? {
+        Target::Bus(index) => Ok(Command::Multiband(index, change)),
+        Target::Input(_) => error("mb works on buses only"),
+    }
 }
 
 /// `automix <input> on|off` or `automix <input> weight <dB>`; the input may have several words.
@@ -839,6 +892,30 @@ mod tests {
         assert!(bad("polarity 2 maybe").contains("usage: polarity"));
         assert!(bad("delay 2 long").contains("not a number"));
         assert!(bad("width").contains("usage: width"));
+    }
+
+    #[test]
+    fn the_multiband_compressor_of_a_bus_is_set_by_band_and_split() {
+        assert_eq!(
+            ok("mb A1 low 4"),
+            Command::Multiband(0, MultibandChange::Band(0, 4.0))
+        );
+        assert_eq!(
+            ok("MULTIBAND b2 MID off"),
+            Command::Multiband(1, MultibandChange::Band(1, 0.0))
+        );
+        assert_eq!(
+            ok("mb A1 split low 150"),
+            Command::Multiband(0, MultibandChange::LowSplit(150.0))
+        );
+        assert_eq!(
+            ok("mb A1 split high 3000"),
+            Command::Multiband(0, MultibandChange::HighSplit(3000.0))
+        );
+        assert!(bad("mb 2 low 4").contains("buses only"));
+        assert!(bad("mb A1 top 4").contains("usage: mb"));
+        assert!(bad("mb A1 low lots").contains("not a number"));
+        assert!(bad("mb low 4").contains("usage: mb"));
     }
 
     #[test]

@@ -19,6 +19,11 @@
 //! comp = 0                     # optional, 0 (off) to 10: the bus compressor on the sum
 //! comp_mix = 100               # optional, 0 (dry) to 100 (all compressed): parallel compression
 //! comp_hpf_hz = 20             # optional, 20 to 500: the sidechain filter, keeps bass from pumping
+//! mb_low = 0                   # optional, 0 (off) to 10: the low band of the multiband compressor;
+//! mb_mid = 0                   # its middle band and
+//! mb_high = 0                  # its high band
+//! mb_low_hz = 200              # optional, 60 to 1000: the corner between low and middle
+//! mb_high_hz = 2000            # optional, 1000 to 10000: the corner between middle and high
 //! delay_ms = 12                # optional, 0 to 250: holds the bus back, against an offset to another output
 //! minus = 2                    # optional: a mix-minus (N-1) bus for input 2, a caller: it gets
 //!                              # everything but that input, which can never be routed to it
@@ -88,6 +93,7 @@ use std::fmt::Write as _;
 use pult_core::duck::{DuckChange, DuckSettings};
 use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitSettings};
+use pult_core::multiband::MultibandSettings;
 use pult_core::strip::StripSettings;
 use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
@@ -191,6 +197,14 @@ struct BusEntry {
     comp: f32,
     comp_mix: Option<f32>,
     comp_hpf_hz: Option<f32>,
+    #[serde(default)]
+    mb_low: f32,
+    #[serde(default)]
+    mb_mid: f32,
+    #[serde(default)]
+    mb_high: f32,
+    mb_low_hz: Option<f32>,
+    mb_high_hz: Option<f32>,
     #[serde(default)]
     delay_ms: f32,
     #[serde(default)]
@@ -570,6 +584,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
         check_gain(&format!("bus {}", entry.name), entry.gain_db)?;
         check_label(&format!("bus {}", entry.name), entry.label.as_ref())?;
         let (comp, comp_mix, comp_hpf_hz) = bus_comp_of(&entry)?;
+        let multiband = multiband_of(&entry)?;
         let delay_ms = match pult_core::busdelay::check_delay(entry.delay_ms) {
             Ok(ms) => ms,
             Err(why) => return fail(format!("bus {}: {why}", entry.name)),
@@ -600,6 +615,7 @@ fn buses(entries: Vec<BusEntry>) -> Result<Vec<BusSpec>, ProfileError> {
             comp,
             comp_mix,
             comp_hpf_hz,
+            multiband,
             delay_ms,
         });
     }
@@ -745,6 +761,30 @@ fn bus_comp_of(entry: &BusEntry) -> Result<(f32, f32, f32), ProfileError> {
     Ok((comp, mix, hz))
 }
 
+/// The multiband compressor of a bus entry, checked.
+fn multiband_of(entry: &BusEntry) -> Result<MultibandSettings, ProfileError> {
+    let start = MultibandSettings::default();
+    MultibandSettings {
+        bands: [entry.mb_low, entry.mb_mid, entry.mb_high],
+        low_hz: entry.mb_low_hz.unwrap_or(start.low_hz),
+        high_hz: entry.mb_high_hz.unwrap_or(start.high_hz),
+    }
+    .checked()
+    .map_err(|why| ProfileError(format!("bus {}: {why}", entry.name)))
+}
+
+/// The keys of a multiband compressor with their values and what they start as.
+fn multiband_keys(settings: &MultibandSettings) -> [(&'static str, f32, f32); 5] {
+    let start = MultibandSettings::default();
+    [
+        ("mb_low", settings.bands[0], 0.0),
+        ("mb_mid", settings.bands[1], 0.0),
+        ("mb_high", settings.bands[2], 0.0),
+        ("mb_low_hz", settings.low_hz, start.low_hz),
+        ("mb_high_hz", settings.high_hz, start.high_hz),
+    ]
+}
+
 /// The lines of a bus compressor that is not as it starts.
 #[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
 fn render_comp(text: &mut String, bus: &BusSpec) {
@@ -756,6 +796,11 @@ fn render_comp(text: &mut String, bus: &BusSpec) {
     }
     if bus.comp_hpf_hz != pult_core::buscomp::HPF_HZ.0 {
         let _ = writeln!(text, "comp_hpf_hz = {}", bus.comp_hpf_hz);
+    }
+    for (key, value, start) in multiband_keys(&bus.multiband) {
+        if value != start {
+            let _ = writeln!(text, "{key} = {value}");
+        }
     }
     if bus.delay_ms != 0.0 {
         let _ = writeln!(text, "delay_ms = {}", bus.delay_ms);
@@ -1095,6 +1140,9 @@ fn set_bus(table: &mut Table, bus: &BusSpec) {
         bus.comp_hpf_hz,
         pult_core::buscomp::HPF_HZ.0,
     );
+    for (key, value, start) in multiband_keys(&bus.multiband) {
+        set_number_from(table, key, value, start);
+    }
     set_number_from(table, "delay_ms", bus.delay_ms, 0.0);
     match bus.minus {
         Some(input) => {

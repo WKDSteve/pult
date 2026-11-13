@@ -204,6 +204,10 @@ pub struct BusView {
     pub delay_ms: f32,
     /// The most its compressor took away since the previous view, in dB.
     pub comp_reduction_db: f32,
+    /// Its multiband compressor: the knob of each band and the two corners between them.
+    pub multiband: crate::multiband::MultibandSettings,
+    /// The most each band of it took away since the previous view, in dB, from the bottom.
+    pub multiband_reduction_db: [f32; crate::multiband::BANDS],
     /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
     pub limited_db: f32,
     /// Whether the device is there; false while it is gone.
@@ -364,6 +368,13 @@ pub enum Action {
         input: usize,
         /// The new setting.
         change: crate::strip::StripChange,
+    },
+    /// Changes one setting of the multiband compressor of a bus.
+    BusMultiband {
+        /// Bus index.
+        bus: usize,
+        /// The new setting.
+        change: crate::multiband::MultibandChange,
     },
     /// Changes one setting of the ducker of an input.
     InputDuck {
@@ -575,6 +586,8 @@ impl FakeDesk {
             comp_hpf_hz: 20.0,
             delay_ms: 0.0,
             comp_reduction_db: 0.0,
+            multiband: crate::multiband::MultibandSettings::default(),
+            multiband_reduction_db: [0.0; crate::multiband::BANDS],
             limited_db: 0.0,
             present: true,
             peak_db: None,
@@ -661,6 +674,18 @@ impl FakeDesk {
             input + 1,
             if on { "->" } else { "off" }
         )])
+    }
+
+    /// One setting of the multiband compressor of `bus`.
+    fn set_multiband(
+        &mut self,
+        bus: usize,
+        change: crate::multiband::MultibandChange,
+    ) -> Result<Vec<String>, String> {
+        let change = change.checked()?;
+        let bus = self.bus_mut(bus)?;
+        bus.multiband.apply(change);
+        Ok(vec![format!("{} {}", bus.name, change.said())])
     }
 
     /// One setting of the ducker of `input`.
@@ -1000,6 +1025,7 @@ impl Desk for FakeDesk {
                 Ok(vec![format!("[{}] {}", input + 1, change.said())])
             }
             Action::InputDuck { input, change } => self.set_duck(input, change),
+            Action::BusMultiband { bus, change } => self.set_multiband(bus, change),
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
             Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
             Action::Route { input, bus, on } => self.set_route(input, bus, on),

@@ -12,6 +12,7 @@ use pult_core::eq::{Band, EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
 use pult_core::limiter::{
     DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LIMIT_CEILING_DB, LIMIT_LOOKAHEAD_MS,
 };
+use pult_core::multiband::{HIGH_SPLIT_HZ, LOW_SPLIT_HZ, MultibandParam};
 use pult_core::scale::{FADER_FLOOR_DB, FADER_TOP_DB, Span};
 use pult_core::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ, MAX_DELAY_MS, WIDTH_RANGE};
 use pult_core::view::{AMOUNT_RANGE, Action, MixerView};
@@ -45,11 +46,13 @@ impl Dial {
     pub fn of(binding: Binding) -> Option<Self> {
         match binding {
             Binding::Input(_, InputParam::Gate | InputParam::Comp)
-            | Binding::Bus(_, BusParam::Comp) => Some(Self {
-                span: Span::even(AMOUNT_RANGE),
-                home: 0.0,
-                both_ways: false,
-            }),
+            | Binding::Bus(_, BusParam::Comp | BusParam::Multiband(MultibandParam::Band(_))) => {
+                Some(Self {
+                    span: Span::even(AMOUNT_RANGE),
+                    home: 0.0,
+                    both_ways: false,
+                })
+            }
             Binding::Input(_, InputParam::Hpf) => Some(Self {
                 span: Span::octaves(HPF_RANGE_HZ),
                 home: HPF_RANGE_HZ.0,
@@ -81,6 +84,16 @@ impl Dial {
                 span: Span::even((0.0, 100.0)),
                 home: 100.0,
                 both_ways: false,
+            }),
+            Binding::Bus(_, BusParam::Multiband(MultibandParam::LowSplit)) => Some(Self {
+                span: Span::octaves(LOW_SPLIT_HZ),
+                home: 200.0,
+                both_ways: true,
+            }),
+            Binding::Bus(_, BusParam::Multiband(MultibandParam::HighSplit)) => Some(Self {
+                span: Span::octaves(HIGH_SPLIT_HZ),
+                home: 2000.0,
+                both_ways: true,
             }),
             Binding::Bus(_, BusParam::CompHpf) => Some(Self {
                 span: Span::octaves(pult_core::buscomp::HPF_HZ),

@@ -269,6 +269,14 @@ pult run --profile meinprofil.toml --log abend.csv
   (`delay A1 off` für keine), von außen `bus/<name>/delay`, per MIDI lernbar. Die gesetzte Verzögerung steht im Zustand
   (`delay_ms`) und in `show`. Den Versatz zwischen zwei Ausgängen misst pult noch nicht selbst; er gehört von Hand
   bestimmt (Klatschen oder ein Klick, mit einem Mikrofon zwischen beiden aufgenommen).
+- **Multiband-Kompressor:** Hinter dem Bus-Kompressor teilt jeder Bus seine Summe in drei Bänder, jedes mit eigenem
+  Kompressor und einem Regler: `mb_low`, `mb_mid`, `mb_high = 0..10` am Bus (0 = aus). Ein lauter Bass drückt dann nicht
+  mehr die Stimmen mit herunter, wie es ein Kompressor über die ganze Summe tut. `mb_low_hz = 60..1000` (Standard 200)
+  und `mb_high_hz = 1000..10000` (Standard 2000) sind die Trennfrequenzen. Die Weichen sind Linkwitz-Riley vierter
+  Ordnung, die Bänder ergeben zusammen wieder einen flachen Frequenzgang; stehen alle drei Regler auf 0, läuft er gar
+  nicht mit. Während des Laufs `mb A1 low 4`, `mb A1 mid off`, `mb A1 split low 150`, `mb A1 split high 3000`; im
+  Fenster in der Ansicht **EQ** die Spalte MULTIBAND (LOW, X LO, MID, X HI, HIGH, mit der größten Reduktion im Kopf);
+  von außen `bus/<name>/mb/low|mid|high` und `bus/<name>/mb/xlow|xhigh`.
 - **Loudness:** Jeder Bus wird nach EBU R128 / ITU-R BS.1770 gemessen (Momentary, Short-Term, Integrated, Range, True
   Peak), auf einem eigenen Thread. Unter dem Bus-Fader steht die Short-Term-Loudness (`-14.1 LUFS`), wenn weder Clipping
   noch der Limiter etwas zu melden haben; alle Werte stehen im Zustand (`docs/CONTROL.md`). Für Streaming-Plattformen

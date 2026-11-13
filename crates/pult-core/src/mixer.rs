@@ -170,6 +170,8 @@ pub struct BusControls {
     pub limiter: LimiterControls,
     /// The bus compressor, after the equalizer and before the gain; off at first.
     pub comp: crate::buscomp::BusCompControls,
+    /// The multiband compressor behind the bus compressor; off at first.
+    pub multiband: crate::multiband::MultibandControls,
     /// The delay, behind the limiter; none at first.
     pub delay: crate::busdelay::BusDelayControls,
     /// Whether solo acts on this bus: on every bus while the route has no monitor bus, else
@@ -187,6 +189,7 @@ impl Default for BusControls {
             limiter: LimiterControls::default(),
             delay: crate::busdelay::BusDelayControls::default(),
             comp: crate::buscomp::BusCompControls::default(),
+            multiband: crate::multiband::MultibandControls::default(),
             solo_here: AtomicBool::new(true),
         }
     }
@@ -687,6 +690,8 @@ pub struct Mixer {
     delay: Box<crate::busdelay::BusDelay>,
     /// The bus compressor, at its output rate.
     comp: Box<crate::buscomp::BusCompressor>,
+    /// The multiband compressor behind it. Boxed: its buffers and filters are large.
+    multiband: Box<crate::multiband::Multiband>,
     /// Resumed, and no callback yet: the next one opens the rings.
     opening: bool,
     /// Where the output goes to be measured for loudness, off this thread.
@@ -712,6 +717,7 @@ impl Mixer {
             limiter: Box::new(Limiter::new(rate, out_channels)),
             delay: Box::new(crate::busdelay::BusDelay::new(rate, out_channels)),
             comp: Box::new(crate::buscomp::BusCompressor::new(rate)),
+            multiband: Box::new(crate::multiband::Multiband::new(rate)),
             inputs,
             out_channels,
             controls: Arc::clone(&handle.controls),
@@ -772,6 +778,8 @@ impl Mixer {
         self.eq.process(&self.controls.eq, out, self.out_channels);
         self.comp
             .process(&self.controls.comp, out, self.out_channels);
+        self.multiband
+            .process(&self.controls.multiband, out, self.out_channels);
         let sounding = !self.controls.muted.load(Ordering::Acquire);
         let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
         self.gain

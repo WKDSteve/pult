@@ -414,6 +414,8 @@ pub struct BusSpec {
     pub comp_mix: f32,
     /// The corner of the sidechain high-pass of its compressor in Hz.
     pub comp_hpf_hz: f32,
+    /// Its multiband compressor, behind the bus compressor; off at first.
+    pub multiband: pult_core::multiband::MultibandSettings,
     /// Its delay in milliseconds, behind the limiter.
     pub delay_ms: f32,
 }
@@ -436,6 +438,7 @@ impl BusSpec {
             comp: 0.0,
             comp_mix: 100.0,
             comp_hpf_hz: pult_core::buscomp::HPF_HZ.0,
+            multiband: pult_core::multiband::MultibandSettings::default(),
             delay_ms: 0.0,
         }
     }
@@ -1265,6 +1268,7 @@ fn set_up_bus(handle: &BusHandle, bus: &BusSpec) {
     comp.comp.set_simple(bus.comp);
     comp.set_mix(bus.comp_mix / 100.0);
     comp.set_hpf(bus.comp_hpf_hz);
+    handle.controls.multiband.set_all(bus.multiband);
     handle.controls.delay.set(bus.delay_ms);
 }
 

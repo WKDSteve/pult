@@ -249,6 +249,10 @@ impl Desk for EngineDesk {
                 comp_hpf_hz: spec.comp_hpf_hz,
                 delay_ms: spec.delay_ms,
                 comp_reduction_db: bus.handle.controls.comp.reduction.take(),
+                multiband: spec.multiband,
+                multiband_reduction_db: std::array::from_fn(|band| {
+                    bus.handle.controls.multiband.reduction[band].take()
+                }),
                 loudness: bus
                     .loudness
                     .as_deref()
@@ -362,6 +366,7 @@ impl Desk for EngineDesk {
                 self.running.bus_comp(bus, None, Some(percent), None)
             }
             Action::BusCompHpf { bus, hz } => self.running.bus_comp(bus, None, None, Some(hz)),
+            Action::BusMultiband { bus, change } => self.running.multiband(bus, change),
             Action::BusDelay { bus, ms } => self.running.bus_delay(bus, ms),
             Action::InputAutomix { input, on } => self.running.automix(input, Some(on), None),
             Action::InputStrip { input, change } => self.running.strip(input, change),

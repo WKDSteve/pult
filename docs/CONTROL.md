@@ -166,6 +166,9 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `bus/<name>/comp/mix` | Zahl, 0 (trocken) bis 100 (ganz komprimiert) |
 | `bus/<name>/comp/hpf` | Zahl, 20 bis 500 Hz: Hochpass im Steuersignal |
 | `bus/<name>/delay` | Zahl, 0 bis 250 ms: die Verzögerung des Busses |
+| `bus/<name>/mb/low`, `/mb/mid`, `/mb/high` | Zahl, 0 (aus) bis 10: die Bänder des Multiband-Kompressors |
+| `bus/<name>/mb/xlow` | Zahl, 60 bis 1000 Hz: Trennfrequenz zwischen unten und Mitte |
+| `bus/<name>/mb/xhigh` | Zahl, 1000 bis 10000 Hz: Trennfrequenz zwischen Mitte und oben |
 | `bus/<name>/monitor` | `true` oder `false`: der Monitor-Bus, auf dem allein Solo wirkt |
 | `send/<n>/<bus>` | Zahl, der Pegel dieser Kreuzung in dB (wie ein Gain, gleitet mit `ramp_ms`); 0 am Anfang |
 | `sendpre/<n>/<bus>` | `true` (vor dem Fader des Eingangs) oder `false` (danach, am Anfang) |

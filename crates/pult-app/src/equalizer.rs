@@ -6,6 +6,7 @@ use eframe::egui::{
     Align, Align2, CornerRadius, FontId, Frame, Layout, Margin, Pos2, RichText, ScrollArea, Sense,
     Stroke, Ui, pos2, vec2,
 };
+use pult_core::multiband::MultibandParam;
 use pult_core::response_db;
 use pult_core::view::{Action, BandKind, BusView, EQ_BANDS, MixerView};
 
@@ -115,6 +116,14 @@ fn bus_row(
             |ui| {
                 ui.set_width(COMP_WIDTH);
                 comp_column(ui, index, values, actions);
+            },
+        );
+        ui.allocate_ui_with_layout(
+            vec2(MULTIBAND_WIDTH, KIND_HEIGHT + DIAL_ROW_HEIGHT + 22.0),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(MULTIBAND_WIDTH);
+                multiband_column(ui, index, values, actions);
             },
         );
         ui.allocate_ui_with_layout(
@@ -251,6 +260,52 @@ fn comp_column(ui: &mut Ui, bus: usize, values: &mut Values<'_>, actions: &mut V
                 (BusParam::CompHpf, "HPF"),
             ] {
                 let dial = Binding::Bus(bus, param);
+                actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, width));
+            }
+        },
+    );
+}
+
+const MULTIBAND_WIDTH: f32 = 195.0;
+
+/// The multiband compressor of a bus, behind its compressor: the knob of each band, the two
+/// corners between them, and the most a band takes away now.
+fn multiband_column(ui: &mut Ui, bus: usize, values: &mut Values<'_>, actions: &mut Vec<Action>) {
+    let p = &Theme::current().palette;
+    let taken = values.view().buses.get(bus).map_or(0.0, |b| {
+        b.multiband
+            .bands
+            .iter()
+            .zip(b.multiband_reduction_db)
+            .filter(|(knob, _)| **knob > 0.0)
+            .fold(0.0_f32, |most, (_, db)| most.max(db))
+    });
+    let head = if taken >= 0.05 {
+        format!("MULTIBAND  -{taken:.1} dB")
+    } else {
+        "MULTIBAND".to_owned()
+    };
+    let color = if taken >= 0.05 {
+        p.accent
+    } else {
+        p.text_faint
+    };
+    ui.label(RichText::new(head).size(9.5).color(color));
+    ui.add_space(4.0 + KIND_HEIGHT);
+    ui.allocate_ui_with_layout(
+        vec2(MULTIBAND_WIDTH, DIAL_ROW_HEIGHT),
+        Layout::left_to_right(Align::Min),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let width = MULTIBAND_WIDTH / 5.0;
+            for (param, text) in [
+                (MultibandParam::Band(0), "LOW"),
+                (MultibandParam::LowSplit, "X LO"),
+                (MultibandParam::Band(1), "MID"),
+                (MultibandParam::HighSplit, "X HI"),
+                (MultibandParam::Band(2), "HIGH"),
+            ] {
+                let dial = Binding::Bus(bus, BusParam::Multiband(param));
                 actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, width));
             }
         },

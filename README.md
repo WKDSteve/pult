@@ -20,6 +20,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Kanalzug je Eingang: Polarität, Hoch-/Tiefpass, Verzögerung, Stereobreite (`hpf 2 80`, `polarity 2 on`, HPF/LPF/Ø im Fenster) | fertig |
 | Ducking: ein Eingang wird leiser, solange ein anderer klingt (`duck 1 by 2`, `duck_by = 2` im Profil) | fertig, ohne Regler im Fenster |
 | Bus-Kompressor auf der Summe mit Parallel-Mix und Sidechain-Hochpass (`comp A1 3`, `comp A1 mix 50`, Spalte COMPRESSOR in der EQ-Ansicht) | fertig |
+| Multiband-Kompressor je Bus: drei Bänder mit Linkwitz-Riley-Weichen, je Band ein Regler (`mb A1 low 4`, Spalte MULTIBAND in der EQ-Ansicht) | fertig |
 | Loudness je Bus nach EBU R128 (LUFS momentary/short-term/integrated, LRA, True Peak), unter dem Bus-Fader und im Zustand | fertig |
 | Mix-Minus (N-1): ein Bus für einen Anrufer hört alles außer dessen Stimme (`minus = 2` am Bus) | fertig |
 | Monitor-Bus: Solo wirkt nur auf dem Abhör-Bus, ein Gesprächs-Bus hört weiter alles (`monitor = true`, `monitor B1 on`, **MON** im Fenster) | fertig |

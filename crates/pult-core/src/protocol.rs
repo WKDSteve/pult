@@ -13,6 +13,7 @@ use crate::binding::{BandParam, Binding, BusParam, InputParam, Value};
 use crate::control::{Command, Target};
 use crate::eq::{Band, BandChange, BandKind};
 use crate::limiter::{LimitChange, LimitSettings};
+use crate::multiband::MultibandParam;
 use crate::strip::StripChange;
 use crate::view::{Action, BusView, EventKind, EventView, GAIN_RANGE_DB, InputView, MeterPoint};
 use crate::view::{MixerView, SourceKind, check_amount};
@@ -217,6 +218,12 @@ pub struct BusState {
     /// The most its compressor took away since the previous state, in dB.
     #[serde(default)]
     pub comp_reduction_db: f32,
+    /// Its multiband compressor; off from a run older than it.
+    #[serde(default)]
+    pub multiband: crate::multiband::MultibandSettings,
+    /// The most each of its bands took away since the previous state, in dB, from the bottom.
+    #[serde(default)]
+    pub multiband_reduction_db: [f32; crate::multiband::BANDS],
     /// How far its limiter turned down at most since the previous state, in dB; 0 when it did not.
     #[serde(default)]
     pub limited_db: f32,
@@ -391,6 +398,8 @@ impl BusState {
             comp_hpf_hz: bus.comp_hpf_hz,
             delay_ms: bus.delay_ms,
             comp_reduction_db: bus.comp_reduction_db,
+            multiband: bus.multiband,
+            multiband_reduction_db: bus.multiband_reduction_db,
             loudness: LoudnessState {
                 momentary_lufs: bus.loudness.momentary_lufs,
                 short_term_lufs: bus.loudness.short_term_lufs,
@@ -517,6 +526,11 @@ impl Op {
             Command::BusComp(to, amount) => on_bus(*to, "comp", OpValue::Number(*amount))?,
             Command::BusCompMix(to, percent) => on_bus(*to, "comp/mix", OpValue::Number(*percent))?,
             Command::BusCompHpf(to, hz) => on_bus(*to, "comp/hpf", OpValue::Number(*hz))?,
+            Command::Multiband(to, change) => on_bus(
+                *to,
+                &format!("mb/{}", change.param().word()),
+                OpValue::Number(change.number()),
+            )?,
             Command::BusDelay(to, ms) => on_bus(*to, "delay", OpValue::Number(*ms))?,
             Command::Strip(input, change) => {
                 let (param, value) = strip_op(*change);
@@ -594,6 +608,20 @@ impl Op {
     }
 }
 
+/// Whether [`setting_value`] checks the number of `binding`.
+fn is_setting(binding: Binding) -> bool {
+    matches!(
+        binding,
+        Binding::Bus(
+            _,
+            BusParam::CompMix | BusParam::CompHpf | BusParam::Delay | BusParam::Multiband(_),
+        ) | Binding::Input(
+            _,
+            InputParam::Hpf | InputParam::Lpf | InputParam::Delay | InputParam::Width,
+        )
+    )
+}
+
 /// The address word and the value of a change of a channel strip.
 fn strip_op(change: StripChange) -> (&'static str, OpValue) {
     match change {
@@ -615,6 +643,14 @@ fn setting_value(binding: Binding, number: f32, address: &str) -> Result<Value, 
             .map_err(|why| format!("{address}: {why}"))
     };
     match binding {
+        Binding::Bus(_, BusParam::Multiband(param)) => param
+            .change(number)
+            .checked()
+            .map(|_| match param {
+                MultibandParam::Band(_) => Value::Amount(number),
+                _ => Value::Freq(number),
+            })
+            .map_err(|why| format!("{address}: {why}")),
         Binding::Input(_, InputParam::AutomixWeight) if (-12.0..=12.0).contains(&number) => {
             Ok(Value::Gain(number))
         }
@@ -683,14 +719,9 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         (Binding::Input(_, InputParam::Pan), OpValue::Number(pan)) => {
             Ok(Value::Pan(wants_number(*pan)?))
         }
-        (
-            Binding::Bus(_, BusParam::CompMix | BusParam::CompHpf | BusParam::Delay)
-            | Binding::Input(
-                _,
-                InputParam::Hpf | InputParam::Lpf | InputParam::Delay | InputParam::Width,
-            ),
-            OpValue::Number(n),
-        ) => setting_value(binding, wants_number(*n)?, address),
+        (binding, OpValue::Number(n)) if is_setting(binding) => {
+            setting_value(binding, wants_number(*n)?, address)
+        }
         (Binding::Input(_, InputParam::Gate), OpValue::Number(amount)) => {
             check_amount("gate", wants_number(*amount)?).map(Value::Amount)
         }
@@ -905,6 +936,27 @@ mod tests {
             action(r#"{"op":"save"}"#),
             Ok(Action::SaveProfile { path: None })
         );
+    }
+
+    #[test]
+    fn a_multiband_compressor_is_set_by_address() {
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/mb/mid","value":4}"#),
+            Ok(Action::BusMultiband {
+                bus: 0,
+                change: crate::multiband::MultibandChange::Band(1, 4.0)
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"bus/A1/mb/xhigh","value":3000}"#),
+            Ok(Action::BusMultiband {
+                bus: 0,
+                change: crate::multiband::MultibandChange::HighSplit(3000.0)
+            })
+        );
+        assert!(action(r#"{"op":"set","address":"bus/A1/mb/low","value":11}"#).is_err());
+        assert!(action(r#"{"op":"set","address":"bus/A1/mb/xlow","value":5}"#).is_err());
+        assert!(action(r#"{"op":"set","address":"bus/A1/mb/top","value":1}"#).is_err());
     }
 
     #[test]

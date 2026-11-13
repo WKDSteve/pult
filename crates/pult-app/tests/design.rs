@@ -58,6 +58,14 @@ fn wobble(seed: f64, t: f64) -> f32 {
     ((t * (1.3 + seed * 0.37)).sin() * 0.6 + (t * (4.1 + seed)).sin() * 0.4) as f32
 }
 
+/// The stream bus holds its bass with the low band.
+fn showcase_multiband(bus: usize) -> pult_core::multiband::MultibandSettings {
+    pult_core::multiband::MultibandSettings {
+        bands: [[0.0; 3], [0.0; 3], [4.0, 0.0, 2.0]][bus],
+        ..pult_core::multiband::MultibandSettings::default()
+    }
+}
+
 /// Mic 1 with a high-pass against rumble, the Guitar turned over.
 fn showcase_strip(input: usize) -> pult_core::strip::StripSettings {
     pult_core::strip::StripSettings {
@@ -145,6 +153,8 @@ fn showcase(t: f64) -> MixerView {
             comp_hpf_hz: [20.0, 20.0, 120.0][j],
             delay_ms: 0.0,
             comp_reduction_db: [0.0, 0.0, 2.4][j],
+            multiband: showcase_multiband(j),
+            multiband_reduction_db: [[0.0; 3], [0.0; 3], [3.1, 0.0, 0.6]][j],
             // The stream bus at the loudness of a streaming platform.
             loudness: LoudnessView {
                 short_term_lufs: Some([-19.2, -23.5, -14.1][j]),
