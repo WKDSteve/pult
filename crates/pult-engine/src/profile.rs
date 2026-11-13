@@ -51,6 +51,10 @@
 //! comp = 0                     # optional, 0 (off) to 10: more even, and louder
 //! mute = false                 # optional
 //! talkback = false             # optional: a talkback microphone, silent until `talk on`
+//! eq_on = true                 # optional: false switches the equalizer of the input off
+//! eq_pre = false               # optional: true puts it before gate and compressor
+//! limit_on = false             # optional: true switches the limiter of the input on
+//! limit_db = -0.3              # optional: its ceiling, -20 to 0 (it has no lookahead)
 //! polarity = false             # optional: true turns the polarity over
 //! hpf_hz = 20                  # optional, 20 (off) to 1000: the high-pass of the channel strip
 //! lpf_hz = 20000               # optional, 1000 to 20000 (off): its low-pass
@@ -62,6 +66,10 @@
 //! duck_attack_ms = 60          # optional, 1 to 1000: how fast it turns down
 //! duck_hold_ms = 400           # optional, 0 to 5000: how long it stays down after input 2
 //! duck_release_ms = 800        # optional, 10 to 5000: how fast it comes back
+//!
+//! [[input.eq]]                 # optional: one band of this input's equalizer, as [[bus.eq]]
+//! band = 1
+//! gain_db = -6
 //!
 //! [[input]]
 //! process = "Spotify"          # instead of device: the sound of a program
@@ -257,6 +265,14 @@ struct InputEntry {
     sends: Vec<SendEntry>,
     #[serde(default)]
     talkback: bool,
+    eq_on: Option<bool>,
+    #[serde(default)]
+    eq_pre: bool,
+    #[serde(default)]
+    limit_on: bool,
+    limit_db: Option<f32>,
+    #[serde(default)]
+    eq: Vec<EqEntry>,
     #[serde(default)]
     polarity: bool,
     hpf_hz: Option<f32>,
@@ -551,6 +567,86 @@ fn scene(entry: SceneEntry, count: usize, buses: &[BusSpec]) -> Result<SceneSpec
     })
 }
 
+/// The inputs of a profile, checked, with the buses they feed as indices into `buses`.
+fn inputs(entries: Vec<InputEntry>, buses: &[BusSpec]) -> Result<Vec<InputSpec>, ProfileError> {
+    let mut inputs = Vec::with_capacity(entries.len());
+    for (number, mut entry) in entries.into_iter().enumerate() {
+        let (name, kind) = match (entry.device.take(), entry.process.take()) {
+            (Some(device), None) => (device, InputKind::Device),
+            (None, Some(program)) => (program, InputKind::Process),
+            (Some(_), Some(_)) => {
+                return fail(format!(
+                    "input {}: give either device or process, not both",
+                    number + 1
+                ));
+            }
+            (None, None) => {
+                return fail(format!("input {}: needs a device or a process", number + 1));
+            }
+        };
+        let what = format!("input \"{name}\"");
+        check_gain(&what, entry.gain_db)?;
+        check_label(&what, entry.label.as_ref())?;
+        check_pan(&what, entry.pan)?;
+        for (key, amount) in [("gate", entry.gate), ("comp", entry.comp)] {
+            pult_core::view::check_amount(key, amount)
+                .map_err(|why| ProfileError(format!("{what}: {why}")))?;
+        }
+        let mut routed = Vec::with_capacity(entry.buses.len());
+        for name in &entry.buses {
+            let Some(index) = buses.iter().position(|b| &b.name == name) else {
+                let known: Vec<&str> = buses.iter().map(|b| b.name.as_str()).collect();
+                return fail(format!(
+                    "{what} feeds bus \"{name}\", which is not defined (buses: {})",
+                    known.join(", ")
+                ));
+            };
+            routed.push(index);
+        }
+        let strip = entry.strip(&what)?;
+        let eq = bands(&what, std::mem::take(&mut entry.eq))?;
+        let limit_db = match entry.limit_db {
+            Some(db) => match pult_core::limiter::LimitChange::Ceiling(db).checked() {
+                Ok(_) => db,
+                Err(why) => return fail(format!("{what}: {why}")),
+            },
+            None => pult_core::limiter::LimitSettings::INPUT.ceiling_db,
+        };
+        let duck = entry.duck(&what)?;
+        inputs.push(InputSpec {
+            device: name,
+            kind,
+            label: entry.label,
+            gain_db: entry.gain_db,
+            pan: entry.pan,
+            gate: entry.gate,
+            comp: entry.comp,
+            muted: entry.mute,
+            automix: entry.automix,
+            automix_weight_db: {
+                if !(-12.0..=12.0).contains(&entry.automix_weight_db) {
+                    return fail(format!(
+                        "{what}: automix_weight_db must be -12 to 12, not {}",
+                        entry.automix_weight_db
+                    ));
+                }
+                entry.automix_weight_db
+            },
+            sends: sends(&what, entry.sends, buses)?,
+            strip,
+            talkback: entry.talkback,
+            eq_on: entry.eq_on.unwrap_or(true),
+            eq,
+            eq_pre: entry.eq_pre,
+            limit_on: entry.limit_on,
+            limit_db,
+            duck,
+            buses: routed,
+        });
+    }
+    Ok(inputs)
+}
+
 /// The bands of a bus from its `[[bus.eq]]` entries; a band without an entry stays flat.
 fn bands(what: &str, entries: Vec<EqEntry>) -> Result<[Band; EQ_BANDS], ProfileError> {
     let mut bands = Band::all_flat();
@@ -664,68 +760,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
 
     let buses = buses(file.bus)?;
 
-    let mut inputs = Vec::with_capacity(file.input.len());
-    for (number, mut entry) in file.input.into_iter().enumerate() {
-        let (name, kind) = match (entry.device.take(), entry.process.take()) {
-            (Some(device), None) => (device, InputKind::Device),
-            (None, Some(program)) => (program, InputKind::Process),
-            (Some(_), Some(_)) => {
-                return fail(format!(
-                    "input {}: give either device or process, not both",
-                    number + 1
-                ));
-            }
-            (None, None) => {
-                return fail(format!("input {}: needs a device or a process", number + 1));
-            }
-        };
-        let what = format!("input \"{name}\"");
-        check_gain(&what, entry.gain_db)?;
-        check_label(&what, entry.label.as_ref())?;
-        check_pan(&what, entry.pan)?;
-        for (key, amount) in [("gate", entry.gate), ("comp", entry.comp)] {
-            pult_core::view::check_amount(key, amount)
-                .map_err(|why| ProfileError(format!("{what}: {why}")))?;
-        }
-        let mut routed = Vec::with_capacity(entry.buses.len());
-        for name in &entry.buses {
-            let Some(index) = buses.iter().position(|b| &b.name == name) else {
-                let known: Vec<&str> = buses.iter().map(|b| b.name.as_str()).collect();
-                return fail(format!(
-                    "{what} feeds bus \"{name}\", which is not defined (buses: {})",
-                    known.join(", ")
-                ));
-            };
-            routed.push(index);
-        }
-        let strip = entry.strip(&what)?;
-        let duck = entry.duck(&what)?;
-        inputs.push(InputSpec {
-            device: name,
-            kind,
-            label: entry.label,
-            gain_db: entry.gain_db,
-            pan: entry.pan,
-            gate: entry.gate,
-            comp: entry.comp,
-            muted: entry.mute,
-            automix: entry.automix,
-            automix_weight_db: {
-                if !(-12.0..=12.0).contains(&entry.automix_weight_db) {
-                    return fail(format!(
-                        "{what}: automix_weight_db must be -12 to 12, not {}",
-                        entry.automix_weight_db
-                    ));
-                }
-                entry.automix_weight_db
-            },
-            sends: sends(&what, entry.sends, &buses)?,
-            strip,
-            talkback: entry.talkback,
-            duck,
-            buses: routed,
-        });
-    }
+    let inputs = inputs(file.input, &buses)?;
 
     let buses = minus_buses(buses, &inputs)?;
 
@@ -982,6 +1017,38 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
         let _ = writeln!(text, "talkback = true");
     }
     render_duck(text, &input.duck);
+    render_input_eq(text, input);
+}
+
+/// The lines of the equalizer and the limiter of an input that are not as they start; the bands
+/// last, since a table of them ends the keys of the input.
+#[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+fn render_input_eq(text: &mut String, input: &InputSpec) {
+    if !input.eq_on {
+        text.push_str("eq_on = false\n");
+    }
+    if input.eq_pre {
+        text.push_str("eq_pre = true\n");
+    }
+    if input.limit_on {
+        text.push_str("limit_on = true\n");
+    }
+    if input.limit_db != pult_core::limiter::LimitSettings::INPUT.ceiling_db {
+        let _ = writeln!(text, "limit_db = {}", input.limit_db);
+    }
+    for (index, band) in input.eq.iter().enumerate() {
+        if *band != Band::at(index) {
+            let _ = write!(
+                text,
+                "\n[[input.eq]]\nband = {}\nkind = {}\nfreq_hz = {}\ngain_db = {}\nq = {}\n",
+                index + 1,
+                quoted(band.kind.word()),
+                band.freq_hz,
+                band.gain_db,
+                band.q
+            );
+        }
+    }
 }
 
 /// The lines of a ducker that is not as it starts. With a key its depth is always written: a
@@ -1251,6 +1318,18 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_sends(table, spec, &input.sends);
         set_strip(table, &input.strip);
         set_switch(table, "talkback", input.talkback);
+        if table.get("eq_on").and_then(Item::as_bool).unwrap_or(true) != input.eq_on {
+            set(table, "eq_on", input.eq_on.into());
+        }
+        set_switch(table, "eq_pre", input.eq_pre);
+        set_switch(table, "limit_on", input.limit_on);
+        set_number_from(
+            table,
+            "limit_db",
+            input.limit_db,
+            pult_core::limiter::LimitSettings::INPUT.ceiling_db,
+        );
+        set_bands(table, &input.eq)?;
         set_duck(table, &input.duck);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.

@@ -172,6 +172,10 @@ impl Running {
             Command::Dim(bus, on) => self.dim(*bus, Some(*on), None),
             Command::DimLevel(bus, db) => self.dim(*bus, None, Some(*db)),
             Command::Talkback(input, on) => self.talkback(*input, *on),
+            Command::InputEq(..)
+            | Command::InputEqBand(..)
+            | Command::InputEqPre(..)
+            | Command::InputLimit(..) => self.input_eq(command),
             Command::Talk(on) => Ok(self.talk(*on)),
             Command::Pfl(on) => Ok(self.pfl(*on)),
             Command::BusComp(bus, amount) => self.bus_comp(*bus, Some(*amount), None, None),
@@ -296,6 +300,61 @@ impl Running {
         }
         self.apply_bus_gain(bus, DIM_MS);
         Ok(said)
+    }
+
+    /// The equalizer and the limiter of an input: its switch, a band, its place before or behind
+    /// gate and compressor, and the switch or the ceiling of its limiter.
+    fn input_eq(&mut self, command: &Command) -> Result<Vec<String>, String> {
+        let (Command::InputEq(input, _)
+        | Command::InputEqBand(input, ..)
+        | Command::InputEqPre(input, _)
+        | Command::InputLimit(input, _)) = *command
+        else {
+            return Err("not for the equalizer of an input".to_owned());
+        };
+        let Some(running) = self.inputs.get(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        let controls = &running.controls;
+        let spec = &mut self.spec.inputs[input];
+        let said = match *command {
+            Command::InputEq(_, on) => {
+                controls.eq.switch(on);
+                spec.eq_on = on;
+                format!("eq {}", if on { "on" } else { "off" })
+            }
+            Command::InputEqBand(_, band, change) => {
+                let Some(set) = spec.eq.get_mut(band) else {
+                    return Err(format!(
+                        "there is no band {}; bands are 1 to {EQ_BANDS}",
+                        band + 1
+                    ));
+                };
+                *set = set.changed(change)?;
+                controls.eq.set(band, *set);
+                format!("eq {}: {}", band + 1, band_line(*set))
+            }
+            Command::InputEqPre(_, pre) => {
+                controls.eq_pre.store(pre, Ordering::Relaxed);
+                spec.eq_pre = pre;
+                let place = if pre { "before" } else { "behind" };
+                format!("eq {place} gate and compressor")
+            }
+            Command::InputLimit(_, change) => {
+                let change = pult_core::view::input_limit(change)?;
+                match change {
+                    LimitChange::Switch(on) => spec.limit_on = on,
+                    LimitChange::Ceiling(db) => spec.limit_db = db,
+                    LimitChange::Lookahead(_) => {}
+                }
+                controls.limiter.change(change);
+                let state = if spec.limit_on { "on" } else { "off" };
+                format!("limit {state} at {:.1} dB", spec.limit_db)
+            }
+            _ => String::new(),
+        };
+        let label = self.target_label(Target::Input(input));
+        Ok(vec![format!("{label}: {said}")])
     }
 
     /// Makes `input` a talkback microphone (silent until someone talks) or a plain input again.
@@ -819,6 +878,13 @@ impl Running {
                 }
             }
             line.push_str(&strip_summary(&spec.strip));
+            line.push_str(&eq_summary(spec.eq_on, &spec.eq));
+            if spec.eq_pre {
+                line.push_str("  eq pre");
+            }
+            if spec.limit_on {
+                let _ = write!(line, "  limit {:.1} dB", spec.limit_db);
+            }
             if spec.talkback {
                 line.push_str(if self.talk {
                     "  talkback (open)"

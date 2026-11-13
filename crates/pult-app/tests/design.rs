@@ -66,6 +66,16 @@ fn showcase_multiband(bus: usize) -> pult_core::multiband::MultibandSettings {
     }
 }
 
+/// Mic 1 with less bass and some presence; the others flat.
+fn showcase_input_eq(input: usize) -> [pult_core::Band; pult_core::EQ_BANDS] {
+    let mut bands = pult_core::Band::all_flat();
+    if input == 0 {
+        bands[0] = bands[0].with_gain(-6.0);
+        bands[2] = bands[2].with_gain(3.0);
+    }
+    bands
+}
+
 /// Mic 1 with a high-pass against rumble, the Guitar turned over.
 fn showcase_strip(input: usize) -> pult_core::strip::StripSettings {
     pult_core::strip::StripSettings {
@@ -107,6 +117,13 @@ fn showcase_inputs(t: f64) -> Vec<InputView> {
                 strip: showcase_strip(i),
                 // The cable carries the talkback microphone.
                 talkback: i == 5,
+                eq_on: true,
+                eq: showcase_input_eq(i),
+                eq_pre: false,
+                // Mic 1 is held below -3 dB by its limiter.
+                limit_on: i == 0,
+                limit_db: if i == 0 { -3.0 } else { -0.3 },
+                limited_db: if i == 0 { 1.5 } else { 0.0 },
                 buses: buses.to_vec(),
                 sends: Vec::new(),
                 present: i != 6,
@@ -318,6 +335,37 @@ fn equalizer_view() {
 )]
 fn events_view() {
     console_shot(Tab::Events, "events_view");
+}
+
+/// The rows of the inputs in the equalizer view: with one bus above them, so they are in the
+/// picture (the whole window shows the buses first).
+#[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "the pictures are of Windows: its fonts, its renderer"
+)]
+fn equalizer_inputs() {
+    let mut view = showcase(0.0);
+    view.buses.truncate(1);
+    view.inputs.truncate(2);
+    for input in &mut view.inputs {
+        input.buses.retain(|&bus| bus == 0);
+    }
+    let mut harness = Harness::builder()
+        .with_size(vec2(1280.0, 860.0))
+        .with_pixels_per_point(1.5)
+        .build_ui(move |ui| {
+            Theme::current().apply(ui.ctx());
+            let base = Theme::current().palette.base;
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::new().fill(base))
+                .show(ui, |ui| {
+                    let mut actions = Vec::new();
+                    pult_app::equalizer::show(ui, &view, &mut actions);
+                });
+        });
+    harness.run_steps(4);
+    harness.snapshot("equalizer_inputs");
 }
 
 #[test]

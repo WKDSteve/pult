@@ -128,6 +128,24 @@ pub struct InputState {
     /// A talkback microphone: silent until someone talks.
     #[serde(default)]
     pub talkback: bool,
+    /// Whether its equalizer is on; on from a run older than this, where it has no bands.
+    #[serde(default = "open")]
+    pub eq_on: bool,
+    /// The bands of its equalizer; none from a run older than this.
+    #[serde(default)]
+    pub eq: Vec<Band>,
+    /// Its equalizer comes before gate and compressor instead of after them.
+    #[serde(default)]
+    pub eq_pre: bool,
+    /// Whether its limiter is on.
+    #[serde(default)]
+    pub limit_on: bool,
+    /// The ceiling of its limiter in dB.
+    #[serde(default)]
+    pub limit_db: f32,
+    /// How far its limiter turned down at most since the previous state, in dB.
+    #[serde(default)]
+    pub limited_db: f32,
     /// Its ducker; off from a run older than ducking. `key` is the number of the input that
     /// ducks it, 0 for none.
     #[serde(default)]
@@ -376,6 +394,12 @@ impl InputState {
             comp_reduction_db: input.comp_reduction_db,
             strip: input.strip,
             talkback: input.talkback,
+            eq_on: input.eq_on,
+            eq: input.eq.to_vec(),
+            eq_pre: input.eq_pre,
+            limit_on: input.limit_on,
+            limit_db: input.limit_db,
+            limited_db: input.limited_db,
             duck: input.duck,
             duck_reduction_db: input.duck_reduction_db,
             buses: input.buses.iter().filter_map(bus_name).collect(),
@@ -494,103 +518,31 @@ impl Op {
     #[must_use]
     pub fn of_command(command: &Command, state: &State) -> Option<Self> {
         let bus = |index: usize| state.buses.get(index).map(|bus| bus.name.as_str());
-        let target = |target: Target, param: &str| match target {
-            Target::Input(index) => Some(format!("input/{}/{param}", index + 1)),
-            Target::Bus(index) => Some(format!("bus/{}/{param}", bus(index)?)),
+        match command {
+            Command::Scene(name) => return Some(Self::Scene { name: name.clone() }),
+            Command::Learn(target) => {
+                return Some(Self::Learn {
+                    target: target.clone(),
+                });
+            }
+            Command::Unlearn(target) => {
+                return Some(Self::Unlearn {
+                    target: target.clone(),
+                });
+            }
+            _ => {}
+        }
+        let (place, param, value, ramp_ms) = set_of(command)?;
+        let address = match place {
+            Place::Input(input) => format!("input/{}/{param}", input + 1),
+            Place::Bus(to) => format!("bus/{}/{param}", bus(to)?),
+            Place::Crossing(input, to) => format!("{param}/{}/{}", input + 1, bus(to)?),
+            Place::Route => param,
         };
-        let set = |address: String, value: OpValue, ramp_ms: u32| Self::Set {
+        Some(Self::Set {
             address,
             value,
             ramp_ms: (ramp_ms > 0).then_some(ramp_ms),
-        };
-        let on_input = |input: usize, param: &str, value: OpValue| {
-            set(format!("input/{}/{param}", input + 1), value, 0)
-        };
-        let on_bus = |to: usize, param: &str, value: OpValue| {
-            Some(set(format!("bus/{}/{param}", bus(to)?), value, 0))
-        };
-        Some(match command {
-            Command::Gain(to, db, ramp_ms) => {
-                set(target(*to, "gain")?, OpValue::Number(*db), *ramp_ms)
-            }
-            Command::Mute(to, muted) => set(target(*to, "mute")?, OpValue::Switch(*muted), 0),
-            Command::Solo(input, solo) => on_input(*input, "solo", OpValue::Switch(*solo)),
-            Command::Pan(input, pan, ramp_ms) => set(
-                target(Target::Input(*input), "pan")?,
-                OpValue::Number(*pan),
-                *ramp_ms,
-            ),
-            Command::Gate(input, amount) => on_input(*input, "gate", OpValue::Number(*amount)),
-            Command::Comp(input, amount) => on_input(*input, "comp", OpValue::Number(*amount)),
-            Command::Eq(to, on) => on_bus(*to, "eq", OpValue::Switch(*on))?,
-            Command::EqBand(to, band, change) => {
-                let (setting, value) = match change {
-                    BandChange::Kind(kind) => ("kind", OpValue::Word(kind.word().to_owned())),
-                    BandChange::Freq(hz) => ("freq", OpValue::Number(*hz)),
-                    BandChange::Gain(db) => ("gain", OpValue::Number(*db)),
-                    BandChange::Q(q) => ("q", OpValue::Number(*q)),
-                };
-                let address = format!("bus/{}/eq/{}/{setting}", bus(*to)?, band + 1);
-                set(address, value, 0)
-            }
-            Command::Limit(to, change) => match change {
-                LimitChange::Switch(on) => on_bus(*to, "limit", OpValue::Switch(*on))?,
-                LimitChange::Ceiling(db) => on_bus(*to, "limit/ceiling", OpValue::Number(*db))?,
-                LimitChange::Lookahead(ms) => on_bus(*to, "limit/lookahead", OpValue::Number(*ms))?,
-            },
-            Command::Route(input, to, on) => set(
-                format!("matrix/{}/{}", input + 1, bus(*to)?),
-                OpValue::Switch(*on),
-                0,
-            ),
-            Command::BusComp(to, amount) => on_bus(*to, "comp", OpValue::Number(*amount))?,
-            Command::BusCompMix(to, percent) => on_bus(*to, "comp/mix", OpValue::Number(*percent))?,
-            Command::BusCompHpf(to, hz) => on_bus(*to, "comp/hpf", OpValue::Number(*hz))?,
-            Command::Multiband(to, change) => on_bus(
-                *to,
-                &format!("mb/{}", change.param().word()),
-                OpValue::Number(change.number()),
-            )?,
-            Command::BusDelay(to, ms) => on_bus(*to, "delay", OpValue::Number(*ms))?,
-            Command::Strip(input, change) => {
-                let (param, value) = strip_op(*change);
-                on_input(*input, param, value)
-            }
-            Command::Duck(input, change) => on_input(
-                *input,
-                change.param().address(),
-                OpValue::Number(change.number()),
-            ),
-            Command::Automix(input, on) => on_input(*input, "automix", OpValue::Switch(*on)),
-            Command::AutomixWeight(input, db) => {
-                on_input(*input, "automix/weight", OpValue::Number(*db))
-            }
-            Command::Monitor(to, on) => on_bus(*to, "monitor", OpValue::Switch(*on))?,
-            Command::Dim(to, on) => on_bus(*to, "dim", OpValue::Switch(*on))?,
-            Command::DimLevel(to, db) => on_bus(*to, "dim/level", OpValue::Number(*db))?,
-            Command::Talkback(input, on) => on_input(*input, "talkback", OpValue::Switch(*on)),
-            Command::Talk(on) => set("talk".to_owned(), OpValue::Switch(*on), 0),
-            Command::Pfl(on) => set("pfl".to_owned(), OpValue::Switch(*on), 0),
-            Command::Send(input, to, db, ramp_ms) => set(
-                format!("send/{}/{}", input + 1, bus(*to)?),
-                OpValue::Number(*db),
-                *ramp_ms,
-            ),
-            Command::SendPre(input, to, pre) => set(
-                format!("sendpre/{}/{}", input + 1, bus(*to)?),
-                OpValue::Switch(*pre),
-                0,
-            ),
-            Command::Scene(name) => Self::Scene { name: name.clone() },
-            Command::Learn(target) => Self::Learn {
-                target: target.clone(),
-            },
-            Command::Unlearn(target) => Self::Unlearn {
-                target: target.clone(),
-            },
-            Command::Scenes | Command::Show | Command::Save(_) | Command::Help | Command::Stop => {
-                return None;
-            }
         })
     }
 
@@ -633,6 +585,136 @@ impl Op {
     }
 }
 
+/// Where a parameter that a command sets lives.
+enum Place {
+    /// At an input: `input/<n>/<param>`.
+    Input(usize),
+    /// At a bus: `bus/<name>/<param>`.
+    Bus(usize),
+    /// At the crossing of an input and a bus: `<param>/<n>/<bus>`.
+    Crossing(usize, usize),
+    /// At the route itself: `<param>`.
+    Route,
+}
+
+impl From<Target> for Place {
+    fn from(target: Target) -> Self {
+        match target {
+            Target::Input(index) => Self::Input(index),
+            Target::Bus(index) => Self::Bus(index),
+        }
+    }
+}
+
+/// What a command sets: where, the words of its parameter, the value, and the time it takes.
+/// `None` for a command that sets no parameter, and for the lookahead of the limiter of an
+/// input, which has none.
+fn set_of(command: &Command) -> Option<(Place, String, OpValue, u32)> {
+    use OpValue::{Number, Switch};
+    use Place::{Bus, Crossing, Input, Route};
+    let at = |place: Place, param: &str, value: OpValue| (place, param.to_owned(), value, 0);
+    let limit = |place: Place, change: LimitChange| match change {
+        LimitChange::Switch(on) => at(place, "limit", Switch(on)),
+        LimitChange::Ceiling(db) => at(place, "limit/ceiling", Number(db)),
+        LimitChange::Lookahead(ms) => at(place, "limit/lookahead", Number(ms)),
+    };
+    let band = |place: Place, band: usize, change: BandChange| {
+        let (setting, value) = band_op(change);
+        (place, format!("eq/{}/{setting}", band + 1), value, 0)
+    };
+    Some(match *command {
+        Command::Gain(to, db, ramp_ms) => (to.into(), "gain".to_owned(), Number(db), ramp_ms),
+        Command::Mute(to, muted) => at(to.into(), "mute", Switch(muted)),
+        Command::Solo(input, solo) => at(Input(input), "solo", Switch(solo)),
+        Command::Pan(input, pan, ramp_ms) => (Input(input), "pan".to_owned(), Number(pan), ramp_ms),
+        Command::Gate(input, amount) => at(Input(input), "gate", Number(amount)),
+        Command::Comp(input, amount) => at(Input(input), "comp", Number(amount)),
+        Command::Strip(input, change) => {
+            let (param, value) = strip_op(change);
+            at(Input(input), param, value)
+        }
+        Command::Duck(input, change) => at(
+            Input(input),
+            change.param().address(),
+            Number(change.number()),
+        ),
+        Command::Automix(input, on) => at(Input(input), "automix", Switch(on)),
+        Command::AutomixWeight(input, db) => at(Input(input), "automix/weight", Number(db)),
+        Command::Talkback(input, on) => at(Input(input), "talkback", Switch(on)),
+        Command::InputEq(input, on) => at(Input(input), "eq", Switch(on)),
+        Command::InputEqPre(input, pre) => at(Input(input), "eq/pre", Switch(pre)),
+        Command::InputEqBand(input, index, change) => band(Input(input), index, change),
+        Command::InputLimit(input, change @ (LimitChange::Switch(_) | LimitChange::Ceiling(_))) => {
+            limit(Input(input), change)
+        }
+        Command::Eq(to, on) => at(Bus(to), "eq", Switch(on)),
+        Command::EqBand(to, index, change) => band(Bus(to), index, change),
+        Command::Limit(to, change) => limit(Bus(to), change),
+        Command::BusComp(to, amount) => at(Bus(to), "comp", Number(amount)),
+        Command::BusCompMix(to, percent) => at(Bus(to), "comp/mix", Number(percent)),
+        Command::BusCompHpf(to, hz) => at(Bus(to), "comp/hpf", Number(hz)),
+        Command::Multiband(to, change) => at(
+            Bus(to),
+            &format!("mb/{}", change.param().word()),
+            Number(change.number()),
+        ),
+        Command::BusDelay(to, ms) => at(Bus(to), "delay", Number(ms)),
+        Command::Monitor(to, on) => at(Bus(to), "monitor", Switch(on)),
+        Command::Dim(to, on) => at(Bus(to), "dim", Switch(on)),
+        Command::DimLevel(to, db) => at(Bus(to), "dim/level", Number(db)),
+        Command::Route(input, to, on) => at(Crossing(input, to), "matrix", Switch(on)),
+        Command::Send(input, to, db, ramp_ms) => {
+            (Crossing(input, to), "send".to_owned(), Number(db), ramp_ms)
+        }
+        Command::SendPre(input, to, pre) => at(Crossing(input, to), "sendpre", Switch(pre)),
+        Command::Talk(on) => at(Route, "talk", Switch(on)),
+        Command::Pfl(on) => at(Route, "pfl", Switch(on)),
+        // The limiter of an input has no lookahead.
+        Command::InputLimit(_, LimitChange::Lookahead(_))
+        | Command::Scene(_)
+        | Command::Learn(_)
+        | Command::Unlearn(_)
+        | Command::Scenes
+        | Command::Show
+        | Command::Save(_)
+        | Command::Help
+        | Command::Stop => return None,
+    })
+}
+
+/// The address word and the value of a change of a band.
+fn band_op(change: BandChange) -> (&'static str, OpValue) {
+    match change {
+        BandChange::Kind(kind) => ("kind", OpValue::Word(kind.word().to_owned())),
+        BandChange::Freq(hz) => ("freq", OpValue::Number(hz)),
+        BandChange::Gain(db) => ("gain", OpValue::Number(db)),
+        BandChange::Q(q) => ("q", OpValue::Number(q)),
+    }
+}
+
+/// `value` as a setting of a band of an equalizer, checked.
+fn band_value(param: BandParam, value: &OpValue, address: &str) -> Result<Value, String> {
+    let checked = |change: BandChange, value: Value| {
+        change
+            .checked()
+            .map(|_| value)
+            .map_err(|why| format!("{address}: {why}"))
+    };
+    match (param, value) {
+        (BandParam::Kind, OpValue::Word(word)) => BandKind::from_word(word)
+            .map(Value::Kind)
+            .ok_or_else(|| format!("{address} takes low, bell or high, not \"{word}\"")),
+        (BandParam::Kind, _) => Err(format!("{address} takes low, bell or high")),
+        (_, OpValue::Number(number)) if !number.is_finite() => {
+            Err(format!("{address} takes a finite number"))
+        }
+        (BandParam::Gain, OpValue::Number(db)) => checked(BandChange::Gain(*db), Value::Boost(*db)),
+        (BandParam::Freq, OpValue::Number(hz)) => checked(BandChange::Freq(*hz), Value::Freq(*hz)),
+        (BandParam::Q, OpValue::Number(q)) => checked(BandChange::Q(*q), Value::Width(*q)),
+        _ => Err(format!("{address} takes a number")),
+    }
+}
+
 /// Whether `binding` is a switch.
 fn is_switch(binding: Binding) -> bool {
     use BusParam as B;
@@ -641,7 +723,14 @@ fn is_switch(binding: Binding) -> bool {
         binding,
         Binding::Input(
             _,
-            I::Mute | I::Solo | I::Automix | I::Polarity | I::Talkback
+            I::Mute
+                | I::Solo
+                | I::Automix
+                | I::Polarity
+                | I::Talkback
+                | I::Eq
+                | I::EqPre
+                | I::Limit
         ) | Binding::Bus(_, B::Mute | B::Eq | B::Limit | B::Monitor | B::Dim)
             | Binding::Route { .. }
             | Binding::SendPre { .. }
@@ -747,7 +836,6 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             Err(format!("{address} takes a finite number"))
         }
     };
-    let band = |change: BandChange| change.checked().map_err(|why| format!("{address}: {why}"));
     let limit = |change: LimitChange| change.checked().map_err(|why| format!("{address}: {why}"));
     match (binding, value) {
         (Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter), _) => {
@@ -788,28 +876,16 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             Binding::Input(_, InputParam::Comp) | Binding::Bus(_, BusParam::Comp),
             OpValue::Number(amount),
         ) => check_amount("comp", wants_number(*amount)?).map(Value::Amount),
-        (Binding::Bus(_, EqBand(_, BandParam::Gain)), OpValue::Number(db)) => {
-            band(BandChange::Gain(wants_number(*db)?)).map(|_| Value::Boost(*db))
-        }
-        (Binding::Bus(_, EqBand(_, BandParam::Freq)), OpValue::Number(hz)) => {
-            band(BandChange::Freq(wants_number(*hz)?)).map(|_| Value::Freq(*hz))
-        }
-        (Binding::Bus(_, EqBand(_, BandParam::Q)), OpValue::Number(q)) => {
-            band(BandChange::Q(wants_number(*q)?)).map(|_| Value::Width(*q))
-        }
-        (Binding::Bus(_, BusParam::LimitCeiling), OpValue::Number(db)) => {
-            limit(LimitChange::Ceiling(wants_number(*db)?)).map(|_| Value::Ceiling(*db))
-        }
+        (
+            Binding::Bus(_, EqBand(_, param)) | Binding::Input(_, InputParam::EqBand(_, param)),
+            value,
+        ) => band_value(param, value, address),
+        (
+            Binding::Bus(_, BusParam::LimitCeiling) | Binding::Input(_, InputParam::LimitCeiling),
+            OpValue::Number(db),
+        ) => limit(LimitChange::Ceiling(wants_number(*db)?)).map(|_| Value::Ceiling(*db)),
         (Binding::Bus(_, BusParam::LimitLookahead), OpValue::Number(ms)) => {
             limit(LimitChange::Lookahead(wants_number(*ms)?)).map(|_| Value::Lookahead(*ms))
-        }
-        (Binding::Bus(_, EqBand(_, BandParam::Kind)), OpValue::Word(word)) => {
-            BandKind::from_word(word)
-                .map(Value::Kind)
-                .ok_or_else(|| format!("{address} takes low, bell or high, not \"{word}\""))
-        }
-        (Binding::Bus(_, EqBand(_, BandParam::Kind)), _) => {
-            Err(format!("{address} takes low, bell or high"))
         }
         (binding, OpValue::Switch(on)) if is_switch(binding) => Ok(Value::Switch(*on)),
         (binding, _) if is_switch(binding) => Err(format!("{address} takes true or false")),
@@ -972,6 +1048,58 @@ mod tests {
             action(r#"{"op":"save"}"#),
             Ok(Action::SaveProfile { path: None })
         );
+    }
+
+    #[test]
+    fn the_equalizer_and_the_limiter_of_an_input_are_set_by_address() {
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/2/eq","value":false}"#),
+            Ok(Action::InputEq {
+                input: 1,
+                on: false
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/2/eq/3/gain","value":-4.5}"#),
+            Ok(Action::InputEqBand {
+                input: 1,
+                band: 2,
+                change: BandChange::Gain(-4.5)
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/eq/1/kind","value":"bell"}"#),
+            Ok(Action::InputEqBand {
+                input: 0,
+                band: 0,
+                change: BandChange::Kind(BandKind::Peak)
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/eq/pre","value":true}"#),
+            Ok(Action::InputEqPre {
+                input: 0,
+                pre: true
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/limit","value":true}"#),
+            Ok(Action::InputLimit {
+                input: 0,
+                change: LimitChange::Switch(true)
+            })
+        );
+        assert_eq!(
+            action(r#"{"op":"set","address":"input/1/limit/ceiling","value":-6}"#),
+            Ok(Action::InputLimit {
+                input: 0,
+                change: LimitChange::Ceiling(-6.0)
+            })
+        );
+        assert!(action(r#"{"op":"set","address":"input/1/eq/9/gain","value":1}"#).is_err());
+        assert!(action(r#"{"op":"set","address":"input/1/eq/2/gain","value":99}"#).is_err());
+        assert!(action(r#"{"op":"set","address":"input/1/limit/ceiling","value":3}"#).is_err());
+        assert!(action(r#"{"op":"set","address":"input/1/limit/lookahead","value":1}"#).is_err());
     }
 
     #[test]

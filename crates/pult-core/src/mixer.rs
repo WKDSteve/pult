@@ -106,6 +106,15 @@ pub struct InputControls {
     pub compressor: CompressorControls,
     /// The channel strip before the gate: polarity, filters, delay, width; neutral at first.
     pub strip: crate::strip::StripControls,
+    /// The equalizer of the input; on and flat at first, which costs nothing.
+    pub eq: EqControls,
+    /// The equalizer comes before gate and compressor instead of after them.
+    pub eq_pre: AtomicBool,
+    /// The limiter at the end of the input stage; off at first. Its lookahead stays 0: an
+    /// input that came later than the others would no longer line up with them.
+    pub limiter: LimiterControls,
+    /// How far that limiter turned down at most since the desk last read it, in dB.
+    pub limited: PeakMeter,
     /// The ducker behind the compressor ([`crate::duck`]); off at first.
     pub duck: crate::duck::DuckControls,
     /// The most the ducker took away since the desk last read it, in dB (positive).
@@ -134,6 +143,10 @@ impl Default for InputControls {
             gate: GateControls::default(),
             compressor: CompressorControls::default(),
             strip: crate::strip::StripControls::default(),
+            eq: EqControls::default(),
+            eq_pre: AtomicBool::new(false),
+            limiter: LimiterControls::default(),
+            limited: PeakMeter::default(),
             duck: crate::duck::DuckControls::default(),
             duck_reduction: PeakMeter::default(),
             keys: OnceLock::new(),

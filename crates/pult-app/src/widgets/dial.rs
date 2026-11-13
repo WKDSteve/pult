@@ -105,7 +105,8 @@ impl Dial {
                 home: pult_core::buscomp::HPF_HZ.0,
                 both_ways: false,
             }),
-            Binding::Bus(_, BusParam::LimitCeiling) => Some(Self {
+            Binding::Bus(_, BusParam::LimitCeiling)
+            | Binding::Input(_, InputParam::LimitCeiling) => Some(Self {
                 span: Span::even(LIMIT_CEILING_DB),
                 home: DEFAULT_CEILING_DB,
                 both_ways: false,
@@ -115,7 +116,8 @@ impl Dial {
                 home: DEFAULT_LOOKAHEAD_MS,
                 both_ways: false,
             }),
-            Binding::Bus(_, BusParam::EqBand(band, param)) => {
+            Binding::Bus(_, BusParam::EqBand(band, param))
+            | Binding::Input(_, InputParam::EqBand(band, param)) => {
                 let start = Band::at(band);
                 match param {
                     BandParam::Gain => Some(Self {

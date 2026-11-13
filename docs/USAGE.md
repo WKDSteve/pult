@@ -213,6 +213,15 @@ pult run --profile meinprofil.toml --log abend.csv
   Während des Laufs `polarity 2 on`, `hpf 2 80`, `lpf 2 off`, `delay 3 12.5`, `width 1 mono`; im Fenster stehen
   **HPF**, **LPF** und **Ø** über GATE und COMP; von außen `input/<n>/polarity`, `/hpf`, `/lpf`, `/delay`, `/width`.
   Alles läuft in der Eingangsstufe, mit der Rate des Eingangs und ohne Allokation.
+- **EQ und Limiter je Eingang:** Jeder Eingang hat denselben Equalizer mit vier Bändern wie ein Bus, am Anfang flach,
+  und einen Limiter am Ende seiner Eingangsstufe, am Anfang aus. Der EQ sitzt hinter Gate und Kompressor; `eq_pre = true`
+  setzt ihn davor, dann sieht der Kompressor den entzerrten Klang (die Reihenfolge, die große Pulte wählen lassen). Der
+  Limiter eines Eingangs hat keine Vorschau: Ein Eingang, der später käme, läge nicht mehr auf den anderen. Im Profil
+  `eq_on`, `eq_pre`, `limit_on`, `limit_db` am Eingang und `[[input.eq]]` wie `[[bus.eq]]`; während des Laufs dieselben
+  Befehle wie am Bus mit einem Eingang als Ziel (`eq 2 off`, `eq 2 3 gain -4`, `limit 2 on`, `limit 2 -6`) und dazu
+  `eq 2 pre|post`; von außen `input/<n>/eq`, `input/<n>/eq/<band>/<setting>`, `input/<n>/eq/pre`, `input/<n>/limit`
+  und `input/<n>/limit/ceiling`. Im Fenster stehen die Eingänge im Tab **EQ** unter den Bussen, mit den Schaltern **EQ**
+  und **PRE**, den Bändern, der Kurve und dem Limiter (im Kopf, wie weit er gerade zurückdreht).
 - **Ducking:** Ein Eingang wird leiser, solange ein anderer klingt, etwa die Musik unter dem Mikrofon: `duck_by = 2`
   am Eingang nennt den Eingang, der ihn absenkt (Nummer wie in Szenen), `duck_db = 0..60` die Tiefe (12 dB, wenn nur
   `duck_by` steht), `duck_threshold_db = -70..0` den Pegel, ab dem abgesenkt wird, `duck_attack_ms`, `duck_hold_ms` und

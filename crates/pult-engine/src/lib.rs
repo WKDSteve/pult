@@ -284,6 +284,7 @@ pub enum InputKind {
 }
 
 /// One input (channel strip) of a route.
+#[allow(clippy::struct_excessive_bools)] // The switches of an input, each on its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputSpec {
     /// Device name or program (executable) name, or a unique part of it.
@@ -313,6 +314,16 @@ pub struct InputSpec {
     pub strip: pult_core::strip::StripSettings,
     /// A talkback microphone: silent until someone talks ([`Running::talk`]).
     pub talkback: bool,
+    /// Whether its equalizer is on; on and flat at first.
+    pub eq_on: bool,
+    /// The bands of its equalizer.
+    pub eq: [pult_core::Band; pult_core::EQ_BANDS],
+    /// Its equalizer comes before gate and compressor instead of after them.
+    pub eq_pre: bool,
+    /// Whether its limiter is on; off at first. It has no lookahead.
+    pub limit_on: bool,
+    /// The ceiling of its limiter in dB.
+    pub limit_db: f32,
     /// Its ducker ([`pult_core::duck`]): the input that turns it down, how far and how fast; off
     /// at first.
     pub duck: pult_core::duck::DuckSettings,
@@ -380,6 +391,11 @@ impl InputSpec {
             sends: Vec::new(),
             strip: pult_core::strip::StripSettings::default(),
             talkback: false,
+            eq_on: true,
+            eq: pult_core::Band::all_flat(),
+            eq_pre: false,
+            limit_on: pult_core::limiter::LimitSettings::INPUT.on,
+            limit_db: pult_core::limiter::LimitSettings::INPUT.ceiling_db,
             duck: pult_core::duck::DuckSettings::default(),
             buses,
         }
@@ -1205,6 +1221,13 @@ fn make_rings(
     controls.gate.set_simple(input.gate);
     controls.compressor.set_simple(input.comp);
     controls.strip.set_all(input.strip);
+    controls.eq.set_all(input.eq_on, &input.eq);
+    controls.eq_pre.store(input.eq_pre, Ordering::Relaxed);
+    controls.limiter.set_all(pult_core::limiter::LimitSettings {
+        on: input.limit_on,
+        ceiling_db: input.limit_db,
+        ..pult_core::limiter::LimitSettings::INPUT
+    });
     // A talkback microphone is silent until someone talks.
     controls
         .muted

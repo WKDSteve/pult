@@ -8,7 +8,10 @@
 //!    the samples of the device (before any resampler, so an overshoot of its filter never
 //!    shows as a clip of the source), and whether the input is routed anywhere or not;
 //! 2. the channel strip ([`crate::strip`]): polarity, high- and low-pass, delay, width;
-//! 3. the gate, then the compressor ([`crate::dynamics`]);
+//! 3. the gate, then the compressor ([`crate::dynamics`]), and the equalizer of the input
+//!    ([`crate::eq`]) behind them, or before them when [`InputControls::eq_pre`] says so (the
+//!    order a console lets one choose: the compressor then sees the equalized sound);
+//!    then the limiter of the input ([`crate::limiter`]), without lookahead;
 //! 4. the level for the automixer, when the input is in a group ([`crate::automix`]);
 //! 5. its level onto the key board of the route, for the inputs it ducks, then its own ducker
 //!    ([`crate::duck`]): the key is taken before the ducker, so two inputs can duck each other;
@@ -27,6 +30,8 @@ use std::sync::atomic::Ordering;
 use crate::automix::PowerFollower;
 use crate::duck::Ducker;
 use crate::dynamics::{Compressor, Gate, loudest};
+use crate::eq::Equalizer;
+use crate::limiter::Limiter;
 use crate::mixer::{Capture, InputControls};
 use crate::strip::ChannelStrip;
 
@@ -41,6 +46,8 @@ pub struct InputStage {
     gate: Gate,
     compressor: Compressor,
     strip: ChannelStrip,
+    eq: Equalizer,
+    limiter: Limiter,
     follower: PowerFollower,
     ducker: Ducker,
     block: Vec<f32>,
@@ -62,6 +69,8 @@ impl InputStage {
             gate: Gate::new(rate),
             compressor: Compressor::new(rate),
             strip: ChannelStrip::new(channels, rate),
+            eq: Equalizer::new(rate),
+            limiter: Limiter::new(rate, channels),
             follower: PowerFollower::new(rate),
             ducker: Ducker::new(rate),
             block: vec![0.0; STAGE_FRAMES * channels],
@@ -79,6 +88,8 @@ impl InputStage {
         self.gate.start_over();
         self.compressor.start_over();
         self.strip.start_over();
+        self.eq.start_over();
+        self.limiter.prepare(self.channels);
         self.follower.start_over();
         self.ducker.start_over();
     }
@@ -94,9 +105,18 @@ impl InputStage {
             let block = &mut self.block[..piece.len()];
             block.copy_from_slice(piece);
             self.strip.process(&self.controls.strip, block);
+            let eq_pre = self.controls.eq_pre.load(Ordering::Relaxed);
+            if eq_pre {
+                self.eq.process(&self.controls.eq, block, ch);
+            }
             self.gate.process(&self.controls.gate, block, ch);
             self.compressor
                 .process(&self.controls.compressor, block, ch);
+            if !eq_pre {
+                self.eq.process(&self.controls.eq, block, ch);
+            }
+            let limited = self.limiter.process(&self.controls.limiter, block, ch);
+            self.controls.limited.record(limited);
             self.controls
                 .gate_reduction
                 .record(self.gate.reduction_db());
@@ -204,6 +224,61 @@ mod tests {
             }
             outs
         }
+    }
+
+    #[test]
+    fn the_equalizer_of_an_input_works_behind_its_compressor_or_before_it() {
+        use crate::eq::Band;
+        // A bass boost of 12 dB and a compressor: before it, the compressor sees the boost and
+        // takes most of it back; behind it, the boost stays.
+        let level = |pre: bool| {
+            let mut d = desk(1);
+            let mut bands = Band::all_flat();
+            bands[0] = bands[0].with_gain(12.0);
+            d.controls.eq.set_all(true, &bands);
+            d.controls.eq_pre.store(pre, Ordering::Relaxed);
+            d.controls.compressor.set(CompressorParams {
+                threshold_db: -26.0,
+                ratio: 8.0,
+                ..CompressorParams::default()
+            });
+            d.controls.compressor.switch(true);
+            let outs = d.run(0.25, 300);
+            outs[0][outs[0].len() - 1]
+        };
+        let (behind, before) = (level(false), level(true));
+        assert!(
+            behind > before * 1.5,
+            "behind the compressor the boost stays: {behind} against {before}"
+        );
+        // Flat, it changes nothing.
+        let mut d = desk(1);
+        let outs = d.run(0.25, 100);
+        assert!((outs[0][outs[0].len() - 1] - 0.25).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_limiter_of_an_input_holds_its_ceiling_and_says_how_far_it_turned_down() {
+        use crate::limiter::LimitSettings;
+        let mut d = desk(1);
+        let outs = d.run(0.9, 60);
+        assert!(
+            (outs[0][outs[0].len() - 1] - 0.9).abs() < 1e-3,
+            "off at first"
+        );
+        assert!(d.controls.limited.take() < 0.01);
+        d.controls.limiter.set_all(LimitSettings {
+            on: true,
+            ceiling_db: -12.0,
+            lookahead_ms: 0.0,
+        });
+        let outs = d.run(0.9, 200);
+        let last = outs[0][outs[0].len() - 1];
+        assert!(
+            (last - db_to_linear(-12.0)).abs() < 5e-3,
+            "at its ceiling: {last}"
+        );
+        assert!(d.controls.limited.take() > 10.0, "it says how far");
     }
 
     #[test]

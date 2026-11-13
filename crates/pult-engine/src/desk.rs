@@ -78,6 +78,100 @@ impl EngineDesk {
         }
     }
 
+    /// What the route does itself: every action but the three of the desk (solo, the meter
+    /// point, saving a profile).
+    fn route_action(&mut self, action: Action) -> Reply {
+        match action {
+            Action::InputGain { input, db, ramp_ms } => {
+                let target = Target::Input(self.input_index(input)?);
+                self.running.apply(&Command::Gain(target, db, ramp_ms))
+            }
+            Action::InputMute { input, muted } => {
+                let target = Target::Input(self.input_index(input)?);
+                self.running.apply(&Command::Mute(target, muted))
+            }
+            Action::InputPan {
+                input,
+                pan,
+                ramp_ms,
+            } => {
+                let index = self.input_index(input)?;
+                self.running.apply(&Command::Pan(index, pan, ramp_ms))
+            }
+            Action::InputGate { input, amount } => {
+                let index = self.input_index(input)?;
+                self.running.apply(&Command::Gate(index, amount))
+            }
+            Action::InputComp { input, amount } => {
+                let index = self.input_index(input)?;
+                self.running.apply(&Command::Comp(index, amount))
+            }
+            Action::BusGain { bus, db, ramp_ms } => {
+                let target = Target::Bus(self.bus_index(bus)?);
+                self.running.apply(&Command::Gain(target, db, ramp_ms))
+            }
+            Action::BusEq { bus, on } => {
+                let index = self.bus_index(bus)?;
+                self.running.apply(&Command::Eq(index, on))
+            }
+            Action::BusEqBand { bus, band, change } => {
+                let index = self.bus_index(bus)?;
+                self.running.apply(&Command::EqBand(index, band, change))
+            }
+            Action::BusLimit { bus, change } => {
+                let index = self.bus_index(bus)?;
+                self.running.apply(&Command::Limit(index, change))
+            }
+            Action::BusMute { bus, muted } => {
+                let target = Target::Bus(self.bus_index(bus)?);
+                self.running.apply(&Command::Mute(target, muted))
+            }
+            Action::Route { input, bus, on } => self.running.route(input, bus, on),
+            Action::BusMonitor { bus, on } => self.running.monitor(bus, on),
+            Action::BusDim { bus, on } => self.running.dim(bus, Some(on), None),
+            Action::BusDimLevel { bus, db } => self.running.dim(bus, None, Some(db)),
+            Action::InputTalkback { input, on } => self.running.talkback(input, on),
+            Action::InputEq { input, on } => self.running.apply(&Command::InputEq(input, on)),
+            Action::InputEqBand {
+                input,
+                band,
+                change,
+            } => self
+                .running
+                .apply(&Command::InputEqBand(input, band, change)),
+            Action::InputEqPre { input, pre } => {
+                self.running.apply(&Command::InputEqPre(input, pre))
+            }
+            Action::InputLimit { input, change } => {
+                self.running.apply(&Command::InputLimit(input, change))
+            }
+            Action::Talk { on } => Ok(self.running.talk(on)),
+            Action::Pfl { on } => Ok(self.running.pfl(on)),
+            Action::BusComp { bus, amount } => self.running.bus_comp(bus, Some(amount), None, None),
+            Action::BusCompMix { bus, percent } => {
+                self.running.bus_comp(bus, None, Some(percent), None)
+            }
+            Action::BusCompHpf { bus, hz } => self.running.bus_comp(bus, None, None, Some(hz)),
+            Action::BusMultiband { bus, change } => self.running.multiband(bus, change),
+            Action::BusDelay { bus, ms } => self.running.bus_delay(bus, ms),
+            Action::InputAutomix { input, on } => self.running.automix(input, Some(on), None),
+            Action::InputStrip { input, change } => self.running.strip(input, change),
+            Action::InputDuck { input, change } => self.running.duck(input, change),
+            Action::InputAutomixWeight { input, db } => self.running.automix(input, None, Some(db)),
+            Action::Send {
+                input,
+                bus,
+                db,
+                ramp_ms,
+            } => self.running.send(input, bus, db, ramp_ms),
+            Action::SendPre { input, bus, pre } => self.running.send_pre(input, bus, pre),
+            Action::Scene { name } => self.running.scene(&name),
+            Action::InputSolo { .. } | Action::SetMeterPoint(_) | Action::SaveProfile { .. } => {
+                Err("that is for the desk, not for the route".to_owned())
+            }
+        }
+    }
+
     fn input_index(&self, input: usize) -> Result<usize, String> {
         if input < self.running.inputs.len() {
             Ok(input)
@@ -152,6 +246,12 @@ fn input_view(input: &crate::RunningInput, spec: &crate::InputSpec, solo: bool) 
         comp_reduction_db: input.controls.comp_reduction.take(),
         strip: spec.strip,
         talkback: spec.talkback,
+        eq_on: spec.eq_on,
+        eq: spec.eq,
+        eq_pre: spec.eq_pre,
+        limit_on: spec.limit_on,
+        limit_db: spec.limit_db,
+        limited_db: input.controls.limited.take(),
         duck: spec.duck,
         duck_reduction_db: input.controls.duck_reduction.take(),
         buses: input
@@ -292,50 +392,6 @@ impl Desk for EngineDesk {
 
     fn act(&mut self, action: Action) -> Reply {
         match action {
-            Action::InputGain { input, db, ramp_ms } => {
-                let target = Target::Input(self.input_index(input)?);
-                self.running.apply(&Command::Gain(target, db, ramp_ms))
-            }
-            Action::InputMute { input, muted } => {
-                let target = Target::Input(self.input_index(input)?);
-                self.running.apply(&Command::Mute(target, muted))
-            }
-            Action::InputPan {
-                input,
-                pan,
-                ramp_ms,
-            } => {
-                let index = self.input_index(input)?;
-                self.running.apply(&Command::Pan(index, pan, ramp_ms))
-            }
-            Action::InputGate { input, amount } => {
-                let index = self.input_index(input)?;
-                self.running.apply(&Command::Gate(index, amount))
-            }
-            Action::InputComp { input, amount } => {
-                let index = self.input_index(input)?;
-                self.running.apply(&Command::Comp(index, amount))
-            }
-            Action::BusGain { bus, db, ramp_ms } => {
-                let target = Target::Bus(self.bus_index(bus)?);
-                self.running.apply(&Command::Gain(target, db, ramp_ms))
-            }
-            Action::BusEq { bus, on } => {
-                let index = self.bus_index(bus)?;
-                self.running.apply(&Command::Eq(index, on))
-            }
-            Action::BusEqBand { bus, band, change } => {
-                let index = self.bus_index(bus)?;
-                self.running.apply(&Command::EqBand(index, band, change))
-            }
-            Action::BusLimit { bus, change } => {
-                let index = self.bus_index(bus)?;
-                self.running.apply(&Command::Limit(index, change))
-            }
-            Action::BusMute { bus, muted } => {
-                let target = Target::Bus(self.bus_index(bus)?);
-                self.running.apply(&Command::Mute(target, muted))
-            }
             Action::InputSolo { input, solo } => {
                 let index = self.input_index(input)?;
                 self.solo[index] = solo;
@@ -366,32 +422,7 @@ impl Desk for EngineDesk {
                 self.profile = Some(path);
                 Ok(lines)
             }
-            Action::Route { input, bus, on } => self.running.route(input, bus, on),
-            Action::BusMonitor { bus, on } => self.running.monitor(bus, on),
-            Action::BusDim { bus, on } => self.running.dim(bus, Some(on), None),
-            Action::BusDimLevel { bus, db } => self.running.dim(bus, None, Some(db)),
-            Action::InputTalkback { input, on } => self.running.talkback(input, on),
-            Action::Talk { on } => Ok(self.running.talk(on)),
-            Action::Pfl { on } => Ok(self.running.pfl(on)),
-            Action::BusComp { bus, amount } => self.running.bus_comp(bus, Some(amount), None, None),
-            Action::BusCompMix { bus, percent } => {
-                self.running.bus_comp(bus, None, Some(percent), None)
-            }
-            Action::BusCompHpf { bus, hz } => self.running.bus_comp(bus, None, None, Some(hz)),
-            Action::BusMultiband { bus, change } => self.running.multiband(bus, change),
-            Action::BusDelay { bus, ms } => self.running.bus_delay(bus, ms),
-            Action::InputAutomix { input, on } => self.running.automix(input, Some(on), None),
-            Action::InputStrip { input, change } => self.running.strip(input, change),
-            Action::InputDuck { input, change } => self.running.duck(input, change),
-            Action::InputAutomixWeight { input, db } => self.running.automix(input, None, Some(db)),
-            Action::Send {
-                input,
-                bus,
-                db,
-                ramp_ms,
-            } => self.running.send(input, bus, db, ramp_ms),
-            Action::SendPre { input, bus, pre } => self.running.send_pre(input, bus, pre),
-            Action::Scene { name } => self.running.scene(&name),
+            other => self.route_action(other),
         }
     }
 }

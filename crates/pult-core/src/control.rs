@@ -26,12 +26,13 @@
 //!                        make an input a talkback microphone: silent until `talk on`, which
 //!                        also dims the monitor buses; talk off ends it
 //! pfl on|off             solo on a monitor bus listens before the fader (PFL) or after it
-//! eq <bus> on|off        switch the equalizer of a bus
-//! eq <bus> <band> <setting> <value>
+//! eq <target> on|off     switch the equalizer of a bus or of an input
+//! eq <target> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
-//!                        kind low|bell|high (eq A1 2 gain 6)
-//! limit <bus> on|off     switch the limiter of a bus
-//! limit <bus> <dB>       its ceiling, -20 to 0 (limit A1 -3)
+//!                        kind low|bell|high (eq A1 2 gain 6, eq 2 3 gain -4)
+//! eq <input> pre|post    the equalizer of an input before its gate and compressor, or behind
+//! limit <target> on|off  switch the limiter of a bus or of an input
+//! limit <target> <dB>    its ceiling, -20 to 0 (limit A1 -3, limit 2 -6)
 //! limit <bus> look <ms>  its lookahead, 0 to 5: how gently it turns down, and how much later the
 //!                        sound leaves the bus
 //! route <input> <bus>    send an input to a bus too; unroute <input> <bus> takes it off
@@ -112,6 +113,14 @@ pub enum Command {
     BusDelay(usize, f32),
     /// Changes one setting of the channel strip of an input.
     Strip(usize, StripChange),
+    /// Switches the equalizer of an input on or off.
+    InputEq(usize, bool),
+    /// Changes one setting of one band (second index, from 0) of the equalizer of an input.
+    InputEqBand(usize, usize, BandChange),
+    /// Puts the equalizer of an input before its gate and compressor (true) or behind them.
+    InputEqPre(usize, bool),
+    /// Changes the switch or the ceiling of the limiter of an input.
+    InputLimit(usize, LimitChange),
     /// Changes one setting of the ducker of an input.
     Duck(usize, DuckChange),
     /// Takes an input into the automixer or out of it.
@@ -175,12 +184,15 @@ talkback <input> on|off
                      opens it on its buses and dims the monitor buses; talk off ends it
 pfl on|off           solo on a monitor bus listens before the fader: a soloed input is
                      heard there whatever its fader, mute and routing say; off is AFL
-eq <bus> on|off      switch the equalizer of a bus
-eq <bus> <band> <setting> <value>
+eq <target> on|off   switch the equalizer of a bus or of an input
+eq <target> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
-                     kind low|bell|high (eq A1 2 gain 6, eq A1 1 kind bell)
-limit <bus> on|off   switch the limiter of a bus
-limit <bus> <dB>     its ceiling, -20 to 0 (limit A1 -3)
+                     kind low|bell|high (eq A1 2 gain 6, eq 2 1 kind bell)
+eq <input> pre|post  the equalizer of an input before its gate and compressor (the compressor
+                     then sees the equalized sound), or behind them, as it starts
+limit <target> on|off
+                     switch the limiter of a bus or of an input (an input's is off at first)
+limit <target> <dB>  its ceiling, -20 to 0 (limit A1 -3, limit 2 -6)
 limit <bus> look <ms>
                      its lookahead, 0 to 5: gentler, and the sound leaves that much later
 route <input> <bus>  send an input to a bus too; unroute <input> <bus> takes it off
@@ -616,19 +628,28 @@ fn send<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, Pa
 
 /// `eq <bus> on|off` or `eq <bus> <band> <setting> <value>`; the bus may have several words.
 fn equalizer<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
-    let usage = "usage: eq <bus> on|off, or eq <bus> <band> gain|freq|q|kind <value>";
-    let only_bus = |words: &[&str]| match target(&words.join(" "), names)? {
-        Target::Bus(index) => Ok(index),
-        Target::Input(_) => error("eq works on buses only"),
-    };
-    if let [bus @ .., switch] = rest
-        && !bus.is_empty()
-        && (switch.eq_ignore_ascii_case("on") || switch.eq_ignore_ascii_case("off"))
+    let usage = "usage: eq <bus or input> on|off, eq <bus or input> <band> gain|freq|q|kind \
+                 <value>, or eq <input> pre|post";
+    if let [name @ .., word] = rest
+        && !name.is_empty()
     {
-        return Ok(Command::Eq(
-            only_bus(bus)?,
-            switch.eq_ignore_ascii_case("on"),
-        ));
+        let word = word.to_ascii_lowercase();
+        let found = || target(&name.join(" "), names);
+        match word.as_str() {
+            "on" | "off" => {
+                return Ok(match found()? {
+                    Target::Bus(index) => Command::Eq(index, word == "on"),
+                    Target::Input(index) => Command::InputEq(index, word == "on"),
+                });
+            }
+            "pre" | "post" => {
+                return match found()? {
+                    Target::Input(index) => Ok(Command::InputEqPre(index, word == "pre")),
+                    Target::Bus(_) => error("eq pre and post work on inputs only"),
+                };
+            }
+            _ => {}
+        }
     }
     let [bus @ .., band, setting, value] = rest else {
         return error(usage);
@@ -662,16 +683,20 @@ fn equalizer<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Comman
             ));
         }
     };
-    Ok(Command::EqBand(only_bus(bus)?, band, change))
+    Ok(match target(&bus.join(" "), names)? {
+        Target::Bus(index) => Command::EqBand(index, band, change),
+        Target::Input(index) => Command::InputEqBand(index, band, change),
+    })
 }
 
 /// `limit <bus> on|off`, `limit <bus> <dB>` or `limit <bus> look <ms>`; the bus may have several
 /// words.
 fn limiter<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
-    let usage = "usage: limit <bus> on|off, limit <bus> <dB>, or limit <bus> look <ms>";
+    let usage = "usage: limit <bus or input> on|off, limit <bus or input> <dB>, or limit <bus> \
+                 look <ms>";
     let only_bus = |words: &[&str]| match target(&words.join(" "), names)? {
         Target::Bus(index) => Ok(index),
-        Target::Input(_) => error("limit works on buses only"),
+        Target::Input(_) => error("the limiter of an input has no lookahead"),
     };
     let number = |value: &str, what: &str| match value.parse::<f32>() {
         Ok(number) if number.is_finite() => Ok(number),
@@ -695,7 +720,10 @@ fn limiter<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command,
     } else {
         LimitChange::Ceiling(number(last, "ceiling in dB")?)
     };
-    Ok(Command::Limit(only_bus(bus)?, change))
+    Ok(match target(&bus.join(" "), names)? {
+        Target::Bus(index) => Command::Limit(index, change),
+        Target::Input(index) => Command::InputLimit(index, change),
+    })
 }
 
 fn no_arguments(rest: &[&str], command: Command) -> Result<Command, ParseError> {
@@ -1246,9 +1274,25 @@ mod tests {
         assert!(bad("mute").contains("which input or bus"));
         assert!(bad("pan A1 0").contains("inputs only"));
         assert!(bad("gate A1 3").contains("gate works on inputs only"));
-        assert!(bad("eq 2 off").contains("eq works on buses only"));
-        assert!(bad("eq A1").contains("usage: eq <bus> on|off"));
-        assert!(bad("eq off").contains("usage: eq <bus> on|off"));
+        assert_eq!(ok("eq 2 off"), Command::InputEq(1, false));
+        assert_eq!(
+            ok("eq cable 3 gain -4.5"),
+            Command::InputEqBand(0, 2, BandChange::Gain(-4.5))
+        );
+        assert_eq!(ok("eq 2 pre"), Command::InputEqPre(1, true));
+        assert_eq!(ok("EQ 2 POST"), Command::InputEqPre(1, false));
+        assert!(bad("eq A1 pre").contains("inputs only"));
+        assert_eq!(
+            ok("limit 2 on"),
+            Command::InputLimit(1, LimitChange::Switch(true))
+        );
+        assert_eq!(
+            ok("limit 2 -6"),
+            Command::InputLimit(1, LimitChange::Ceiling(-6.0))
+        );
+        assert!(bad("limit 2 look 1").contains("no lookahead"));
+        assert!(bad("eq A1").contains("usage: eq <bus or input> on|off"));
+        assert!(bad("eq off").contains("usage: eq <bus or input> on|off"));
         assert!(bad("eq A1 2 gain").contains("usage: eq"));
         assert!(bad("eq A1 5 gain 3").contains("no band 5; bands are 1 to 4"));
         assert!(bad("eq A1 0 gain 3").contains("no band 0"));

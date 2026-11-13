@@ -122,6 +122,14 @@ impl Default for LimitSettings {
 }
 
 impl LimitSettings {
+    /// As the limiter of an input starts: off, at [`DEFAULT_CEILING_DB`], and never with a
+    /// lookahead (an input that came later would no longer line up with the others).
+    pub const INPUT: Self = Self {
+        on: false,
+        ceiling_db: DEFAULT_CEILING_DB,
+        lookahead_ms: 0.0,
+    };
+
     /// What a state from a run older than limiters reads as: off, zero ceiling, no lookahead.
     pub const OLDER_RUN: Self = Self {
         on: false,

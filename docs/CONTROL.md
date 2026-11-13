@@ -153,6 +153,9 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `matrix/<n>/<bus>` | `true` oder `false` |
 | `input/<n>/automix` | `true` oder `false`: im Automixer |
 | `input/<n>/automix/weight` | Zahl, -12 bis 12 dB: Vorrang im Automixer |
+| `input/<n>/eq`, `input/<n>/eq/pre`, `input/<n>/limit` | `true` oder `false`: EQ des Eingangs, EQ vor Gate und Kompressor, Limiter des Eingangs |
+| `input/<n>/eq/<band>/gain`, `/freq`, `/q`, `/kind` | wie am Bus: -24 bis 24 dB, 20 bis 20000 Hz, 0.1 bis 10, `"low"`/`"bell"`/`"high"` |
+| `input/<n>/limit/ceiling` | Zahl, -20 bis 0 dB; der Limiter eines Eingangs hat keine Vorschau |
 | `input/<n>/polarity` | `true` oder `false`: Polarität umgedreht |
 | `input/<n>/hpf` | Zahl, 20 (aus) bis 1000 Hz: Hochpass des Kanalzugs |
 | `input/<n>/lpf` | Zahl, 1000 bis 20000 Hz (aus): Tiefpass des Kanalzugs |
@@ -187,6 +190,9 @@ eigenen Thread, der Callback reicht nur die Daten weiter.
 Im Zustand trägt jeder Eingang außerdem, was Gate und Kompressor wegnehmen (nur lesbar, seit dem letzten Zustand):
 `automix`, `automix_weight_db`, `automix_gain_db` (was der Automixer gerade gibt), `gate_reduction_db` (0 offen oder aus), `gate_open` (`true` offen oder aus), `comp_reduction_db`. Das Fenster zeigt sie unter
 den Reglern GATE und COMP: `open` oder `shut -40`, und die dB des Kompressors, hervorgehoben, solange er arbeitet.
+
+Im Zustand trägt jeder Eingang seinen Equalizer und Limiter als `eq_on`, `eq` (die vier Bänder), `eq_pre`,
+`limit_on`, `limit_db` und `limited_db` (wie weit der Limiter seit dem letzten Zustand zurückgedreht hat).
 
 Der Kanalzug eines Eingangs steht im Zustand als `strip`: `{"polarity": false, "hpf_hz": 20, "lpf_hz": 20000,
 "delay_ms": 0, "width": 100}` (so ist er neutral).

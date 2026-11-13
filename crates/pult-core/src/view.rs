@@ -136,6 +136,18 @@ pub struct InputView {
     pub strip: crate::strip::StripSettings,
     /// A talkback microphone: silent until someone talks ([`MixerView::talk`]).
     pub talkback: bool,
+    /// Whether its equalizer is on.
+    pub eq_on: bool,
+    /// The bands of its equalizer.
+    pub eq: [Band; EQ_BANDS],
+    /// Its equalizer comes before gate and compressor instead of after them.
+    pub eq_pre: bool,
+    /// Whether its limiter is on; it has no lookahead.
+    pub limit_on: bool,
+    /// The ceiling of its limiter in dB.
+    pub limit_db: f32,
+    /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
+    pub limited_db: f32,
     /// Its ducker: the input that turns it down, how far and how fast.
     pub duck: crate::duck::DuckSettings,
     /// The most its ducker took away since the previous view, in dB.
@@ -400,6 +412,36 @@ pub enum Action {
         /// The new setting.
         change: crate::strip::StripChange,
     },
+    /// Switches the equalizer of an input.
+    InputEq {
+        /// Input index.
+        input: usize,
+        /// On or off.
+        on: bool,
+    },
+    /// Changes one setting of one band of the equalizer of an input.
+    InputEqBand {
+        /// Input index.
+        input: usize,
+        /// Band index, from 0.
+        band: usize,
+        /// The new setting.
+        change: BandChange,
+    },
+    /// Puts the equalizer of an input before its gate and compressor, or behind them.
+    InputEqPre {
+        /// Input index.
+        input: usize,
+        /// Before them or not.
+        pre: bool,
+    },
+    /// Changes the switch or the ceiling of the limiter of an input; it has no lookahead.
+    InputLimit {
+        /// Input index.
+        input: usize,
+        /// The new setting.
+        change: LimitChange,
+    },
     /// Makes an input a talkback microphone or a plain input again.
     InputTalkback {
         /// Input index.
@@ -599,38 +641,56 @@ impl Default for FakeDesk {
     }
 }
 
+/// An input of the demo mixer, with everything else as an input starts.
+fn demo_input(
+    name: &str,
+    kind: SourceKind,
+    sample_rate: u32,
+    gain_db: f32,
+    muted: bool,
+    buses: Vec<usize>,
+) -> InputView {
+    InputView {
+        name: name.to_owned(),
+        label: None,
+        kind,
+        sample_rate,
+        gain_db,
+        muted,
+        solo: false,
+        pan: 0.0,
+        gate: 0.0,
+        comp: 0.0,
+        automix: false,
+        automix_weight_db: 0.0,
+        automix_gain_db: 0.0,
+        gate_reduction_db: 0.0,
+        gate_open: true,
+        comp_reduction_db: 0.0,
+        strip: crate::strip::StripSettings::default(),
+        duck: crate::duck::DuckSettings::default(),
+        duck_reduction_db: 0.0,
+        talkback: false,
+        eq_on: true,
+        eq: Band::all_flat(),
+        eq_pre: false,
+        limit_on: crate::limiter::LimitSettings::INPUT.on,
+        limit_db: crate::limiter::LimitSettings::INPUT.ceiling_db,
+        limited_db: 0.0,
+        buses,
+        sends: Vec::new(),
+        present: true,
+        peak_db: None,
+        drift_ppm: 0.0,
+        dropouts: 0,
+    }
+}
+
 impl FakeDesk {
     /// The demo mixer: a virtual cable, a microphone and a program on two buses.
     #[must_use]
     pub fn new() -> Self {
-        let input = |name: &str, kind, sample_rate, gain_db, muted, buses: Vec<usize>| InputView {
-            name: name.to_owned(),
-            label: None,
-            kind,
-            sample_rate,
-            gain_db,
-            muted,
-            solo: false,
-            pan: 0.0,
-            gate: 0.0,
-            comp: 0.0,
-            automix: false,
-            automix_weight_db: 0.0,
-            automix_gain_db: 0.0,
-            gate_reduction_db: 0.0,
-            gate_open: true,
-            comp_reduction_db: 0.0,
-            strip: crate::strip::StripSettings::default(),
-            duck: crate::duck::DuckSettings::default(),
-            duck_reduction_db: 0.0,
-            talkback: false,
-            buses,
-            sends: Vec::new(),
-            present: true,
-            peak_db: None,
-            drift_ppm: 0.0,
-            dropouts: 0,
-        };
+        let input = demo_input;
         let bus = |name: &str, device: &str, sample_rate| BusView {
             name: name.to_owned(),
             label: None,
@@ -741,6 +801,60 @@ impl FakeDesk {
             input + 1,
             if on { "->" } else { "off" }
         )])
+    }
+
+    /// The equalizer and the limiter of an input.
+    fn set_input_eq(&mut self, action: &Action) -> Result<Vec<String>, String> {
+        let on_off = |on: bool| if on { "on" } else { "off" };
+        match *action {
+            Action::InputEq { input, on } => {
+                self.input_mut(input)?.eq_on = on;
+                Ok(vec![format!("[{}] eq {}", input + 1, on_off(on))])
+            }
+            Action::InputEqBand {
+                input,
+                band,
+                change,
+            } => {
+                let strip = self.input_mut(input)?;
+                let Some(set) = strip.eq.get_mut(band) else {
+                    return Err(format!(
+                        "there is no band {}; bands are 1 to {EQ_BANDS}",
+                        band + 1
+                    ));
+                };
+                *set = set.changed(change)?;
+                Ok(vec![format!(
+                    "[{}] eq {}: {}",
+                    input + 1,
+                    band + 1,
+                    band_line(*set)
+                )])
+            }
+            Action::InputEqPre { input, pre } => {
+                self.input_mut(input)?.eq_pre = pre;
+                let place = if pre { "before" } else { "behind" };
+                Ok(vec![format!(
+                    "[{}] eq {place} gate and compressor",
+                    input + 1
+                )])
+            }
+            Action::InputLimit { input, change } => {
+                let strip = self.input_mut(input)?;
+                match input_limit(change)? {
+                    LimitChange::Switch(on) => strip.limit_on = on,
+                    LimitChange::Ceiling(db) => strip.limit_db = db,
+                    LimitChange::Lookahead(_) => {}
+                }
+                Ok(vec![format!(
+                    "[{}] limit {} at {:.1} dB",
+                    input + 1,
+                    on_off(strip.limit_on),
+                    strip.limit_db
+                )])
+            }
+            _ => Err("not for the equalizer of an input".to_owned()),
+        }
     }
 
     /// The pan of `input`.
@@ -964,6 +1078,22 @@ impl FakeDesk {
     }
 }
 
+/// `change` as a change of the limiter of an input, checked: its switch or its ceiling.
+///
+/// # Errors
+///
+/// A message for a ceiling outside its range, and for a lookahead: the limiter of an input has
+/// none, an input that came later would no longer line up with the others.
+pub fn input_limit(change: LimitChange) -> Result<LimitChange, String> {
+    match change {
+        LimitChange::Lookahead(_) => Err(
+            "the limiter of an input has no lookahead: it would no longer line up with the others"
+                .to_owned(),
+        ),
+        other => other.checked(),
+    }
+}
+
 /// A band as a line says it: `bell 1000 Hz +6.0 dB q 0.7`.
 #[must_use]
 pub fn band_line(band: Band) -> String {
@@ -1127,6 +1257,10 @@ impl Desk for FakeDesk {
             }
             Action::InputDuck { input, change } => self.set_duck(input, change),
             Action::BusMultiband { bus, change } => self.set_multiband(bus, change),
+            Action::InputEq { .. }
+            | Action::InputEqBand { .. }
+            | Action::InputEqPre { .. }
+            | Action::InputLimit { .. } => self.set_input_eq(&action),
             Action::InputTalkback { .. }
             | Action::BusDim { .. }
             | Action::BusDimLevel { .. }

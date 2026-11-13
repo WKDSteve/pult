@@ -51,6 +51,16 @@ pub enum InputParam {
     Duck(DuckParam),
     /// Whether it is a talkback microphone: silent until someone talks.
     Talkback,
+    /// The switch of its equalizer.
+    Eq,
+    /// One setting of one band of its equalizer, the band from 0.
+    EqBand(usize, BandParam),
+    /// Whether its equalizer comes before gate and compressor instead of after them.
+    EqPre,
+    /// The switch of its limiter.
+    Limit,
+    /// The ceiling of its limiter.
+    LimitCeiling,
     /// Its peak, read only.
     Meter,
 }
@@ -106,6 +116,37 @@ pub enum BandParam {
 }
 
 impl BandParam {
+    fn from_word(word: &str) -> Option<Self> {
+        Some(match word {
+            "kind" => Self::Kind,
+            "freq" => Self::Freq,
+            "gain" => Self::Gain,
+            "q" => Self::Q,
+            _ => return None,
+        })
+    }
+
+    /// The change that sets it to `value`, when `value` is of its kind.
+    fn change(self, value: Value) -> Option<BandChange> {
+        Some(match (self, value) {
+            (Self::Kind, Value::Kind(kind)) => BandChange::Kind(kind),
+            (Self::Freq, Value::Freq(hz)) => BandChange::Freq(hz),
+            (Self::Gain, Value::Boost(db)) => BandChange::Gain(db),
+            (Self::Q, Value::Width(q)) => BandChange::Q(q),
+            _ => return None,
+        })
+    }
+
+    /// Its value in `band`.
+    fn read(self, band: &crate::eq::Band) -> Value {
+        match self {
+            Self::Kind => Value::Kind(band.kind),
+            Self::Freq => Value::Freq(band.freq_hz),
+            Self::Gain => Value::Boost(band.gain_db),
+            Self::Q => Value::Width(band.q),
+        }
+    }
+
     fn word(self) -> &'static str {
         match self {
             Self::Kind => "kind",
@@ -320,6 +361,9 @@ impl Binding {
         let bus = |index: usize| view.buses.get(index).map(|bus| bus.name.as_str());
         let input = |index: usize| (index < view.inputs.len()).then_some(index + 1);
         Some(match self {
+            Self::Input(index, InputParam::EqBand(band, param)) => {
+                format!("input/{}/eq/{}/{}", input(index)?, band + 1, param.word())
+            }
             Self::Input(index, param) => {
                 let param = match param {
                     InputParam::Gain => "gain",
@@ -337,6 +381,10 @@ impl Binding {
                     InputParam::Width => "width",
                     InputParam::Duck(duck) => duck.address(),
                     InputParam::Talkback => "talkback",
+                    InputParam::Eq | InputParam::EqBand(..) => "eq",
+                    InputParam::EqPre => "eq/pre",
+                    InputParam::Limit => "limit",
+                    InputParam::LimitCeiling => "limit/ceiling",
                     InputParam::Meter => "meter",
                 };
                 format!("input/{}/{param}", input(index)?)
@@ -396,6 +444,11 @@ impl Binding {
                     InputParam::Width => Value::Percent(input.strip.width),
                     InputParam::Duck(duck) => Value::Duck(duck.read(&input.duck)),
                     InputParam::Talkback => Value::Switch(input.talkback),
+                    InputParam::Eq => Value::Switch(input.eq_on),
+                    InputParam::EqBand(band, param) => param.read(input.eq.get(band)?),
+                    InputParam::EqPre => Value::Switch(input.eq_pre),
+                    InputParam::Limit => Value::Switch(input.limit_on),
+                    InputParam::LimitCeiling => Value::Ceiling(input.limit_db),
                     InputParam::Meter => Value::Peak(input.peak_db),
                 }
             }
@@ -565,6 +618,27 @@ impl Binding {
             }
             (Self::Talk, Value::Switch(on)) => Action::Talk { on },
             (Self::Pfl, Value::Switch(on)) => Action::Pfl { on },
+            (Self::Input(input, InputParam::Eq), Value::Switch(on)) => {
+                Action::InputEq { input, on }
+            }
+            (Self::Input(input, InputParam::EqBand(band, param)), value) => Action::InputEqBand {
+                input,
+                band,
+                change: param.change(value)?,
+            },
+            (Self::Input(input, InputParam::EqPre), Value::Switch(pre)) => {
+                Action::InputEqPre { input, pre }
+            }
+            (Self::Input(input, InputParam::Limit), Value::Switch(on)) => Action::InputLimit {
+                input,
+                change: LimitChange::Switch(on),
+            },
+            (Self::Input(input, InputParam::LimitCeiling), Value::Ceiling(db)) => {
+                Action::InputLimit {
+                    input,
+                    change: LimitChange::Ceiling(db),
+                }
+            }
             _ => return None,
         })
     }
@@ -602,6 +676,22 @@ impl Binding {
                 format!("{} {what}", input(index))
             }
             Self::Input(index, InputParam::Talkback) => format!("{} talkback", input(index)),
+            Self::Input(index, InputParam::Eq) => format!("{} equalizer", input(index)),
+            Self::Input(index, InputParam::EqBand(band, param)) => {
+                format!(
+                    "{} equalizer band {} {}",
+                    input(index),
+                    band + 1,
+                    param.word()
+                )
+            }
+            Self::Input(index, InputParam::EqPre) => {
+                format!("{} equalizer before the compressor", input(index))
+            }
+            Self::Input(index, InputParam::Limit) => format!("{} limiter", input(index)),
+            Self::Input(index, InputParam::LimitCeiling) => {
+                format!("{} limiter ceiling", input(index))
+            }
             Self::Input(index, _) => input(index).to_owned(),
             Self::Bus(index, BusParam::Mute) => format!("{} mute", bus(index)),
             Self::Bus(index, BusParam::Eq) => format!("{} equalizer", bus(index)),
@@ -672,6 +762,15 @@ fn input_param(word: &str) -> Option<InputParam> {
         "width" => InputParam::Width,
         "meter" => InputParam::Meter,
         "talkback" => InputParam::Talkback,
+        "eq" => InputParam::Eq,
+        "eq/pre" => InputParam::EqPre,
+        "limit" => InputParam::Limit,
+        "limit/ceiling" => InputParam::LimitCeiling,
+        band if band.starts_with("eq/") => {
+            let (number, setting) = band.strip_prefix("eq/")?.split_once('/')?;
+            let index = place(number).filter(|&index| index < EQ_BANDS)?;
+            InputParam::EqBand(index, BandParam::from_word(setting)?)
+        }
         other => InputParam::Duck(DuckParam::from_address(other)?),
     })
 }

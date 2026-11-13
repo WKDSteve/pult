@@ -254,19 +254,17 @@ impl Param {
             | Binding::Bus(_, BusParam::Gain)
             | Binding::Send { .. } => Self::Gain(binding),
             Binding::Input(_, InputParam::Pan) => Self::Pan(binding),
-            Binding::Input(_, InputParam::Gate | InputParam::Comp) => {
-                Self::Knob(binding, Span::even(AMOUNT_RANGE))
-            }
-            Binding::Bus(_, BusParam::EqBand(_, BandParam::Gain)) => {
-                Self::Knob(binding, Span::even(EQ_GAIN_DB))
-            }
-            Binding::Bus(_, BusParam::EqBand(_, BandParam::Freq)) => {
-                Self::Knob(binding, Span::octaves(EQ_FREQ_HZ))
-            }
-            Binding::Bus(_, BusParam::EqBand(_, BandParam::Q)) => {
-                Self::Knob(binding, Span::octaves(EQ_Q))
-            }
-            Binding::Bus(_, BusParam::Comp) => Self::Knob(binding, Span::even(AMOUNT_RANGE)),
+            Binding::Input(_, InputParam::Gate | InputParam::Comp)
+            | Binding::Bus(_, BusParam::Comp) => Self::Knob(binding, Span::even(AMOUNT_RANGE)),
+            Binding::Bus(_, BusParam::EqBand(_, band))
+            | Binding::Input(_, InputParam::EqBand(_, band)) => match band {
+                BandParam::Gain => Self::Knob(binding, Span::even(EQ_GAIN_DB)),
+                BandParam::Freq => Self::Knob(binding, Span::octaves(EQ_FREQ_HZ)),
+                BandParam::Q => Self::Knob(binding, Span::octaves(EQ_Q)),
+                BandParam::Kind => {
+                    return Err(format!("{target} is a word, which no control can say"));
+                }
+            },
             Binding::Bus(_, BusParam::CompMix) => Self::Knob(binding, Span::even((0.0, 100.0))),
             Binding::Bus(_, BusParam::Multiband(param)) => Self::Knob(
                 binding,
@@ -308,14 +306,12 @@ impl Param {
                     return Err(format!("{target} names an input, which no control can say"));
                 }
             },
-            Binding::Bus(_, BusParam::LimitCeiling) => {
+            Binding::Bus(_, BusParam::LimitCeiling)
+            | Binding::Input(_, InputParam::LimitCeiling) => {
                 Self::Knob(binding, Span::even(LIMIT_CEILING_DB))
             }
             Binding::Bus(_, BusParam::LimitLookahead) => {
                 Self::Knob(binding, Span::even(LIMIT_LOOKAHEAD_MS))
-            }
-            Binding::Bus(_, BusParam::EqBand(_, BandParam::Kind)) => {
-                return Err(format!("{target} is a word, which no control can say"));
             }
             Binding::Bus(_, BusParam::DimLevel) => {
                 Self::Knob(binding, Span::even(crate::view::DIM_RANGE_DB))
@@ -326,7 +322,10 @@ impl Param {
                 | InputParam::Solo
                 | InputParam::Automix
                 | InputParam::Polarity
-                | InputParam::Talkback,
+                | InputParam::Talkback
+                | InputParam::Eq
+                | InputParam::EqPre
+                | InputParam::Limit,
             )
             | Binding::Bus(
                 _,
