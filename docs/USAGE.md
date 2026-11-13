@@ -207,7 +207,8 @@ pult run --profile meinprofil.toml --log abend.csv
 - **Kanalzug:** Jeder Eingang hat vor Gate und Kompressor einen Kanalzug wie ein SSL-Pult, am Anfang neutral:
   `polarity = true` dreht die Polarität um (Knopf **Ø**, gegen die Auslöschung zweier Mikrofone an einer Quelle),
   `hpf_hz = 20..1000` ist ein Hochpass (20 = aus; 80 nimmt Trittschall und Rumpeln), `lpf_hz = 1000..20000` ein
-  Tiefpass (20000 = aus), `delay_ms = 0..250` hält den Eingang zurück, um ihn mit einem anderen auszurichten, und
+  Tiefpass (20000 = aus), `delay_ms = 0..250` hält den Eingang zurück, um ihn mit einem anderen auszurichten (eine Änderung blendet in 20 ms
+  über, ohne Sprung), und
   `width = 0..200` ist die Breite eines Stereo-Eingangs (0 = mono, 100 wie er kommt; ein Mono-Eingang übergeht sie).
   Während des Laufs `polarity 2 on`, `hpf 2 80`, `lpf 2 off`, `delay 3 12.5`, `width 1 mono`; im Fenster stehen
   **HPF**, **LPF** und **Ø** über GATE und COMP; von außen `input/<n>/polarity`, `/hpf`, `/lpf`, `/delay`, `/width`.

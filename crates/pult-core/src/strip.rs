@@ -18,6 +18,9 @@ pub const HPF_RANGE_HZ: (f32, f32) = (20.0, 1000.0);
 pub const LPF_RANGE_HZ: (f32, f32) = (1000.0, 20_000.0);
 /// The longest delay in milliseconds: enough to line up a microphone 80 m away.
 pub const MAX_DELAY_MS: f32 = 250.0;
+/// How long a change of the delay takes: the old and the new place in the line are blended, so
+/// the sound never jumps.
+pub const DELAY_FADE_MS: f32 = 20.0;
 /// Range of the width of a stereo input in percent: 0 is mono, 100 as it comes, 200 twice
 /// as wide.
 pub const WIDTH_RANGE: (f32, f32) = (0.0, 200.0);
@@ -298,6 +301,13 @@ pub struct ChannelStrip {
     line: Vec<f32>,
     /// The frame `line` is written at next.
     at: usize,
+    /// Frames the output is behind the input; `None` until the first block, which takes the
+    /// delay it finds without a blend.
+    behind: Option<usize>,
+    /// The delay a blend goes to, and how many of its frames are done.
+    blend: Option<(usize, usize)>,
+    /// Frames a blend takes.
+    blend_frames: usize,
 }
 
 impl ChannelStrip {
@@ -326,6 +336,10 @@ impl ChannelStrip {
             low_on: false,
             line: vec![0.0; frames * channels],
             at: 0,
+            behind: None,
+            blend: None,
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            blend_frames: ((DELAY_FADE_MS / 1000.0 * rate_f) as usize).max(1),
         }
     }
 
@@ -335,6 +349,8 @@ impl ChannelStrip {
         self.low.iter_mut().for_each(Biquad::start_over);
         self.line.fill(0.0);
         self.at = 0;
+        self.behind = None;
+        self.blend = None;
     }
 
     /// Works `block` (interleaved, whole frames of the channels it was made for) in place as
@@ -396,20 +412,41 @@ impl ChannelStrip {
         }
     }
 
+    /// Holds `block` back by the delay of `settings`. A change of the delay blends from the old
+    /// place in the line to the new one over [`DELAY_FADE_MS`]; one that comes during a blend
+    /// waits for its end.
     fn delay(&mut self, settings: &StripSettings, block: &mut [f32]) {
         let ch = self.channels;
         let frames = self.line.len() / ch;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let behind = ((settings.delay_ms / 1000.0 * self.rate).round() as usize).min(frames - 1);
+        let wanted = ((settings.delay_ms / 1000.0 * self.rate).round() as usize).min(frames - 1);
+        let mut behind = *self.behind.get_or_insert(wanted);
         for frame in block.chunks_exact_mut(ch) {
             let write = self.at * ch;
             self.line[write..write + ch].copy_from_slice(frame);
-            if behind > 0 {
-                let read = (self.at + frames - behind) % frames * ch;
-                frame.copy_from_slice(&self.line[read..read + ch]);
+            if self.blend.is_none() && wanted != behind {
+                self.blend = Some((wanted, 0));
+            }
+            let old = (self.at + frames - behind) % frames * ch;
+            if let Some((to, done)) = self.blend {
+                let new = (self.at + frames - to) % frames * ch;
+                #[allow(clippy::cast_precision_loss)]
+                let t = (done + 1) as f32 / self.blend_frames as f32;
+                for (c, sample) in frame.iter_mut().enumerate() {
+                    *sample = self.line[old + c] + (self.line[new + c] - self.line[old + c]) * t;
+                }
+                if done + 1 >= self.blend_frames {
+                    behind = to;
+                    self.blend = None;
+                } else {
+                    self.blend = Some((to, done + 1));
+                }
+            } else if behind > 0 {
+                frame.copy_from_slice(&self.line[old..old + ch]);
             }
             self.at = (self.at + 1) % frames;
         }
+        self.behind = Some(behind);
     }
 }
 
@@ -496,6 +533,41 @@ mod tests {
         // The longest it can is held.
         c.set(StripChange::Delay(10_000.0));
         assert_eq!(c.settings().delay_ms, MAX_DELAY_MS);
+    }
+
+    #[test]
+    fn a_change_of_the_delay_never_jumps() {
+        let c = StripControls::default();
+        let mut strip = ChannelStrip::new(1, 48_000);
+        // A slow ramp: neighbours differ by 1e-4, so a jump of the place would show at once.
+        #[allow(clippy::cast_precision_loss)]
+        let ramp =
+            |from: usize| -> Vec<f32> { (from..from + 480).map(|n| n as f32 * 1e-4).collect() };
+        let mut last = 0.0_f32;
+        let mut steepest = 0.0_f32;
+        for callback in 0..40 {
+            match callback {
+                5 => c.set(StripChange::Delay(10.0)),
+                // During the blend (20 ms = 2 callbacks): it waits, then follows.
+                6 => c.set(StripChange::Delay(2.0)),
+                20 => c.set(StripChange::Delay(0.0)),
+                _ => {}
+            }
+            let mut block = ramp(callback * 480);
+            strip.process(&c, &mut block);
+            for &sample in &block {
+                steepest = steepest.max((sample - last).abs());
+                last = sample;
+            }
+        }
+        // 480 frames of the ramp are 0.048; a jump there would be that large. A blend over 960
+        // frames adds at most 0.048 / 960 a frame to the slope of the ramp.
+        assert!(steepest < 3e-4, "no jump: {steepest}");
+        // And it arrived: no delay at the end.
+        let mut block = ramp(40 * 480);
+        let first = block[0];
+        strip.process(&c, &mut block);
+        assert!((block[0] - first).abs() < 1e-6);
     }
 
     #[test]
