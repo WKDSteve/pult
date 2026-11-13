@@ -110,3 +110,17 @@ Konzept, Stufenplan und Tasks liegen im privaten Vault unter `tasks-vault/pult/`
 ## Lizenz
 
 [MIT](LICENSE). VB-CABLE und andere virtuelle Audiotreiber gehören nicht zu pult und werden nicht mitgeliefert.
+
+<!-- connections:begin (written by the app-icons tool of the workshop; change integrations.json there, not this block) -->
+## Connections
+
+![pult: what it uses and what uses it](assets/graphs/pult.png)
+
+**Uses**
+
+- [appkit](https://github.com/WKDSteve/appkit): The hub of pult is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`). ([picture](assets/graphs/pair/pult--appkit.png))
+
+**Used by**
+
+- [hub-desktop](https://github.com/WKDSteve/hub-desktop): hub-desktop shows pult as a tile and starts its hub. ([picture](assets/graphs/pair/hub-desktop--pult.png))
+<!-- connections:end -->
