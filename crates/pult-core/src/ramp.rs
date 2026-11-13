@@ -138,6 +138,14 @@ impl Ramp {
         self.left = frames;
     }
 
+    /// Milliseconds until it arrives, rounded up; 0 when it is steady.
+    #[must_use]
+    pub fn left_ms(&self) -> u32 {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ms = (f64::from(self.left) / self.frames_per_ms).ceil() as u32;
+        ms
+    }
+
     /// Where it stands.
     #[must_use]
     pub fn value(&self) -> f32 {

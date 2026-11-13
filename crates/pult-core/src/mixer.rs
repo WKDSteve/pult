@@ -549,6 +549,9 @@ impl MixerInput {
         if pre != self.seen_pre {
             ms = ms.max(fade_ms.max(MIN_RAMP_MS));
         }
+        // A ramp that is under way keeps the time it has left: a send that moves while the fader
+        // glides must not bring the fader to its goal at once.
+        ms = ms.max(self.gain.ramp.left_ms());
         let base = if pre { 1.0 } else { fader.value() };
         self.seen_fader = fader;
         self.seen_send = send;
@@ -1111,6 +1114,27 @@ mod tests {
             out[out.len() - 1]
         );
         assert!(largest_step(&out) < 0.01, "no step: {}", largest_step(&out));
+    }
+
+    #[test]
+    fn a_send_that_moves_does_not_cut_a_fader_ramp_short() {
+        let (mut mixer, mut capture, handle, _) = playing(0.5);
+        record(&mut mixer, &mut capture, 0.5, 5);
+        // The fader goes down over 400 ms; after 100 ms the send halves, at once.
+        handle.controls.gain.ramp_to(0.2, 400);
+        record(&mut mixer, &mut capture, 0.5, 10);
+        handle.send.store(0.5);
+        let out = record(&mut mixer, &mut capture, 0.5, 10);
+        // 200 ms in: still on its way (0.05 would be the goal, reached in 5 ms before the fix).
+        let midway = out[out.len() - 1];
+        assert!(midway > 0.2, "the fader still glides: {midway}");
+        assert!(largest_step(&out) < 0.01, "no step: {}", largest_step(&out));
+        let out = record(&mut mixer, &mut capture, 0.5, 25);
+        assert!(
+            (out[out.len() - 1] - 0.05).abs() < 2e-3,
+            "arrived: {}",
+            out[out.len() - 1]
+        );
     }
 
     #[test]
