@@ -78,6 +78,10 @@ pub struct InputControls {
     /// Silent because other inputs are soloed; the control thread sets it for every input
     /// that is not soloed while any is. Acts like `muted` without touching it.
     pub soloed_out: AtomicBool,
+    /// Soloed itself; the control thread sets it along with `soloed_out` of the others. A bus
+    /// that listens before the fader ([`BusControls::pfl`]) plays it whatever its fader, mute,
+    /// send and routing say.
+    pub soloed: AtomicBool,
     /// Which meter the desk shows for this input: [`Self::pre_peak`], what arrives before gate,
     /// compressor, gain and mute (true), or the rings' meters, what goes into the mix (false).
     /// Both always measure.
@@ -119,6 +123,7 @@ impl Default for InputControls {
             muted: AtomicBool::new(false),
             fade_ms: AtomicU32::new(0),
             soloed_out: AtomicBool::new(false),
+            soloed: AtomicBool::new(false),
             meter_pre_fader: AtomicBool::new(false),
             pre_peak: PeakMeter::default(),
             gate_reduction: PeakMeter::default(),
@@ -177,6 +182,9 @@ pub struct BusControls {
     /// Whether solo acts on this bus: on every bus while the route has no monitor bus, else
     /// only on the monitor buses, so a talk bus keeps hearing every source. True at first.
     pub solo_here: AtomicBool,
+    /// Solo on this bus listens before the fader (PFL): a soloed input plays at unity, whatever
+    /// its fader, mute, send, automix share and routing say. False at first (AFL: after them).
+    pub pfl: AtomicBool,
 }
 
 impl Default for BusControls {
@@ -191,6 +199,7 @@ impl Default for BusControls {
             comp: crate::buscomp::BusCompControls::default(),
             multiband: crate::multiband::MultibandControls::default(),
             solo_here: AtomicBool::new(true),
+            pfl: AtomicBool::new(false),
         }
     }
 }
@@ -327,6 +336,7 @@ pub fn connect_with(
         seen_fader: handle.controls.gain.load(),
         seen_send: handle.send.load(),
         seen_pre: false,
+        listening: false,
         aim: handle.controls.gain.load(),
         playing: true,
         gain: Follower::new(config.output_rate),
@@ -427,6 +437,8 @@ pub struct MixerInput {
     seen_fader: Aim,
     seen_send: Aim,
     seen_pre: bool,
+    /// It was listened to before the fader in the last callback ([`BusControls::pfl`]).
+    listening: bool,
     aim: Aim,
     /// Where the gain stands, silence and the fades of the matrix included.
     gain: Follower,
@@ -455,8 +467,8 @@ impl MixerInput {
     /// Follows the matrix button: closes the ring when it was switched off and has faded out,
     /// empties, primes and opens it when it was switched on. Returns whether it is routed, or
     /// `None` when it does not play.
-    fn follow_routing(&mut self) -> Option<bool> {
-        let routed = self.routed.load(Ordering::Acquire);
+    fn follow_routing(&mut self, listen: bool) -> Option<bool> {
+        let routed = listen || self.routed.load(Ordering::Acquire);
         if routed && !self.playing {
             self.restart();
             self.gain.silence(self.controls.gain.load());
@@ -486,15 +498,24 @@ impl MixerInput {
 
     /// Resamples `frames` output frames from the ring, chunk by chunk, and adds them into
     /// `out`.
-    fn mix_into(&mut self, out: &mut [f32], out_channels: usize, frames: usize, solo_here: bool) {
-        let Some(routed) = self.follow_routing() else {
+    fn mix_into(
+        &mut self,
+        out: &mut [f32],
+        out_channels: usize,
+        frames: usize,
+        (solo_here, pfl): (bool, bool),
+    ) {
+        // Listened to before the fader: soloed, on a bus whose solo is PFL.
+        let listen = pfl && self.controls.soloed.load(Ordering::Acquire);
+        let Some(routed) = self.follow_routing(listen) else {
             return;
         };
         // Soloed out only where solo acts: a talk bus beside a monitor bus hears every source.
-        let silent = self.controls.muted.load(Ordering::Acquire)
-            || (solo_here && self.controls.soloed_out.load(Ordering::Acquire));
+        let silent = !listen
+            && (self.controls.muted.load(Ordering::Acquire)
+                || (solo_here && self.controls.soloed_out.load(Ordering::Acquire)));
         let fade_ms = self.controls.fade_ms.load(Ordering::Relaxed);
-        let aim = self.crossing_aim(fade_ms);
+        let aim = self.listening_aim(listen, fade_ms);
         self.gain.follow(aim, routed && !silent, fade_ms);
         self.pan.follow(self.controls.pan.load(), true, 0);
         let ch = self.channels;
@@ -509,6 +530,7 @@ impl MixerInput {
                     .controls
                     .automix
                     .get()
+                    .filter(|_| !listen)
                     .map_or(1.0, |(group, index)| group.gain(*index));
                 glide_gain(&mut self.resampled[..n * ch], ch, self.automix_gain, share);
                 self.automix_gain = share;
@@ -528,6 +550,25 @@ impl MixerInput {
                 self.gain.hold();
             }
             done += n;
+        }
+    }
+
+    /// The gain this ring aims at now: unity while it is listened to before the fader, else
+    /// [`Self::crossing_aim`]. Going there and coming back takes the fade time, at least the
+    /// shortest ramp, whatever time the fader last took.
+    fn listening_aim(&mut self, listen: bool, fade_ms: u32) -> Aim {
+        let aim = self.crossing_aim(fade_ms);
+        let changed = listen != self.listening;
+        self.listening = listen;
+        let ms = fade_ms.max(MIN_RAMP_MS);
+        if listen {
+            // The same aim for as long as it lasts: a follower ramps once.
+            Aim::new(1.0, ms)
+        } else if changed {
+            self.aim = Aim::new(aim.value(), ms);
+            self.aim
+        } else {
+            aim
         }
     }
 
@@ -774,9 +815,12 @@ impl Mixer {
             }
         }
         let frames = out.len() / self.out_channels;
-        let solo_here = self.controls.solo_here.load(Ordering::Acquire);
+        let solo = (
+            self.controls.solo_here.load(Ordering::Acquire),
+            self.controls.pfl.load(Ordering::Acquire),
+        );
         for input in &mut self.inputs {
-            input.mix_into(out, self.out_channels, frames, solo_here);
+            input.mix_into(out, self.out_channels, frames, solo);
         }
         self.eq.process(&self.controls.eq, out, self.out_channels);
         self.comp
@@ -1161,6 +1205,37 @@ mod tests {
             "there at once: {}",
             out[out.len() - 1]
         );
+    }
+
+    #[test]
+    fn a_soloed_input_is_heard_before_its_fader_on_a_bus_that_listens_pre() {
+        let (mut mixer, mut capture, handle, bus) = playing(0.5);
+        // Fader down, muted, and not even routed here.
+        handle.controls.gain.store(0.1);
+        handle.controls.muted.store(true, Ordering::Release);
+        handle.routed.store(false, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 20);
+        assert_eq!(out[out.len() - 1], 0.0);
+
+        // Soloed alone changes nothing: this bus listens after the fader.
+        handle.controls.soloed.store(true, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 20);
+        assert_eq!(out[out.len() - 1], 0.0);
+
+        bus.controls.pfl.store(true, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 40);
+        assert!(
+            (out[out.len() - 1] - 0.5).abs() < 2e-3,
+            "at unity: {}",
+            out[out.len() - 1]
+        );
+        assert!(largest_step(&out) < 0.01, "no step: {}", largest_step(&out));
+
+        // The solo ends: silent again, as fader, mute and routing say, without a step.
+        handle.controls.soloed.store(false, Ordering::Release);
+        let out = record(&mut mixer, &mut capture, 0.5, 20);
+        assert_eq!(out[out.len() - 1], 0.0);
+        assert!(largest_step(&out) < 0.01, "no step: {}", largest_step(&out));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //!
 //! ```toml
 //! latency_ms = 40              # optional, default 40
+//! pfl = false                  # optional: true lets solo on a monitor bus listen before the fader
 //!
 //! [[bus]]
 //! name = "A1"                  # 1 to 8 letters, digits, - or _
@@ -136,6 +137,8 @@ impl std::error::Error for ProfileError {}
 #[serde(deny_unknown_fields)]
 struct File {
     latency_ms: Option<u32>,
+    #[serde(default)]
+    pfl: bool,
     #[serde(default)]
     bus: Vec<BusEntry>,
     #[serde(default)]
@@ -743,6 +746,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
         buses,
         latency_ms,
         scenes,
+        pfl: file.pfl,
     };
     spec.validate().map_err(|err| match err {
         Error::InvalidRoute(why) => ProfileError(why),
@@ -843,6 +847,9 @@ pub fn render(spec: &RouteSpec) -> String {
     // Writing into a String cannot fail.
     let mut text = String::from("# pult profile, saved from a running route.\n\n");
     let _ = writeln!(text, "latency_ms = {}", spec.latency_ms);
+    if spec.pfl {
+        let _ = writeln!(text, "pfl = true");
+    }
     for bus in &spec.buses {
         let _ = write!(
             text,
@@ -1192,6 +1199,8 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
             );
         }
     }
+
+    set_switch(file.as_table_mut(), "pfl", spec.pfl);
 
     let buses = file.get_mut("bus")?.as_array_of_tables_mut()?;
     if buses.len() != spec.buses.len() {

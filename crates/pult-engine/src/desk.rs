@@ -74,6 +74,7 @@ impl EngineDesk {
                 .controls
                 .soloed_out
                 .store(soloing && !solo, Ordering::Release);
+            input.controls.soloed.store(solo, Ordering::Release);
         }
     }
 
@@ -285,6 +286,7 @@ impl Desk for EngineDesk {
             scenes: running.spec.scenes.iter().map(|s| s.name.clone()).collect(),
             midi: None,
             talk: running.is_talking(),
+            pfl: running.is_pfl(),
         }
     }
 
@@ -370,6 +372,7 @@ impl Desk for EngineDesk {
             Action::BusDimLevel { bus, db } => self.running.dim(bus, None, Some(db)),
             Action::InputTalkback { input, on } => self.running.talkback(input, on),
             Action::Talk { on } => Ok(self.running.talk(on)),
+            Action::Pfl { on } => Ok(self.running.pfl(on)),
             Action::BusComp { bus, amount } => self.running.bus_comp(bus, Some(amount), None, None),
             Action::BusCompMix { bus, percent } => {
                 self.running.bus_comp(bus, None, Some(percent), None)

@@ -45,6 +45,9 @@ pub struct MixerView {
     pub midi: Option<crate::midi::MidiStatus>,
     /// Someone talks: the talkback microphones are open and the monitor buses dimmed.
     pub talk: bool,
+    /// Solo on a monitor bus listens before the fader (PFL): a soloed input is heard there at
+    /// unity, whatever its fader, mute, send and routing say. False: after them (AFL).
+    pub pfl: bool,
 }
 
 /// Range of the dim level of a bus in dB: how far its dim switch turns it down.
@@ -423,6 +426,11 @@ pub enum Action {
         /// Talking or not.
         on: bool,
     },
+    /// Lets solo on a monitor bus listen before the fader (PFL) or after it (AFL).
+    Pfl {
+        /// Before the fader or not.
+        on: bool,
+    },
     /// Changes one setting of the multiband compressor of a bus.
     BusMultiband {
         /// Bus index.
@@ -657,6 +665,7 @@ impl FakeDesk {
                 glitches: 0,
                 meter_point: MeterPoint::PostFader,
                 talk: false,
+                pfl: false,
                 inputs: vec![
                     input(
                         "CABLE Output (VB-Audio Virtual Cable)",
@@ -734,7 +743,16 @@ impl FakeDesk {
         )])
     }
 
-    /// Dim and talkback.
+    /// The pan of `input`.
+    fn set_pan(&mut self, input: usize, pan: f32) -> Result<Vec<String>, String> {
+        if !(-1.0..=1.0).contains(&pan) {
+            return Err(format!("pan {pan} is outside -1 to 1"));
+        }
+        self.input_mut(input)?.pan = pan;
+        Ok(vec![format!("[{}] pan {pan:.2}", input + 1)])
+    }
+
+    /// Dim, talkback and where solo listens.
     fn set_monitoring(&mut self, action: &Action) -> Result<Vec<String>, String> {
         let on_off = |on: bool| if on { "on" } else { "off" };
         match *action {
@@ -756,6 +774,10 @@ impl FakeDesk {
             Action::Talk { on } => {
                 self.view.talk = on;
                 Ok(vec![format!("talk {}", on_off(on))])
+            }
+            Action::Pfl { on } => {
+                self.view.pfl = on;
+                Ok(vec![format!("pfl {}", on_off(on))])
             }
             _ => Err("not for dim or talkback".to_owned()),
         }
@@ -1065,13 +1087,7 @@ impl Desk for FakeDesk {
                     if solo { "solo" } else { "solo off" }
                 )])
             }
-            Action::InputPan { input, pan, .. } => {
-                if !(-1.0..=1.0).contains(&pan) {
-                    return Err(format!("pan {pan} is outside -1 to 1"));
-                }
-                self.input_mut(input)?.pan = pan;
-                Ok(vec![format!("[{}] pan {pan:.2}", input + 1)])
-            }
+            Action::InputPan { input, pan, .. } => self.set_pan(input, pan),
             Action::InputGate { input, amount } => self.set_knob(input, "gate", amount),
             Action::InputComp { input, amount } => self.set_knob(input, "comp", amount),
             Action::BusGain { bus, db, .. } => {
@@ -1114,7 +1130,8 @@ impl Desk for FakeDesk {
             Action::InputTalkback { .. }
             | Action::BusDim { .. }
             | Action::BusDimLevel { .. }
-            | Action::Talk { .. } => self.set_monitoring(&action),
+            | Action::Talk { .. }
+            | Action::Pfl { .. } => self.set_monitoring(&action),
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
             Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
             Action::Route { input, bus, on } => self.set_route(input, bus, on),

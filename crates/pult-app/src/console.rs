@@ -266,6 +266,7 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
             }
             ui.label(RichText::new("METER").size(9.5).color(p.text_faint));
             ui.add_space(8.0);
+            solo_point(ui, view, actions);
             scene_menu(ui, view, actions);
             for (tab, name) in [
                 (Tab::Events, "Events"),
@@ -277,6 +278,31 @@ fn header_bar(ui: &mut Ui, view: &MixerView, state: &mut ConsoleState, actions: 
             }
         });
     });
+}
+
+/// Where solo listens (PFL or AFL), once there is a monitor bus to listen on.
+fn solo_point(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
+    if !view.buses.iter().any(|bus| bus.monitor) {
+        return;
+    }
+    let p = &Theme::current().palette;
+    let mut pfl = view.pfl;
+    let label = if pfl { "PFL" } else { "AFL" };
+    let size = vec2(40.0, 22.0);
+    if toggle(
+        ui,
+        &mut pfl,
+        label,
+        "Solo before the fader",
+        Role::Solo,
+        size,
+    )
+    .changed()
+    {
+        actions.push(Action::Pfl { on: pfl });
+    }
+    ui.label(RichText::new("SOLO").size(9.5).color(p.text_faint));
+    ui.add_space(8.0);
 }
 
 /// Offers the scenes of the route, if it has any.

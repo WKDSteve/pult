@@ -514,6 +514,8 @@ pub struct RouteSpec {
     pub latency_ms: u32,
     /// The scenes it can change to.
     pub scenes: Vec<SceneSpec>,
+    /// Solo on a monitor bus listens before the fader (PFL) instead of after it (AFL).
+    pub pfl: bool,
 }
 
 impl RouteSpec {
@@ -1480,6 +1482,7 @@ mod tests {
                 .collect(),
             latency_ms: 40,
             scenes: Vec::new(),
+            pfl: false,
         }
     }
 

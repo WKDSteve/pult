@@ -146,6 +146,8 @@ pub enum Binding {
     },
     /// Whether someone talks into the talkback microphones: `talk`.
     Talk,
+    /// Whether solo on a monitor bus listens before the fader (PFL) instead of after it: `pfl`.
+    Pfl,
 }
 
 /// The value of a parameter.
@@ -226,8 +228,10 @@ impl Binding {
                 .ok_or_else(|| AddressError::NoBus(name.to_owned()))
         };
         let malformed = || AddressError::Malformed(address.to_owned());
-        if address == "talk" {
-            return Ok(Self::Talk);
+        match address {
+            "talk" => return Ok(Self::Talk),
+            "pfl" => return Ok(Self::Pfl),
+            _ => {}
         }
         // A bus name may hold a slash: it is all between the input or kind and the parameter.
         let (kind, rest) = address.split_once('/').ok_or_else(malformed)?;
@@ -366,6 +370,7 @@ impl Binding {
             Self::Send { input: i, bus: b } => format!("send/{}/{}", input(i)?, bus(b)?),
             Self::SendPre { input: i, bus: b } => format!("sendpre/{}/{}", input(i)?, bus(b)?),
             Self::Talk => "talk".to_owned(),
+            Self::Pfl => "pfl".to_owned(),
         })
     }
 
@@ -439,6 +444,7 @@ impl Binding {
                 Value::Switch(view.inputs.get(input)?.send(bus).pre)
             }
             Self::Talk => Value::Switch(view.talk),
+            Self::Pfl => Value::Switch(view.pfl),
         })
     }
 
@@ -558,6 +564,7 @@ impl Binding {
                 Action::BusDimLevel { bus, db }
             }
             (Self::Talk, Value::Switch(on)) => Action::Talk { on },
+            (Self::Pfl, Value::Switch(on)) => Action::Pfl { on },
             _ => return None,
         })
     }
@@ -611,6 +618,7 @@ impl Binding {
             Self::Bus(index, BusParam::Dim) => format!("{} dim", bus(index)),
             Self::Bus(index, BusParam::DimLevel) => format!("{} dim level", bus(index)),
             Self::Talk => "talk".to_owned(),
+            Self::Pfl => "solo before the fader".to_owned(),
             Self::Bus(index, BusParam::Comp) => format!("{} compressor", bus(index)),
             Self::Bus(index, BusParam::CompMix) => format!("{} compressor mix", bus(index)),
             Self::Bus(index, BusParam::CompHpf) => {

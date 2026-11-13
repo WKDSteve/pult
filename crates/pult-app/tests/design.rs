@@ -152,7 +152,8 @@ fn showcase_buses(t: f64) -> Vec<BusView> {
                 ceiling_db: -0.3,
                 lookahead_ms: 1.0,
             },
-            monitor: false,
+            // The headphones are where one listens.
+            monitor: j == 1,
             minus: None,
             // The stream bus with its bus compressor at work, half parallel.
             comp: [0.0, 0.0, 3.0][j],
@@ -195,6 +196,7 @@ fn showcase(t: f64) -> MixerView {
         scenes: Vec::new(),
         midi: None,
         talk: false,
+        pfl: false,
     }
 }
 

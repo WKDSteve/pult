@@ -23,6 +23,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Multiband-Kompressor je Bus: drei Bänder mit Linkwitz-Riley-Weichen, je Band ein Regler (`mb A1 low 4`, Spalte MULTIBAND in der EQ-Ansicht) | fertig |
 | Loudness je Bus nach EBU R128 (LUFS momentary/short-term/integrated, LRA, True Peak), unter dem Bus-Fader und im Zustand | fertig |
 | Mix-Minus (N-1): ein Bus für einen Anrufer hört alles außer dessen Stimme (`minus = 2` am Bus) | fertig |
+| PFL/AFL: Solo hört auf dem Monitor-Bus wahlweise vor dem Fader, unabhängig von Fader, Mute und Routing (`pfl on`, **SOLO** in der Kopfzeile) | fertig |
 | Dim je Bus und Talkback: ein Talkback-Mikrofon ist still, bis `talk on` es öffnet und die Monitor-Busse dimmt (`dim A1 on`, `talkback 3 on`, **DIM** und **TB** im Fenster) | fertig |
 | Monitor-Bus: Solo wirkt nur auf dem Abhör-Bus, ein Gesprächs-Bus hört weiter alles (`monitor = true`, `monitor B1 on`, **MON** im Fenster) | fertig |
 | Sends: eigener Pegel je Kreuzung aus Eingang und Bus, vor oder nach dem Fader (`send 2 B1 -6`, `send 2 B1 pre`, Profil, Szenen, Fernsteuerung, MIDI, Matrix im Fenster) | fertig |

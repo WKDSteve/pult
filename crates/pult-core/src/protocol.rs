@@ -51,6 +51,9 @@ pub struct State {
     /// Someone talks: the talkback microphones are open and the monitor buses dimmed.
     #[serde(default)]
     pub talk: bool,
+    /// Solo on a monitor bus listens before the fader (PFL) instead of after it (AFL).
+    #[serde(default)]
+    pub pfl: bool,
 }
 
 /// Where the input meters measure.
@@ -323,6 +326,7 @@ impl State {
             scenes: view.scenes.clone(),
             midi: view.midi.clone(),
             talk: view.talk,
+            pfl: view.pfl,
         }
     }
 }
@@ -566,6 +570,7 @@ impl Op {
             Command::DimLevel(to, db) => on_bus(*to, "dim/level", OpValue::Number(*db))?,
             Command::Talkback(input, on) => on_input(*input, "talkback", OpValue::Switch(*on)),
             Command::Talk(on) => set("talk".to_owned(), OpValue::Switch(*on), 0),
+            Command::Pfl(on) => set("pfl".to_owned(), OpValue::Switch(*on), 0),
             Command::Send(input, to, db, ramp_ms) => set(
                 format!("send/{}/{}", input + 1, bus(*to)?),
                 OpValue::Number(*db),
@@ -641,6 +646,7 @@ fn is_switch(binding: Binding) -> bool {
             | Binding::Route { .. }
             | Binding::SendPre { .. }
             | Binding::Talk
+            | Binding::Pfl
     )
 }
 
@@ -988,6 +994,10 @@ mod tests {
         );
         assert!(action(r#"{"op":"set","address":"bus/A1/dim/level","value":90}"#).is_err());
         assert!(action(r#"{"op":"set","address":"talk","value":1}"#).is_err());
+        assert_eq!(
+            action(r#"{"op":"set","address":"pfl","value":true}"#),
+            Ok(Action::Pfl { on: true })
+        );
     }
 
     #[test]

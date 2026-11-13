@@ -173,6 +173,7 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `bus/<name>/dim/level` | Zahl, 0 bis 60 dB: der Dim-Pegel |
 | `input/<n>/talkback` | `true` oder `false`: Talkback-Mikrofon, still bis `talk` |
 | `talk` | `true` oder `false`: Talkback-Mikrofone offen, Monitor-Busse gedimmt |
+| `pfl` | `true` oder `false`: Solo hört auf dem Monitor-Bus vor dem Fader (PFL) statt danach (AFL) |
 | `bus/<name>/monitor` | `true` oder `false`: der Monitor-Bus, auf dem allein Solo wirkt |
 | `send/<n>/<bus>` | Zahl, der Pegel dieser Kreuzung in dB (wie ein Gain, gleitet mit `ramp_ms`); 0 am Anfang |
 | `sendpre/<n>/<bus>` | `true` (vor dem Fader des Eingangs) oder `false` (danach, am Anfang) |

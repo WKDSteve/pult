@@ -285,6 +285,12 @@ pult run --profile meinprofil.toml --log abend.csv
   Stream-Bus hört weiter alle Quellen, auch während man auf dem Kopfhörer eine Quelle allein abhört. Ohne Monitor-Bus
   wirkt Solo wie bisher auf allen Bussen. Während des Laufs `monitor B1 on|off`, im Fenster der Schalter **MON** am Bus,
   von außen `bus/<name>/monitor`.
+- **PFL/AFL:** Solo auf einem Monitor-Bus hört wahlweise nach dem Fader (AFL, der Standard: der solote Eingang klingt,
+  wie Fader, Mute und Send ihn einstellen) oder davor (PFL): Dann ist ein soloter Eingang dort mit vollem Pegel zu
+  hören, egal wie sein Fader steht, ob er gemutet ist, wie sein Send steht und ob er überhaupt auf den Monitor-Bus
+  geroutet ist. So lässt sich eine Quelle prüfen, bevor sie auf Sendung geht. PFL wirkt nur auf Monitor-Bussen, nie auf
+  einem Bus, der nach außen geht. `pfl = true` oben im Profil, während des Laufs `pfl on|off`, im Fenster der Schalter
+  **SOLO PFL/AFL** in der Kopfzeile (sobald es einen Monitor-Bus gibt), von außen `pfl`.
 - **Dim:** Jeder Bus hat einen Dim-Schalter, der ihn um seinen Dim-Pegel leiser macht (`dim_db = 0..60` am Bus, Standard
   20 dB), ohne den Fader zu bewegen: `dim A1 on|off`, `dim A1 12` setzt den Pegel, im Fenster der Schalter **DIM** neben
   MUTE, von außen `bus/<name>/dim` und `bus/<name>/dim/level`. Der Schalter selbst steht nicht im Profil, eine Route

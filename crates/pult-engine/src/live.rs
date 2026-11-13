@@ -173,6 +173,7 @@ impl Running {
             Command::DimLevel(bus, db) => self.dim(*bus, None, Some(*db)),
             Command::Talkback(input, on) => self.talkback(*input, *on),
             Command::Talk(on) => Ok(self.talk(*on)),
+            Command::Pfl(on) => Ok(self.pfl(*on)),
             Command::BusComp(bus, amount) => self.bus_comp(*bus, Some(*amount), None, None),
             Command::BusCompMix(bus, percent) => self.bus_comp(*bus, None, Some(*percent), None),
             Command::BusCompHpf(bus, hz) => self.bus_comp(*bus, None, None, Some(*hz)),
@@ -733,12 +734,36 @@ impl Running {
     pub fn apply_monitors(&self) {
         let any = self.spec.buses.iter().any(|bus| bus.monitor);
         for (running, spec) in self.buses.iter().zip(&self.spec.buses) {
-            running
-                .handle
-                .controls
+            let controls = &running.handle.controls;
+            controls
                 .solo_here
                 .store(!any || spec.monitor, Ordering::Release);
+            // Before the fader only where someone listens: never on a bus that goes out.
+            controls
+                .pfl
+                .store(self.spec.pfl && spec.monitor, Ordering::Release);
         }
+    }
+
+    /// Whether solo on a monitor bus listens before the fader.
+    #[must_use]
+    pub fn is_pfl(&self) -> bool {
+        self.spec.pfl
+    }
+
+    /// Lets solo on the monitor buses listen before the fader (PFL) or after it (AFL).
+    pub fn pfl(&mut self, on: bool) -> Vec<String> {
+        self.spec.pfl = on;
+        self.apply_monitors();
+        let monitors = self.spec.buses.iter().any(|bus| bus.monitor);
+        vec![match (on, monitors) {
+            (true, true) => "solo listens before the fader (PFL) on the monitor bus".to_owned(),
+            (true, false) => {
+                "solo listens before the fader (PFL), once a bus is the monitor (monitor <bus> on)"
+                    .to_owned()
+            }
+            (false, _) => "solo listens after the fader (AFL)".to_owned(),
+        }]
     }
 
     /// The ring of `input` on `bus`.

@@ -25,6 +25,7 @@
 //! talkback <input> on|off
 //!                        make an input a talkback microphone: silent until `talk on`, which
 //!                        also dims the monitor buses; talk off ends it
+//! pfl on|off             solo on a monitor bus listens before the fader (PFL) or after it
 //! eq <bus> on|off        switch the equalizer of a bus
 //! eq <bus> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
@@ -97,6 +98,8 @@ pub enum Command {
     Talkback(usize, bool),
     /// Opens the talkback microphones and dims the monitor buses, or ends that.
     Talk(bool),
+    /// Lets solo on a monitor bus listen before the fader (PFL) or after it (AFL).
+    Pfl(bool),
     /// Sets the compressor of a bus by its one knob, 0 (off) to 10.
     BusComp(usize, f32),
     /// Sets the mix of the compressor of a bus in percent.
@@ -170,6 +173,8 @@ dim <bus> on|off     turn a bus down by its dim level, 20 dB at first; dim <bus>
 talkback <input> on|off
                      make an input a talkback microphone: it is silent until talk on, which
                      opens it on its buses and dims the monitor buses; talk off ends it
+pfl on|off           solo on a monitor bus listens before the fader: a soloed input is
+                     heard there whatever its fader, mute and routing say; off is AFL
 eq <bus> on|off      switch the equalizer of a bus
 eq <bus> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
@@ -309,7 +314,7 @@ pub fn parse<S: AsRef<str>>(
         }
         "send" => send(rest, names),
         "monitor" => monitor(rest, names),
-        "dim" | "talkback" | "talk" => monitoring(&keyword.to_lowercase(), rest, names),
+        "dim" | "talkback" | "talk" | "pfl" => monitoring(&keyword.to_lowercase(), rest, names),
         "automix" => automix(rest, names),
         "mb" | "multiband" => multiband(rest, names),
         "duck" => duck(rest, names),
@@ -522,7 +527,7 @@ fn automix<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command,
     Ok(Command::Automix(only_input(input)?, on))
 }
 
-/// `dim <bus> on|off|<dB>`, `talkback <input> on|off` and `talk on|off`; a bus or input may have
+/// `dim <bus> on|off|<dB>`, `talkback <input> on|off`, `talk on|off` and `pfl on|off`; a bus or input may have
 /// several words.
 fn monitoring<S: AsRef<str>>(
     keyword: &str,
@@ -532,6 +537,7 @@ fn monitoring<S: AsRef<str>>(
     let usage = match keyword {
         "dim" => "usage: dim <bus> on|off, or dim <bus> <dB>",
         "talkback" => "usage: talkback <input> on|off",
+        "pfl" => "usage: pfl on|off",
         _ => "usage: talk on|off",
     };
     let Some((value, name)) = rest.split_last() else {
@@ -542,9 +548,10 @@ fn monitoring<S: AsRef<str>>(
         "off" => Some(false),
         _ => None,
     };
-    if keyword == "talk" {
+    if keyword == "talk" || keyword == "pfl" {
         return match on {
-            Some(on) if name.is_empty() => Ok(Command::Talk(on)),
+            Some(on) if name.is_empty() && keyword == "talk" => Ok(Command::Talk(on)),
+            Some(on) if name.is_empty() => Ok(Command::Pfl(on)),
             _ => error(usage),
         };
     }
@@ -969,6 +976,9 @@ mod tests {
         assert!(bad("talkback 2 maybe").contains("usage: talkback"));
         assert!(bad("talk").contains("usage: talk"));
         assert!(bad("talk 2 on").contains("usage: talk"));
+        assert_eq!(ok("pfl on"), Command::Pfl(true));
+        assert_eq!(ok("PFL off"), Command::Pfl(false));
+        assert!(bad("pfl maybe").contains("usage: pfl"));
     }
 
     #[test]

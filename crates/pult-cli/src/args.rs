@@ -332,6 +332,7 @@ fn parse_run(mut args: impl Iterator<Item = String>) -> Result<RunSpec, UsageErr
             buses: vec![BusSpec::new(INLINE_BUS, sink)],
             latency_ms: latency_ms.unwrap_or(DEFAULT_LATENCY_MS),
             scenes: Vec::new(),
+            pfl: false,
         }),
         log,
     })
@@ -486,6 +487,7 @@ mod tests {
                     buses: vec![BusSpec::new("A1", "Focusrite")],
                     latency_ms: 60,
                     scenes: Vec::new(),
+                    pfl: false,
                 }),
                 log: Some(PathBuf::from("abend.csv")),
             }))

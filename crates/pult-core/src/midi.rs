@@ -334,7 +334,8 @@ impl Param {
             )
             | Binding::Route { .. }
             | Binding::SendPre { .. }
-            | Binding::Talk => Self::Switch(binding),
+            | Binding::Talk
+            | Binding::Pfl => Self::Switch(binding),
             Binding::Input(_, InputParam::Meter) | Binding::Bus(_, BusParam::Meter) => {
                 return Err(format!("{target} can only be read"));
             }
