@@ -202,6 +202,7 @@ class CacheTrust(unittest.TestCase):
     def test_the_default_cache_is_the_workspace_s_not_the_account_s(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LOCK_AGE_CACHE", None)
+            os.environ.pop("RUNNER_WORKSPACE", None)
             with tempfile.TemporaryDirectory() as folder:
                 lock = os.path.join(folder, "Cargo.lock")
                 path = age_check.default_cache(lock)
@@ -209,8 +210,21 @@ class CacheTrust(unittest.TestCase):
                 self.assertFalse(path.startswith(os.path.expanduser("~") + os.sep + ".cache"))
 
     def test_lock_age_cache_still_names_another_file(self):
-        with mock.patch.dict(os.environ, {"LOCK_AGE_CACHE": "elsewhere.json"}):
+        with mock.patch.dict(os.environ, {"LOCK_AGE_CACHE": "elsewhere.json", "RUNNER_WORKSPACE": "runner"}):
             self.assertEqual(age_check.default_cache("Cargo.lock"), "elsewhere.json")
+
+    def test_on_a_runner_the_cache_outlives_the_checkout(self):
+        # actions/checkout runs `git clean -ffdx`: a cache in the checkout's `target/` is gone on every run, and every
+        # run asks crates.io for every version again (HTTP 429). The runner's folder of the repository is kept.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LOCK_AGE_CACHE", None)
+            with tempfile.TemporaryDirectory() as runner:
+                checkout = os.path.join(runner, "repo")
+                os.environ["RUNNER_WORKSPACE"] = runner
+                for lock in (os.path.join(checkout, "Cargo.lock"), os.path.join(checkout, "mobile", "Cargo.lock")):
+                    path = age_check.default_cache(lock)
+                    self.assertEqual(path, os.path.join(runner, "lock-age-cache.json"))
+                    self.assertFalse(path.startswith(checkout + os.sep))
 
 
 if __name__ == "__main__":

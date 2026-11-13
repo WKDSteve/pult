@@ -13,13 +13,15 @@ take an older version with `cargo update -p <crate> --precise <version>`.
 Exit 2: the check itself could not run (network, API); that is not a pass.
 
 crates.io asks for one request per second and an identifying User-Agent. When a publication date has been read
-once, it is kept in a cache file (it never changes): `--cache`, else `$LOCK_AGE_CACHE`, else
-`target/lock-age-cache.json` next to the lock file. A run then only asks for the versions it has not seen, which keeps
-a runner below the rate limit of crates.io.
+once, it is kept in a cache file (it never changes): `--cache`, else `$LOCK_AGE_CACHE`, else on a runner
+`$RUNNER_WORKSPACE/lock-age-cache.json` (the repository's folder of the runner, beside the checkout, which
+actions/checkout empties with `git clean -ffdx`, `target/` included), else `target/lock-age-cache.json` next to the
+lock file. A run then only asks for the versions it has not seen, which keeps a runner below the rate limit of
+crates.io.
 
 The cache belongs to one workspace, not to the account: a file every job of every repository on a self-hosted runner
 can write (`~/.cache`) would let the build script of any dependency anywhere enter an old date for a young version and
-open this gate. What is left: a build script of this very workspace can still write its `target/`; a hosted runner
+open this gate. What is left: a build script of this very repository can still write its cache; a hosted runner
 starts without it. A date without a time zone is no date this tool wrote: it is asked again.
 """
 
@@ -84,10 +86,13 @@ def published(name, version, sleep=time.sleep):
 
 
 def default_cache(lock="Cargo.lock"):
-    """Where the publication dates are kept between runs: `$LOCK_AGE_CACHE`, else `target/` of the lock's workspace."""
-    return os.environ.get("LOCK_AGE_CACHE") or os.path.join(
-        os.path.dirname(os.path.abspath(lock)), "target", "lock-age-cache.json"
-    )
+    """Where the publication dates are kept between runs: `$LOCK_AGE_CACHE`, else the runner's folder of this
+    repository (`$RUNNER_WORKSPACE`, it outlives the checkout), else `target/` of the lock's workspace."""
+    if os.environ.get("LOCK_AGE_CACHE"):
+        return os.environ["LOCK_AGE_CACHE"]
+    if os.environ.get("RUNNER_WORKSPACE"):
+        return os.path.join(os.environ["RUNNER_WORKSPACE"], "lock-age-cache.json")
+    return os.path.join(os.path.dirname(os.path.abspath(lock)), "target", "lock-age-cache.json")
 
 
 def load_cache(path):
