@@ -110,6 +110,10 @@ pub struct InputView {
     pub comp_reduction_db: f32,
     /// Its channel strip: polarity, filters, delay, width.
     pub strip: crate::strip::StripSettings,
+    /// Its ducker: the input that turns it down, how far and how fast.
+    pub duck: crate::duck::DuckSettings,
+    /// The most its ducker took away since the previous view, in dB.
+    pub duck_reduction_db: f32,
     /// The buses it feeds, as indices into [`MixerView::buses`].
     pub buses: Vec<usize>,
     /// The send to each bus, by bus index; a bus beyond the list has the default (0 dB, post).
@@ -361,6 +365,13 @@ pub enum Action {
         /// The new setting.
         change: crate::strip::StripChange,
     },
+    /// Changes one setting of the ducker of an input.
+    InputDuck {
+        /// Input index.
+        input: usize,
+        /// The new setting.
+        change: crate::duck::DuckChange,
+    },
     /// Sets the compressor of a bus by its one knob.
     BusComp {
         /// Bus index.
@@ -537,6 +548,8 @@ impl FakeDesk {
             gate_open: true,
             comp_reduction_db: 0.0,
             strip: crate::strip::StripSettings::default(),
+            duck: crate::duck::DuckSettings::default(),
+            duck_reduction_db: 0.0,
             buses,
             sends: Vec::new(),
             present: true,
@@ -648,6 +661,20 @@ impl FakeDesk {
             input + 1,
             if on { "->" } else { "off" }
         )])
+    }
+
+    /// One setting of the ducker of `input`.
+    fn set_duck(
+        &mut self,
+        input: usize,
+        change: crate::duck::DuckChange,
+    ) -> Result<Vec<String>, String> {
+        let change = change.checked()?;
+        if let crate::duck::DuckChange::Key(key) = change {
+            crate::duck::check_key(input, key, self.view.inputs.len())?;
+        }
+        self.input_mut(input)?.duck.apply(change);
+        Ok(vec![format!("[{}] {}", input + 1, change.said())])
     }
 
     /// Takes `input` into the automixer or out of it, and/or sets its priority.
@@ -972,6 +999,7 @@ impl Desk for FakeDesk {
                 self.input_mut(input)?.strip.apply(change);
                 Ok(vec![format!("[{}] {}", input + 1, change.said())])
             }
+            Action::InputDuck { input, change } => self.set_duck(input, change),
             Action::Send { input, bus, db, .. } => self.set_send(input, bus, Some(db), None),
             Action::SendPre { input, bus, pre } => self.set_send(input, bus, None, Some(pre)),
             Action::Route { input, bus, on } => self.set_route(input, bus, on),

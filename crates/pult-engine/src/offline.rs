@@ -11,7 +11,7 @@ use std::sync::Arc;
 use pult_core::{Counter, Mixer, MixerInput};
 
 use crate::slot::InputFeed;
-use crate::{Error, Rings, RouteSpec, Running, automix_group, make_rings, set_up_bus};
+use crate::{Error, Rings, RouteSpec, Running, automix_group, key_board, make_rings, set_up_bus};
 
 /// A route whose inputs and buses are buffers.
 #[derive(Debug)]
@@ -76,6 +76,7 @@ impl Offline {
             latency_ms: spec.latency_ms,
             automix: automix_group(spec),
             automix_next: 0,
+            keys: key_board(spec),
         };
         let mut captures = Vec::with_capacity(spec.inputs.len());
         let mut inputs = Vec::with_capacity(spec.inputs.len());
@@ -148,6 +149,13 @@ impl Offline {
     /// [`Self::process`], as the control thread does between two callbacks.
     pub fn running(&mut self) -> &mut Running {
         &mut self.running
+    }
+
+    /// The route alone, without its buffers: for what takes a [`Running`] by value, as the desk
+    /// of a window or of the control interface does. Nothing feeds or drains it any more.
+    #[must_use]
+    pub fn into_running(self) -> Running {
+        self.running
     }
 
     /// The device of `bus` is gone: its mixer closes its rings (the captures discard into them)

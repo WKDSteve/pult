@@ -290,6 +290,12 @@ impl Param {
             Binding::Input(_, InputParam::Width) => {
                 Self::Knob(binding, Span::even(crate::strip::WIDTH_RANGE))
             }
+            Binding::Input(_, InputParam::Duck(duck)) => match duck.range() {
+                Some(range) => Self::Knob(binding, Span::even(range)),
+                None => {
+                    return Err(format!("{target} names an input, which no control can say"));
+                }
+            },
             Binding::Bus(_, BusParam::LimitCeiling) => {
                 Self::Knob(binding, Span::even(LIMIT_CEILING_DB))
             }
@@ -631,6 +637,7 @@ impl Map {
                         | Value::Lookahead(number)
                         | Value::Delay(number),
                     ) => span.pos(number),
+                    Some(Value::Duck(change)) => span.pos(change.number()),
                     _ => return Step::default(),
                 };
                 let to_value = |pos: f32| OpValue::Number(span.value(pos));

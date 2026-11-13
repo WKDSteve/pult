@@ -118,6 +118,13 @@ pub struct InputState {
     /// Its channel strip; neutral from a run older than this.
     #[serde(default)]
     pub strip: crate::strip::StripSettings,
+    /// Its ducker; off from a run older than ducking. `key` is the number of the input that
+    /// ducks it, 0 for none.
+    #[serde(default)]
+    pub duck: crate::duck::DuckSettings,
+    /// The most its ducker took away since the previous state, in dB.
+    #[serde(default)]
+    pub duck_reduction_db: f32,
     /// The names of the buses it feeds.
     pub buses: Vec<String>,
     /// Its send to every bus, in bus order; empty from a run older than sends.
@@ -344,6 +351,8 @@ impl InputState {
             gate_open: input.gate_open,
             comp_reduction_db: input.comp_reduction_db,
             strip: input.strip,
+            duck: input.duck,
+            duck_reduction_db: input.duck_reduction_db,
             buses: input.buses.iter().filter_map(bus_name).collect(),
             sends: (0..buses)
                 .filter_map(|bus| {
@@ -465,6 +474,9 @@ impl Op {
             value,
             ramp_ms: (ramp_ms > 0).then_some(ramp_ms),
         };
+        let on_input = |input: usize, param: &str, value: OpValue| {
+            set(format!("input/{}/{param}", input + 1), value, 0)
+        };
         let on_bus = |to: usize, param: &str, value: OpValue| {
             Some(set(format!("bus/{}/{param}", bus(to)?), value, 0))
         };
@@ -473,26 +485,14 @@ impl Op {
                 set(target(*to, "gain")?, OpValue::Number(*db), *ramp_ms)
             }
             Command::Mute(to, muted) => set(target(*to, "mute")?, OpValue::Switch(*muted), 0),
-            Command::Solo(input, solo) => set(
-                target(Target::Input(*input), "solo")?,
-                OpValue::Switch(*solo),
-                0,
-            ),
+            Command::Solo(input, solo) => on_input(*input, "solo", OpValue::Switch(*solo)),
             Command::Pan(input, pan, ramp_ms) => set(
                 target(Target::Input(*input), "pan")?,
                 OpValue::Number(*pan),
                 *ramp_ms,
             ),
-            Command::Gate(input, amount) => set(
-                target(Target::Input(*input), "gate")?,
-                OpValue::Number(*amount),
-                0,
-            ),
-            Command::Comp(input, amount) => set(
-                target(Target::Input(*input), "comp")?,
-                OpValue::Number(*amount),
-                0,
-            ),
+            Command::Gate(input, amount) => on_input(*input, "gate", OpValue::Number(*amount)),
+            Command::Comp(input, amount) => on_input(*input, "comp", OpValue::Number(*amount)),
             Command::Eq(to, on) => on_bus(*to, "eq", OpValue::Switch(*on))?,
             Command::EqBand(to, band, change) => {
                 let (setting, value) = match change {
@@ -520,18 +520,17 @@ impl Op {
             Command::BusDelay(to, ms) => on_bus(*to, "delay", OpValue::Number(*ms))?,
             Command::Strip(input, change) => {
                 let (param, value) = strip_op(*change);
-                set(format!("input/{}/{param}", input + 1), value, 0)
+                on_input(*input, param, value)
             }
-            Command::Automix(input, on) => set(
-                format!("input/{}/automix", input + 1),
-                OpValue::Switch(*on),
-                0,
+            Command::Duck(input, change) => on_input(
+                *input,
+                change.param().address(),
+                OpValue::Number(change.number()),
             ),
-            Command::AutomixWeight(input, db) => set(
-                format!("input/{}/automix/weight", input + 1),
-                OpValue::Number(*db),
-                0,
-            ),
+            Command::Automix(input, on) => on_input(*input, "automix", OpValue::Switch(*on)),
+            Command::AutomixWeight(input, db) => {
+                on_input(*input, "automix/weight", OpValue::Number(*db))
+            }
             Command::Monitor(to, on) => on_bus(*to, "monitor", OpValue::Switch(*on))?,
             Command::Send(input, to, db, ramp_ms) => set(
                 format!("send/{}/{}", input + 1, bus(*to)?),
@@ -616,6 +615,12 @@ fn setting_value(binding: Binding, number: f32, address: &str) -> Result<Value, 
             .map_err(|why| format!("{address}: {why}"))
     };
     match binding {
+        Binding::Input(_, InputParam::AutomixWeight) if (-12.0..=12.0).contains(&number) => {
+            Ok(Value::Gain(number))
+        }
+        Binding::Input(_, InputParam::AutomixWeight) => {
+            Err(format!("{address} takes -12 to 12 dB, not {number}"))
+        }
         Binding::Input(_, InputParam::Hpf) => strip(StripChange::Hpf(number), Value::Freq(number)),
         Binding::Input(_, InputParam::Lpf) => strip(StripChange::Lpf(number), Value::Freq(number)),
         Binding::Input(_, InputParam::Delay) => {
@@ -673,12 +678,7 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             }
         }
         (Binding::Input(_, InputParam::AutomixWeight), OpValue::Number(db)) => {
-            let db = wants_number(*db)?;
-            if (-12.0..=12.0).contains(&db) {
-                Ok(Value::Gain(db))
-            } else {
-                Err(format!("{address} takes -12 to 12 dB, not {db}"))
-            }
+            setting_value(binding, wants_number(*db)?, address)
         }
         (Binding::Input(_, InputParam::Pan), OpValue::Number(pan)) => {
             Ok(Value::Pan(wants_number(*pan)?))
@@ -694,6 +694,11 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
         (Binding::Input(_, InputParam::Gate), OpValue::Number(amount)) => {
             check_amount("gate", wants_number(*amount)?).map(Value::Amount)
         }
+        (Binding::Input(_, InputParam::Duck(duck)), OpValue::Number(number)) => duck
+            .change(wants_number(*number)?)
+            .checked()
+            .map(Value::Duck)
+            .map_err(|why| format!("{address}: {why}")),
         (
             Binding::Input(_, InputParam::Comp) | Binding::Bus(_, BusParam::Comp),
             OpValue::Number(amount),

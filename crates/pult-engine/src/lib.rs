@@ -311,6 +311,9 @@ pub struct InputSpec {
     pub sends: Vec<SendSpec>,
     /// Its channel strip: polarity, filters, delay, width; neutral at first.
     pub strip: pult_core::strip::StripSettings,
+    /// Its ducker ([`pult_core::duck`]): the input that turns it down, how far and how fast; off
+    /// at first.
+    pub duck: pult_core::duck::DuckSettings,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
     pub buses: Vec<usize>,
 }
@@ -374,6 +377,7 @@ impl InputSpec {
             automix_weight_db: 0.0,
             sends: Vec::new(),
             strip: pult_core::strip::StripSettings::default(),
+            duck: pult_core::duck::DuckSettings::default(),
             buses,
         }
     }
@@ -518,9 +522,16 @@ impl RouteSpec {
         if self.buses.is_empty() {
             return invalid("a route needs at least one bus (output)".into());
         }
-        for input in &self.inputs {
+        for (index, input) in self.inputs.iter().enumerate() {
             if input.buses.is_empty() {
                 return invalid(format!("input \"{}\" feeds no bus", input.device));
+            }
+            let duck = input
+                .duck
+                .checked()
+                .and_then(|duck| pult_core::duck::check_key(index, duck.key, self.inputs.len()));
+            if let Err(why) = duck {
+                return invalid(format!("input \"{}\": {why}", input.device));
             }
             for (what, amount) in [("gate", input.gate), ("comp", input.comp)] {
                 if let Err(why) = pult_core::view::check_amount(what, amount) {
@@ -1095,14 +1106,22 @@ struct Rings<'a> {
     /// The automix group of the route, one member per input, in their order; `automix` takes a
     /// member into the sharing.
     automix: Arc<AutomixGroup>,
-    /// Members of it handed out so far.
+    /// Members of it handed out so far: the index of the input that is made next.
     automix_next: usize,
+    /// The key board of the route, one cell per input, in their order ([`pult_core::duck`]).
+    keys: Arc<pult_core::duck::KeyBoard>,
 }
 
 /// The automix group of `spec`: one member for every input, so any can be taken into it while
 /// the route runs; those without `automix` are off.
 fn automix_group(spec: &RouteSpec) -> Arc<AutomixGroup> {
     Arc::new(AutomixGroup::new(spec.inputs.len()))
+}
+
+/// The key board of `spec`: one cell for every input, so any can duck by any other while the
+/// route runs.
+fn key_board(spec: &RouteSpec) -> Arc<pult_core::duck::KeyBoard> {
+    Arc::new(pult_core::duck::KeyBoard::new(spec.inputs.len()))
 }
 
 /// What a slot opens at the start of a route.
@@ -1178,9 +1197,11 @@ fn make_rings(
         let member = rings.automix.member(index);
         member.set_on(input.automix);
         member.set_weight_db(input.automix_weight_db);
-        // A fresh controls: the place is free.
+        // A fresh controls: the places are free.
         let _ = controls.automix.set((Arc::clone(&rings.automix), index));
+        let _ = controls.keys.set((Arc::clone(&rings.keys), index));
     }
+    controls.duck.set_all(input.duck);
     let (target, band, capacity) = buffering(sample_rate, rings.latency_ms);
     let ring = InputConfig {
         channels: usize::from(channels),
@@ -1268,6 +1289,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
         latency_ms: spec.latency_ms,
         automix: automix_group(spec),
         automix_next: 0,
+        keys: key_board(spec),
     };
     let mut found_inputs = Vec::with_capacity(spec.inputs.len());
     for input in &spec.inputs {
@@ -1278,7 +1300,7 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     let mut opening = Vec::with_capacity(slots.capacity());
     let mut inputs = Vec::with_capacity(spec.inputs.len());
     for (input, found) in spec.inputs.iter().zip(found_inputs) {
-        let feed = Feed::Input(found.feed);
+        let feed = Feed::Input(Box::new(found.feed));
         let role = match input.kind {
             InputKind::Device => Role::Input,
             InputKind::Process => Role::Process,

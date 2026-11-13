@@ -58,6 +58,15 @@ fn wobble(seed: f64, t: f64) -> f32 {
     ((t * (1.3 + seed * 0.37)).sin() * 0.6 + (t * (4.1 + seed)).sin() * 0.4) as f32
 }
 
+/// Mic 1 with a high-pass against rumble, the Guitar turned over.
+fn showcase_strip(input: usize) -> pult_core::strip::StripSettings {
+    pult_core::strip::StripSettings {
+        hpf_hz: if input == 0 { 80.0 } else { 20.0 },
+        polarity: input == 1,
+        ..pult_core::strip::StripSettings::default()
+    }
+}
+
 fn showcase(t: f64) -> MixerView {
     let inputs: Vec<InputView> = INPUTS
         .iter()
@@ -84,12 +93,9 @@ fn showcase(t: f64) -> MixerView {
                 gate_reduction_db: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 gate_open: true,
                 comp_reduction_db: [4.5, 1.2, 0.0, 0.0, 0.0, 0.0, 0.0][i],
-                // Mic 1 with a high-pass against rumble, the Guitar turned over.
-                strip: pult_core::strip::StripSettings {
-                    hpf_hz: [80.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0][i],
-                    polarity: i == 1,
-                    ..pult_core::strip::StripSettings::default()
-                },
+                duck: pult_core::duck::DuckSettings::default(),
+                duck_reduction_db: 0.0,
+                strip: showcase_strip(i),
                 buses: buses.to_vec(),
                 sends: Vec::new(),
                 present: i != 6,

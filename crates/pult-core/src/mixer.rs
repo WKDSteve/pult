@@ -102,6 +102,14 @@ pub struct InputControls {
     pub compressor: CompressorControls,
     /// The channel strip before the gate: polarity, filters, delay, width; neutral at first.
     pub strip: crate::strip::StripControls,
+    /// The ducker behind the compressor ([`crate::duck`]); off at first.
+    pub duck: crate::duck::DuckControls,
+    /// The most the ducker took away since the desk last read it, in dB (positive).
+    pub duck_reduction: PeakMeter,
+    /// The key board of the route and the place of this input on it, set once when the route is
+    /// built: where its stage stores its level, and where its ducker reads its key. An input
+    /// without one neither keys nor ducks.
+    pub keys: OnceLock<(Arc<crate::duck::KeyBoard>, usize)>,
 }
 
 impl Default for InputControls {
@@ -121,6 +129,9 @@ impl Default for InputControls {
             gate: GateControls::default(),
             compressor: CompressorControls::default(),
             strip: crate::strip::StripControls::default(),
+            duck: crate::duck::DuckControls::default(),
+            duck_reduction: PeakMeter::default(),
+            keys: OnceLock::new(),
         }
     }
 }

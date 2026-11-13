@@ -13,6 +13,11 @@
 //!                        20000
 //! delay <input> <ms>     hold an input back, 0 to 250, to line it up with another
 //! width <input> <%>|mono the width of a stereo input, 0 (mono) to 200
+//! duck <input> by <key>  turn an input down while another one sounds (duck music by mic);
+//!                        duck <input> off undoes it
+//! duck <input> depth <dB>
+//!                        how far, 0 to 60; also threshold <dB>, attack <ms>, hold <ms>,
+//!                        release <ms>
 //! eq <bus> on|off        switch the equalizer of a bus
 //! eq <bus> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
@@ -38,6 +43,7 @@
 
 use std::fmt;
 
+use crate::duck::DuckChange;
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
 use crate::select::{SelectError, select};
@@ -85,6 +91,8 @@ pub enum Command {
     BusDelay(usize, f32),
     /// Changes one setting of the channel strip of an input.
     Strip(usize, StripChange),
+    /// Changes one setting of the ducker of an input.
+    Duck(usize, DuckChange),
     /// Takes an input into the automixer or out of it.
     Automix(usize, bool),
     /// Sets the priority of an input in the automixer in dB.
@@ -131,6 +139,10 @@ hpf <input> <Hz>|off the high-pass of an input, 20 to 1000 (hpf 2 80); lpf <inpu
 delay <input> <ms>   hold an input back, 0 to 250, to line it up with another (delay 3 12.5)
 width <input> <%>|mono
                      the width of a stereo input, 0 (mono) to 200 (width 1 mono)
+duck <input> by <key>
+                     turn an input down while another one sounds (duck music by mic);
+                     duck <input> off undoes it; duck <input> depth <dB> says how far, 0 to
+                     60, and threshold <dB>, attack <ms>, hold <ms>, release <ms> set the rest
 eq <bus> on|off      switch the equalizer of a bus
 eq <bus> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
@@ -271,6 +283,7 @@ pub fn parse<S: AsRef<str>>(
         "send" => send(rest, names),
         "monitor" => monitor(rest, names),
         "automix" => automix(rest, names),
+        "duck" => duck(rest, names),
         "polarity" | "phase" | "hpf" | "lpf" | "delay" | "width" => {
             strip(&keyword.to_lowercase(), rest, names)
         }
@@ -359,6 +372,53 @@ fn strip<S: AsRef<str>>(
             _ => error(format!("{keyword} works on inputs only")),
         },
     }
+}
+
+/// `duck <input> by <key>`, `duck <input> off` or `duck <input> <setting> <value>` with the
+/// settings depth, threshold, attack, hold and release; both inputs may have several words.
+fn duck<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let usage = "usage: duck <input> by <key input>, duck <input> off, or duck <input> \
+                 depth|threshold|attack|hold|release <value>";
+    let only_input = |words: &[&str], what: &str| match target(&words.join(" "), names)? {
+        Target::Input(index) => Ok(index),
+        Target::Bus(_) => error(format!("{what} an input, not a bus")),
+    };
+    // The first `by` with words on both sides divides the input from its key.
+    if let Some(place) = rest
+        .iter()
+        .position(|word| word.eq_ignore_ascii_case("by"))
+        .filter(|&place| place > 0 && place + 1 < rest.len())
+    {
+        let input = only_input(&rest[..place], "duck works on")?;
+        let key = only_input(&rest[place + 1..], "the key is")?;
+        return Ok(Command::Duck(input, DuckChange::Key(key + 1)));
+    }
+    if let [input @ .., last] = rest
+        && !input.is_empty()
+        && last.eq_ignore_ascii_case("off")
+    {
+        let input = only_input(input, "duck works on")?;
+        return Ok(Command::Duck(input, DuckChange::Key(0)));
+    }
+    let [input @ .., setting, value] = rest else {
+        return error(usage);
+    };
+    if input.is_empty() {
+        return error(usage);
+    }
+    let number = match value.parse::<f32>() {
+        Ok(number) if number.is_finite() => number,
+        _ => return error(format!("\"{value}\" is not a number; {usage}")),
+    };
+    let change = match setting.to_ascii_lowercase().as_str() {
+        "depth" => DuckChange::Depth(number),
+        "threshold" => DuckChange::Threshold(number),
+        "attack" => DuckChange::Attack(number),
+        "hold" => DuckChange::Hold(number),
+        "release" => DuckChange::Release(number),
+        other => return error(format!("\"{other}\" is no setting of a ducker; {usage}")),
+    };
+    Ok(Command::Duck(only_input(input, "duck works on")?, change))
 }
 
 /// `automix <input> on|off` or `automix <input> weight <dB>`; the input may have several words.
@@ -708,6 +768,40 @@ mod tests {
         assert!(bad("gate A1 3").contains("inputs only"));
         assert!(bad("comp 2 mix 40").contains("buses only"));
         assert!(bad("comp A1 mix lots").contains("takes a number"));
+    }
+
+    #[test]
+    fn a_ducker_is_set_by_its_key_and_its_settings() {
+        assert_eq!(ok("duck 1 by 2"), Command::Duck(0, DuckChange::Key(2)));
+        assert_eq!(
+            ok("DUCK spotify BY analogue 1 + 2"),
+            Command::Duck(2, DuckChange::Key(2))
+        );
+        assert_eq!(ok("duck cable off"), Command::Duck(0, DuckChange::Key(0)));
+        assert_eq!(
+            ok("duck 1 depth 18"),
+            Command::Duck(0, DuckChange::Depth(18.0))
+        );
+        assert_eq!(
+            ok("duck 3 Threshold -30"),
+            Command::Duck(2, DuckChange::Threshold(-30.0))
+        );
+        assert_eq!(
+            ok("duck 3 attack 20"),
+            Command::Duck(2, DuckChange::Attack(20.0))
+        );
+        assert_eq!(ok("duck 3 hold 0"), Command::Duck(2, DuckChange::Hold(0.0)));
+        assert_eq!(
+            ok("duck 3 release 1500"),
+            Command::Duck(2, DuckChange::Release(1500.0))
+        );
+        assert!(bad("duck A1 by 2").contains("not a bus"));
+        assert!(bad("duck 1 by A1").contains("the key is an input"));
+        assert!(bad("duck 1 by 9").contains("no input 9"));
+        assert!(bad("duck 1 speed 3").contains("no setting of a ducker"));
+        assert!(bad("duck 1 depth deep").contains("not a number"));
+        assert!(bad("duck 1").contains("usage: duck"));
+        assert!(bad("duck").contains("usage: duck"));
     }
 
     #[test]

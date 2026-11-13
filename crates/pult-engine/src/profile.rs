@@ -47,6 +47,12 @@
 //! lpf_hz = 20000               # optional, 1000 to 20000 (off): its low-pass
 //! delay_ms = 0                 # optional, 0 to 250: holds the input back to line it up
 //! width = 100                  # optional, 0 (mono) to 200: the width of a stereo input
+//! duck_by = 2                  # optional: input 2 turns this one down while it sounds
+//! duck_db = 12                 # optional, 0 (off) to 60: how far; 12 with duck_by alone
+//! duck_threshold_db = -40      # optional, -70 to 0: the level of input 2 above which it ducks
+//! duck_attack_ms = 60          # optional, 1 to 1000: how fast it turns down
+//! duck_hold_ms = 400           # optional, 0 to 5000: how long it stays down after input 2
+//! duck_release_ms = 800        # optional, 10 to 5000: how fast it comes back
 //!
 //! [[input]]
 //! process = "Spotify"          # instead of device: the sound of a program
@@ -79,6 +85,7 @@ use serde::Deserialize;
 
 use std::fmt::Write as _;
 
+use pult_core::duck::{DuckChange, DuckSettings};
 use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitSettings};
 use pult_core::strip::StripSettings;
@@ -233,9 +240,35 @@ struct InputEntry {
     #[serde(default)]
     delay_ms: f32,
     width: Option<f32>,
+    duck_by: Option<usize>,
+    duck_db: Option<f32>,
+    duck_threshold_db: Option<f32>,
+    duck_attack_ms: Option<f32>,
+    duck_hold_ms: Option<f32>,
+    duck_release_ms: Option<f32>,
 }
 
 impl InputEntry {
+    /// Its ducker, with every number checked; the key is checked with the route
+    /// ([`RouteSpec::validate`]), which knows how many inputs there are.
+    fn duck(&self, what: &str) -> Result<DuckSettings, ProfileError> {
+        let mut duck = DuckSettings::default();
+        // The key first: alone, it brings its depth along.
+        let changes = [
+            self.duck_by.map(DuckChange::Key),
+            self.duck_db.map(DuckChange::Depth),
+            self.duck_threshold_db.map(DuckChange::Threshold),
+            self.duck_attack_ms.map(DuckChange::Attack),
+            self.duck_hold_ms.map(DuckChange::Hold),
+            self.duck_release_ms.map(DuckChange::Release),
+        ];
+        for change in changes.into_iter().flatten() {
+            duck.apply(change);
+        }
+        duck.checked()
+            .map_err(|why| ProfileError(format!("{what}: {why}")))
+    }
+
     /// Its channel strip, checked.
     fn strip(&self, what: &str) -> Result<StripSettings, ProfileError> {
         let neutral = StripSettings::default();
@@ -635,6 +668,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             routed.push(index);
         }
         let strip = entry.strip(&what)?;
+        let duck = entry.duck(&what)?;
         inputs.push(InputSpec {
             device: name,
             kind,
@@ -656,6 +690,7 @@ pub fn parse(text: &str) -> Result<RouteSpec, ProfileError> {
             },
             sends: sends(&what, entry.sends, &buses)?,
             strip,
+            duck,
             buses: routed,
         });
     }
@@ -875,6 +910,30 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
         let _ = writeln!(text, "sends = [{}]", render_sends(spec, &input.sends));
     }
     render_strip(text, &input.strip);
+    render_duck(text, &input.duck);
+}
+
+/// The lines of a ducker that is not as it starts. With a key its depth is always written: a
+/// key alone would read back with the depth a first key brings.
+#[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+fn render_duck(text: &mut String, duck: &DuckSettings) {
+    let neutral = DuckSettings::default();
+    if duck.key > 0 {
+        let _ = writeln!(text, "duck_by = {}", duck.key);
+    }
+    if duck.key > 0 || duck.depth_db != neutral.depth_db {
+        let _ = writeln!(text, "duck_db = {}", duck.depth_db);
+    }
+    for (key, value, start) in [
+        ("duck_threshold_db", duck.threshold_db, neutral.threshold_db),
+        ("duck_attack_ms", duck.attack_ms, neutral.attack_ms),
+        ("duck_hold_ms", duck.hold_ms, neutral.hold_ms),
+        ("duck_release_ms", duck.release_ms, neutral.release_ms),
+    ] {
+        if value != start {
+            let _ = writeln!(text, "{key} = {value}");
+        }
+    }
 }
 
 /// The lines of a channel strip that is not as it starts.
@@ -970,6 +1029,37 @@ fn set_strip(table: &mut Table, strip: &StripSettings) {
     set_number_from(table, "lpf_hz", strip.lpf_hz, neutral.lpf_hz);
     set_number_from(table, "delay_ms", strip.delay_ms, neutral.delay_ms);
     set_number_from(table, "width", strip.width, neutral.width);
+}
+
+/// The ducker of an input into its table. A depth the file does not name reads as the one a
+/// first key brings when there is a key, else as none.
+fn set_duck(table: &mut Table, duck: &DuckSettings) {
+    let neutral = DuckSettings::default();
+    let unnamed_depth = if duck.key > 0 {
+        let number = i64::try_from(duck.key).unwrap_or(i64::MAX);
+        if table.get("duck_by").and_then(Item::as_integer) != Some(number) {
+            set(table, "duck_by", number.into());
+        }
+        pult_core::duck::FIRST_DEPTH_DB
+    } else {
+        table.remove("duck_by");
+        neutral.depth_db
+    };
+    set_number_from(table, "duck_db", duck.depth_db, unnamed_depth);
+    set_number_from(
+        table,
+        "duck_threshold_db",
+        duck.threshold_db,
+        neutral.threshold_db,
+    );
+    set_number_from(table, "duck_attack_ms", duck.attack_ms, neutral.attack_ms);
+    set_number_from(table, "duck_hold_ms", duck.hold_ms, neutral.hold_ms);
+    set_number_from(
+        table,
+        "duck_release_ms",
+        duck.release_ms,
+        neutral.release_ms,
+    );
 }
 
 /// The settings of `bus` into its table, all but its name, device and equalizer.
@@ -1083,6 +1173,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_number_from(table, "automix_weight_db", input.automix_weight_db, 0.0);
         set_sends(table, spec, &input.sends);
         set_strip(table, &input.strip);
+        set_duck(table, &input.duck);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
     let text = file.to_string();

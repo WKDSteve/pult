@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use crate::duck::{DuckChange, DuckParam};
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
 use crate::strip::StripChange;
@@ -45,6 +46,8 @@ pub enum InputParam {
     Delay,
     /// The width of a stereo input, in percent.
     Width,
+    /// One setting of its ducker.
+    Duck(DuckParam),
     /// Its peak, read only.
     Meter,
 }
@@ -161,6 +164,8 @@ pub enum Value {
     Percent(f32),
     /// A delay in milliseconds.
     Delay(f32),
+    /// One setting of a ducker, as the change that sets it.
+    Duck(DuckChange),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -256,23 +261,8 @@ impl Binding {
         .ok_or_else(malformed)?;
         match (kind, first, last) {
             ("input", number, param) => {
-                let param = match param {
-                    "gain" => InputParam::Gain,
-                    "mute" => InputParam::Mute,
-                    "solo" => InputParam::Solo,
-                    "pan" => InputParam::Pan,
-                    "gate" => InputParam::Gate,
-                    "comp" => InputParam::Comp,
-                    "automix" => InputParam::Automix,
-                    "automix/weight" => InputParam::AutomixWeight,
-                    "polarity" => InputParam::Polarity,
-                    "hpf" => InputParam::Hpf,
-                    "lpf" => InputParam::Lpf,
-                    "delay" => InputParam::Delay,
-                    "width" => InputParam::Width,
-                    "meter" => InputParam::Meter,
-                    other => return Err(AddressError::NoParam(other.to_owned())),
-                };
+                let param =
+                    input_param(param).ok_or_else(|| AddressError::NoParam(param.to_owned()))?;
                 Ok(Self::Input(input(number)?, param))
             }
             ("bus", name, param) => {
@@ -326,6 +316,7 @@ impl Binding {
                     InputParam::Lpf => "lpf",
                     InputParam::Delay => "delay",
                     InputParam::Width => "width",
+                    InputParam::Duck(duck) => duck.address(),
                     InputParam::Meter => "meter",
                 };
                 format!("input/{}/{param}", input(index)?)
@@ -376,6 +367,7 @@ impl Binding {
                     InputParam::Lpf => Value::Freq(input.strip.lpf_hz),
                     InputParam::Delay => Value::Delay(input.strip.delay_ms),
                     InputParam::Width => Value::Percent(input.strip.width),
+                    InputParam::Duck(duck) => Value::Duck(duck.read(&input.duck)),
                     InputParam::Meter => Value::Peak(input.peak_db),
                 }
             }
@@ -453,6 +445,11 @@ impl Binding {
             }
             (Self::Input(input, InputParam::AutomixWeight), Value::Gain(db)) => {
                 Action::InputAutomixWeight { input, db }
+            }
+            (Self::Input(input, InputParam::Duck(duck)), Value::Duck(change))
+                if change.param() == duck =>
+            {
+                Action::InputDuck { input, change }
             }
             (Self::Input(input, param), value) if strip_change(param, value).is_some() => {
                 Action::InputStrip {
@@ -537,6 +534,17 @@ impl Binding {
             Self::Input(index, InputParam::Lpf) => format!("{} low-pass", input(index)),
             Self::Input(index, InputParam::Delay) => format!("{} delay", input(index)),
             Self::Input(index, InputParam::Width) => format!("{} width", input(index)),
+            Self::Input(index, InputParam::Duck(duck)) => {
+                let what = match duck {
+                    DuckParam::Depth => "ducking depth",
+                    DuckParam::Key => "ducking key",
+                    DuckParam::Threshold => "ducking threshold",
+                    DuckParam::Attack => "ducking attack",
+                    DuckParam::Hold => "ducking hold",
+                    DuckParam::Release => "ducking release",
+                };
+                format!("{} {what}", input(index))
+            }
             Self::Input(index, _) => input(index).to_owned(),
             Self::Bus(index, BusParam::Mute) => format!("{} mute", bus(index)),
             Self::Bus(index, BusParam::Eq) => format!("{} equalizer", bus(index)),
@@ -568,6 +576,27 @@ impl Binding {
             }
         }
     }
+}
+
+/// The parameter of an input an address names after its number.
+fn input_param(word: &str) -> Option<InputParam> {
+    Some(match word {
+        "gain" => InputParam::Gain,
+        "mute" => InputParam::Mute,
+        "solo" => InputParam::Solo,
+        "pan" => InputParam::Pan,
+        "gate" => InputParam::Gate,
+        "comp" => InputParam::Comp,
+        "automix" => InputParam::Automix,
+        "automix/weight" => InputParam::AutomixWeight,
+        "polarity" => InputParam::Polarity,
+        "hpf" => InputParam::Hpf,
+        "lpf" => InputParam::Lpf,
+        "delay" => InputParam::Delay,
+        "width" => InputParam::Width,
+        "meter" => InputParam::Meter,
+        other => InputParam::Duck(DuckParam::from_address(other)?),
+    })
 }
 
 /// The change of a channel strip that `value` makes of `param`, if it is one.
@@ -640,6 +669,30 @@ mod tests {
             ("input/2/gate", Binding::Input(1, InputParam::Gate)),
             ("input/2/comp", Binding::Input(1, InputParam::Comp)),
             ("input/2/meter", Binding::Input(1, InputParam::Meter)),
+            (
+                "input/2/duck",
+                Binding::Input(1, InputParam::Duck(DuckParam::Depth)),
+            ),
+            (
+                "input/2/duck/key",
+                Binding::Input(1, InputParam::Duck(DuckParam::Key)),
+            ),
+            (
+                "input/2/duck/threshold",
+                Binding::Input(1, InputParam::Duck(DuckParam::Threshold)),
+            ),
+            (
+                "input/2/duck/attack",
+                Binding::Input(1, InputParam::Duck(DuckParam::Attack)),
+            ),
+            (
+                "input/2/duck/hold",
+                Binding::Input(1, InputParam::Duck(DuckParam::Hold)),
+            ),
+            (
+                "input/2/duck/release",
+                Binding::Input(1, InputParam::Duck(DuckParam::Release)),
+            ),
             ("bus/A1/gain", Binding::Bus(0, BusParam::Gain)),
             ("bus/A1/mute", Binding::Bus(0, BusParam::Mute)),
             ("bus/A1/meter", Binding::Bus(0, BusParam::Meter)),
@@ -711,6 +764,35 @@ mod tests {
             send.write(Value::Switch(true)),
             None,
             "a send takes a level"
+        );
+    }
+
+    #[test]
+    fn a_ducker_reads_and_writes_its_settings() {
+        let mut view = view();
+        view.inputs[0].duck.apply(DuckChange::Key(2));
+        let depth = Binding::Input(0, InputParam::Duck(DuckParam::Depth));
+        let key = Binding::Input(0, InputParam::Duck(DuckParam::Key));
+        assert_eq!(
+            depth.read(&view),
+            Some(Value::Duck(DuckChange::Depth(12.0)))
+        );
+        assert_eq!(key.read(&view), Some(Value::Duck(DuckChange::Key(2))));
+        assert_eq!(
+            key.write(Value::Duck(DuckChange::Key(3))),
+            Some(Action::InputDuck {
+                input: 0,
+                change: DuckChange::Key(3)
+            })
+        );
+        assert_eq!(
+            depth.write(Value::Duck(DuckChange::Key(3))),
+            None,
+            "a depth takes no key"
+        );
+        assert_eq!(
+            depth.title(&view),
+            format!("{} ducking depth", view.inputs[0].name)
         );
     }
 

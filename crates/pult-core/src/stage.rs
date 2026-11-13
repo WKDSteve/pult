@@ -10,11 +10,13 @@
 //! 2. the channel strip ([`crate::strip`]): polarity, high- and low-pass, delay, width;
 //! 3. the gate, then the compressor ([`crate::dynamics`]);
 //! 4. the level for the automixer, when the input is in a group ([`crate::automix`]);
-//! 5. the result into every ring ([`Capture::push`]).
+//! 5. its level onto the key board of the route, for the inputs it ducks, then its own ducker
+//!    ([`crate::duck`]): the key is taken before the ducker, so two inputs can duck each other;
+//! 6. the result into every ring ([`Capture::push`]).
 //!
 //! Gain, pan, mute, solo and the matrix stay in the rings: they are per bus, or must glide
-//! there. Room for what belongs here too, later: noise suppression and a sidechain (an
-//! expensive effect does not belong in this thread; it would get its own).
+//! there. Room for what belongs here too, later: noise suppression (an expensive effect does not
+//! belong in this thread; it would get its own).
 //!
 //! Nothing here allocates after [`InputStage::new`]: the sound goes through a buffer of
 //! [`STAGE_FRAMES`] frames, a longer callback in several pieces.
@@ -23,14 +25,15 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::automix::PowerFollower;
-use crate::dynamics::{Compressor, Gate};
+use crate::duck::Ducker;
+use crate::dynamics::{Compressor, Gate, loudest};
 use crate::mixer::{Capture, InputControls};
 use crate::strip::ChannelStrip;
 
 /// Frames the stage works on at once; a longer callback goes through in several pieces.
 pub const STAGE_FRAMES: usize = 1024;
 
-/// Channel strip, gate and compressor of one input, and its PRE meter.
+/// Channel strip, gate, compressor and ducker of one input, and its PRE meter.
 #[derive(Debug)]
 pub struct InputStage {
     controls: Arc<InputControls>,
@@ -39,6 +42,7 @@ pub struct InputStage {
     compressor: Compressor,
     strip: ChannelStrip,
     follower: PowerFollower,
+    ducker: Ducker,
     block: Vec<f32>,
 }
 
@@ -59,6 +63,7 @@ impl InputStage {
             compressor: Compressor::new(rate),
             strip: ChannelStrip::new(channels, rate),
             follower: PowerFollower::new(rate),
+            ducker: Ducker::new(rate),
             block: vec![0.0; STAGE_FRAMES * channels],
         }
     }
@@ -75,6 +80,7 @@ impl InputStage {
         self.compressor.start_over();
         self.strip.start_over();
         self.follower.start_over();
+        self.ducker.start_over();
     }
 
     /// Meters the whole frames of `data`, gates and compresses them and hands them to `sink`,
@@ -104,6 +110,20 @@ impl InputStage {
                 group
                     .member(*index)
                     .store_power(self.follower.follow(block, ch));
+            }
+            if let Some((board, index)) = self.controls.keys.get() {
+                // What the others duck by: after gate and compressor, before this input's own
+                // ducker and fader. A muted input keys nothing.
+                let level = if self.controls.muted.load(Ordering::Relaxed) {
+                    0.0
+                } else {
+                    loudest(block)
+                };
+                board.store(*index, level);
+                self.ducker.process(&self.controls.duck, board, block, ch);
+                self.controls
+                    .duck_reduction
+                    .record(self.ducker.reduction_db());
             }
             sink(block);
         }

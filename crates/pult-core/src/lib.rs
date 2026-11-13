@@ -23,6 +23,7 @@ pub mod clicks;
 pub mod control;
 pub mod drift;
 pub mod dropouts;
+pub mod duck;
 pub mod dynamics;
 pub mod eq;
 pub mod level;

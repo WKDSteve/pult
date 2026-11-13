@@ -77,14 +77,14 @@ const SILENCE_DB: f32 = -120.0;
 ///
 /// In `f64`, like what it moves: in `f32` a slow value stops short of its goal, where a step
 /// is smaller than the numbers around it can tell apart.
-fn pace(ms: f32, rate: f32) -> f64 {
+pub(crate) fn pace(ms: f32, rate: f32) -> f64 {
     1.0 - (-1000.0 / (f64::from(ms.max(0.01)) * f64::from(rate))).exp()
 }
 
 /// The loudest sample of a frame; a NaN or an infinity counts as silence, so that it cannot
 /// stay in what is measured.
 #[inline]
-fn loudest(frame: &[f32]) -> f32 {
+pub(crate) fn loudest(frame: &[f32]) -> f32 {
     frame.iter().fold(0.0, |max: f32, sample| {
         if sample.is_finite() {
             max.max(sample.abs())

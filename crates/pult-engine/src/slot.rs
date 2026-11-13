@@ -49,8 +49,8 @@ pub(crate) struct InputFeed {
 /// What one stream's callback works on.
 #[derive(Debug)]
 pub(crate) enum Feed {
-    /// The stage and the captures of an input.
-    Input(InputFeed),
+    /// The stage and the captures of an input; boxed, a stage is several times a mixer.
+    Input(Box<InputFeed>),
     /// The mixer of a bus.
     Bus(Mixer),
 }
@@ -467,7 +467,8 @@ fn input_callback(
         realtime.raise(&health);
         assert_no_alloc(|| {
             health.beats.add(1);
-            if let Some(Feed::Input(InputFeed { stage, captures })) = returning.get_mut() {
+            if let Some(Feed::Input(input)) = returning.get_mut() {
+                let InputFeed { stage, captures } = &mut **input;
                 stage.feed_captures(data, captures);
             }
         });

@@ -150,6 +150,8 @@ fn input_view(input: &crate::RunningInput, spec: &crate::InputSpec, solo: bool) 
         gate_open: input.controls.gate_open.load(Ordering::Relaxed),
         comp_reduction_db: input.controls.comp_reduction.take(),
         strip: spec.strip,
+        duck: spec.duck,
+        duck_reduction_db: input.controls.duck_reduction.take(),
         buses: input
             .routes
             .iter()
@@ -363,6 +365,7 @@ impl Desk for EngineDesk {
             Action::BusDelay { bus, ms } => self.running.bus_delay(bus, ms),
             Action::InputAutomix { input, on } => self.running.automix(input, Some(on), None),
             Action::InputStrip { input, change } => self.running.strip(input, change),
+            Action::InputDuck { input, change } => self.running.duck(input, change),
             Action::InputAutomixWeight { input, db } => self.running.automix(input, None, Some(db)),
             Action::Send {
                 input,

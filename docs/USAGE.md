@@ -213,6 +213,15 @@ pult run --profile meinprofil.toml --log abend.csv
   Während des Laufs `polarity 2 on`, `hpf 2 80`, `lpf 2 off`, `delay 3 12.5`, `width 1 mono`; im Fenster stehen
   **HPF**, **LPF** und **Ø** über GATE und COMP; von außen `input/<n>/polarity`, `/hpf`, `/lpf`, `/delay`, `/width`.
   Alles läuft in der Eingangsstufe, mit der Rate des Eingangs und ohne Allokation.
+- **Ducking:** Ein Eingang wird leiser, solange ein anderer klingt, etwa die Musik unter dem Mikrofon: `duck_by = 2`
+  am Eingang nennt den Eingang, der ihn absenkt (Nummer wie in Szenen), `duck_db = 0..60` die Tiefe (12 dB, wenn nur
+  `duck_by` steht), `duck_threshold_db = -70..0` den Pegel, ab dem abgesenkt wird, `duck_attack_ms`, `duck_hold_ms` und
+  `duck_release_ms` die Zeiten. Während des Laufs `duck 1 by 2`, `duck 1 depth 18`, `duck 1 threshold -35`,
+  `duck 1 attack|hold|release <ms>`, `duck 1 off`; von außen `input/<n>/duck` (Tiefe) und `input/<n>/duck/key`,
+  `/threshold`, `/attack`, `/hold`, `/release`. Der Pegel des Schlüssels wird in dessen Eingangsstufe nach Gate und
+  Kompressor und vor seinem Fader gemessen, ein gemuteter Schlüssel senkt nichts ab, und zwei Eingänge können sich
+  gegenseitig absenken. Fällt das Gerät des Schlüssels aus, gilt er nach 250 ms als still. Die Absenkung gleitet, nichts
+  knackt. Im Fenster gibt es dafür noch keine Regler.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
