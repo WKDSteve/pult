@@ -118,6 +118,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write        # the attestation of the files (appkit release-kit, see its README)
+      attestations: write
     steps:
       # A publish that waited behind a newer one must not put its older commit over it.
       - name: Is it still the tip
