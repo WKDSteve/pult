@@ -643,6 +643,12 @@ impl Equalizer {
         let fallen = self.release.powi(frames as i32);
         for band in 0..EQ_BANDS {
             if !self.listens(band) {
+                // What it heard before it stopped says nothing about what comes when it
+                // listens again.
+                self.envelope[band] = 0.0;
+                for heard in &mut self.heard {
+                    heard[band] = [0.0; 4];
+                }
                 continue;
             }
             let filter = self.listeners[band];
@@ -1323,6 +1329,38 @@ mod tests {
         }
         assert!(level_db(&loud).abs() < 0.05);
         assert!(eq.rests());
+    }
+
+    #[test]
+    fn a_band_that_listens_again_starts_from_what_it_hears_now() {
+        let controls = EqControls::default();
+        controls.set(0, dynamic());
+        // Another band keeps the equalizer at work while the first one does not listen.
+        controls.set(3, band(BandKind::HighShelf, 8000.0, 3.0));
+        let mut eq = Equalizer::new(RATE);
+        let mut loud = sine(1000.0, 1);
+        for callback in loud.chunks_mut(480) {
+            eq.process(&controls, callback, 1);
+        }
+        assert!((eq.amount[0] - 1.0).abs() < f32::EPSILON);
+        // Its gain is taken away: nothing to bring in, so it does not listen.
+        controls.set(
+            0,
+            Band {
+                gain_db: 0.0,
+                ..dynamic()
+            },
+        );
+        let quiet = || -> Vec<f32> { sine(1000.0, 1).iter().map(|s| s * 0.01).collect() };
+        let mut data = quiet();
+        for callback in data.chunks_mut(480) {
+            eq.process(&controls, callback, 1);
+        }
+        // Back again, on a quiet sound: the loud second from before does not bring it in.
+        controls.set(0, dynamic());
+        let mut data = quiet();
+        eq.process(&controls, &mut data[..480], 1);
+        assert!(eq.amount[0].abs() < f32::EPSILON, "{}", eq.amount[0]);
     }
 
     #[test]
