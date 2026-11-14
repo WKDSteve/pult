@@ -357,10 +357,12 @@ fn equalizer_inputs() {
         .duck
         .apply(pult_core::duck::DuckChange::Key(1));
     view.inputs[1].duck_reduction_db = 9.5;
+    // The bus is held back, to line it up with another.
+    view.buses[0].delay_ms = 12.5;
     // The first one compresses by the top of its own sound only.
     view.inputs[0].sidechain.hpf_hz = 4000.0;
     let mut harness = Harness::builder()
-        .with_size(vec2(1280.0, 1100.0))
+        .with_size(vec2(2000.0, 1100.0))
         .with_pixels_per_point(1.5)
         .build_ui(move |ui| {
             Theme::current().apply(ui.ctx());

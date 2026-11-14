@@ -362,6 +362,22 @@ fn the_equalizer_view_sets_the_limiter() {
 }
 
 #[test]
+fn the_equalizer_view_sets_the_delay_of_a_bus() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("EQ").click();
+    harness.run_steps(2);
+    harness.get_by_label("A2 delay").set_value_accesskit(12.5);
+    let view = desk_view(&mut harness);
+    assert_eq!(view.buses[1].delay_ms, 12.5);
+    assert_eq!(view.buses[0].delay_ms, 0.0);
+    // Past its end it stops at the end.
+    harness.get_by_label("A2 delay").set_value_accesskit(9999.0);
+    let view = desk_view(&mut harness);
+    assert_eq!(view.buses[1].delay_ms, pult_core::strip::MAX_DELAY_MS);
+}
+
+#[test]
 fn the_equalizer_view_sets_its_bands() {
     let mut harness = harness();
     harness.run_steps(2);

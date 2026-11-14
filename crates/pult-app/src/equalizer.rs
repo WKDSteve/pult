@@ -1,5 +1,5 @@
 //! The equalizer view: a row per bus with its switch and its bands, each band with its kind, gain,
-//! frequency and width, and behind them its limiter with ceiling and lookahead; under the bands the
+//! frequency and width, and behind them its limiter with ceiling and lookahead and its delay; under the bands the
 //! curve of all of them together. A strip has no room for that; it only has the switches. Below
 //! the buses a row per input: its equalizer, the switch that puts it before gate and compressor,
 //! its limiter, and under its curve its sidechain (what its gate and compressor listen to:
@@ -497,6 +497,14 @@ fn bus_row(
                 limit_column(ui, index, values, actions);
             },
         );
+        ui.allocate_ui_with_layout(
+            vec2(DELAY_WIDTH, KIND_HEIGHT + DIAL_ROW_HEIGHT + 22.0),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(DELAY_WIDTH);
+                delay_column(ui, index, values, actions);
+            },
+        );
     });
     ui.add_space(6.0);
     curve(
@@ -684,6 +692,17 @@ fn multiband_column(ui: &mut Ui, bus: usize, values: &mut Values<'_>, actions: &
 }
 
 /// The limiter of a bus: its switch, what it is at now, ceiling and lookahead.
+const DELAY_WIDTH: f32 = 64.0;
+
+/// The delay of a bus: how far all of it is held back, to line it up with another bus.
+fn delay_column(ui: &mut Ui, bus: usize, values: &mut Values<'_>, actions: &mut Vec<Action>) {
+    let p = &Theme::current().palette;
+    ui.label(RichText::new("DELAY").size(9.5).color(p.text_faint));
+    ui.add_space(4.0 + KIND_HEIGHT);
+    let dial = Binding::Bus(bus, BusParam::Delay);
+    actions.extend(labelled(ui, values, dial, "MS", DIAL_SIZE, DELAY_WIDTH));
+}
+
 fn limit_column(ui: &mut Ui, bus: usize, values: &mut Values<'_>, actions: &mut Vec<Action>) {
     let p = &Theme::current().palette;
     ui.label(RichText::new("LIMITER").size(9.5).color(p.text_faint));

@@ -290,7 +290,8 @@ pult run --profile meinprofil.toml --log abend.csv
 - **Verzögerung je Bus:** `delay_ms = 0..250` hält einen Bus zurück, etwa wenn Lautsprecher und Kopfhörer dieselbe Mischung
   spielen, die Lautsprecher aber später ankommen (oder umgekehrt). Sie sitzt hinter dem Limiter, Meter und Loudness sehen
   also, was das Gerät spielt. Eine neue Verzögerung springt nicht, sie blendet in 5 ms über. Während des Laufs `delay A1 12`
-  (`delay A1 off` für keine), von außen `bus/<name>/delay`, per MIDI lernbar. Die gesetzte Verzögerung steht im Zustand
+  (`delay A1 off` für keine), von außen `bus/<name>/delay`, per MIDI lernbar, im Fenster die Spalte DELAY in der
+  Ansicht EQ hinter dem Limiter. Die gesetzte Verzögerung steht im Zustand
   (`delay_ms`) und in `show`. Den Versatz zwischen zwei Ausgängen misst pult noch nicht selbst; er gehört von Hand
   bestimmt (Klatschen oder ein Klick, mit einem Mikrofon zwischen beiden aufgenommen).
 - **Multiband-Kompressor:** Hinter dem Bus-Kompressor teilt jeder Bus seine Summe in drei Bänder, jedes mit eigenem

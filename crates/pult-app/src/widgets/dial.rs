@@ -68,7 +68,8 @@ impl Dial {
             }),
             Binding::Input(_, InputParam::Duck(param)) => Self::of_ducker(param),
             Binding::Input(_, InputParam::Sidechain(param)) => Self::of_sidechain(param),
-            Binding::Input(_, InputParam::Delay) => Some(Self {
+            // A bus is held back as far as an input: both line one thing up with another.
+            Binding::Input(_, InputParam::Delay) | Binding::Bus(_, BusParam::Delay) => Some(Self {
                 span: Span::even((0.0, MAX_DELAY_MS)),
                 home: 0.0,
                 both_ways: false,
@@ -570,6 +571,14 @@ mod tests {
         let open = Value::Sidechain(SidechainChange::Lpf(20_000.0));
         assert_eq!(format_for(at(SidechainParam::Lpf), open), "off");
         assert_eq!(number(Value::Sidechain(SidechainChange::Key(2))), None);
+    }
+
+    #[test]
+    fn the_delay_of_a_bus_has_a_dial_from_nothing() {
+        let dial = Dial::of(Binding::Bus(0, BusParam::Delay)).expect("a dial");
+        assert_eq!((dial.span.low(), dial.span.high()), (0.0, MAX_DELAY_MS));
+        assert_eq!(dial.home, 0.0);
+        assert_eq!(format_value(Value::Delay(12.5)), "12.5 ms");
     }
 
     #[test]
