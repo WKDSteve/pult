@@ -31,6 +31,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Sends: eigener Pegel je Kreuzung aus Eingang und Bus, vor oder nach dem Fader (`send 2 B1 -6`, `send 2 B1 pre`, Profil, Szenen, Fernsteuerung, MIDI, Matrix im Fenster) | fertig |
 | Regler während des Laufs: `gain A1 -6`, `mute 2`, `pan`, `show`, `save profil.toml` in einer Eingabezeile unter der Statuszeile | fertig |
 | Testton auf ein Gerät (`pult tone`) | fertig |
+| Messen: ein Gerät oder das, was ein Ausgang spielt, als WAV aufnehmen (`pult record`), und Knackser in der Aufnahme eines Testtons suchen (`pult clicks`) | fertig |
 | Grundlage der Oberfläche (`pult_core::view`): Solo, Meter vor/nach dem Fader, Matrix während des Laufs umschalten | fertig, auch im Fenster |
 | Ausgleich der Takt-Drift zwischen Geräten: adaptiver Resampler (rubato, Sinc) je Eingang und Bus, PI-Regler auf dem geglätteten Füllstand, Korrektur in ppm live | fertig (Stufe 2) |
 | Pegel, Aussetzer, Korrekturen, Clipping, Geräte-Glitches live | fertig |
@@ -82,6 +83,8 @@ cargo audit --deny warnings
 Die Programme liegen danach unter `target\release\pult.exe` (Kommandozeile) und `target\release\pult-app.exe` (Fenster).
 
 Knackser prüft `cargo test` ohne Audiogerät: `crates/pult-engine/tests/clicks.rs` rechnet ein Profil mit zwei Bussen durch eine Folge von Änderungen (Rampen, Szenenwechsel, Mute, Matrix, EQ und Limiter-Vorschau an/aus) mit der Engine (`pult_engine::Offline`) und sucht in der Ableitung des Ausgangs nach Sprüngen, die steiler sind, als der Testton bei seinem Pegel sein kann (`pult_core::clicks`). Die Sabotage-Probe `clicks_sabotage.rs` schaltet die Rampen ab und muss dann bei jeder Änderung einen Knackser finden.
+
+Dieselbe Folge über echte Geräte fährt `python tools/click-run.py target/debug/pult.exe <Ordner>`: ein Testton, ein eigenes `pult run`, die Änderungen über dessen Steuerschnittstelle, eine Aufnahme dessen, was der Bus spielt (`pult record`), und derselbe Detektor über der Aufnahme (`pult clicks`). Ohne Angaben läuft das unhörbar und ohne Kabel über „Voicemeeter In 4“ und „In 5“; mit `--tone-to`, `--from`, `--bus` und `--record` über ein Kabel. Das ist ein Handlauf, kein Teil der CI: er braucht Audiogeräte.
 
 Die Toolchain gibt `rust-toolchain.toml` vor, die CI läuft auf einem Self-hosted-Windows-Runner (`.github/workflows/ci.yml`). `scripts\test-release.ps1` prüft Zip, Installation und Deinstallation ohne Build und ohne echte Installation.
 

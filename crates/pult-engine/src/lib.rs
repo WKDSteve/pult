@@ -26,6 +26,7 @@ mod offline;
 mod presence;
 mod process;
 pub mod profile;
+mod record;
 #[cfg(not(windows))]
 pub mod session;
 mod slot;
@@ -52,6 +53,7 @@ pub use offline::Offline;
 pub use presence::{APP_INSTANCE, Presence};
 use process::PROCESS_CHANNELS;
 pub use process::program_names;
+pub use record::{LOOPBACK_PREFIX, Recording, record};
 use slot::{Feed, Health, InputFeed, Slot, Source, fault_recorder};
 
 /// Weight of one resampler chunk in the drift control's level average: with 10 ms callbacks

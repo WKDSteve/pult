@@ -53,6 +53,8 @@ pub struct Clicks {
     /// Frames on either side of a step in which its level is measured: one period.
     reach: usize,
     margin: f32,
+    /// A step this small is never a click: [`FLOOR`], or what the noise of a recording needs.
+    floor: f32,
 }
 
 impl Clicks {
@@ -74,6 +76,7 @@ impl Clicks {
             slope: 2.0 * (PI * frequency / rate_f).sin(),
             reach,
             margin: MARGIN,
+            floor: FLOOR,
         }
     }
 
@@ -81,6 +84,31 @@ impl Clicks {
     #[must_use]
     pub fn with_margin(self, margin: f32) -> Self {
         Self { margin, ..self }
+    }
+
+    /// The same with another floor, never below [`FLOOR`]: a recording through converters and a
+    /// cable has noise that the render of the mixer alone does not have.
+    #[must_use]
+    pub fn with_floor(self, floor: f32) -> Self {
+        Self {
+            floor: floor.max(FLOOR),
+            ..self
+        }
+    }
+
+    /// The floor a recording needs whose part `quiet` holds no tone, only its noise: twice the
+    /// largest step in it, and at least [`FLOOR`].
+    #[must_use]
+    pub fn floor_of(quiet: &[f32], channels: usize) -> f32 {
+        let mut largest = 0.0_f32;
+        if channels > 0 {
+            for pair in quiet.chunks_exact(channels).collect::<Vec<_>>().windows(2) {
+                for (before, after) in pair[0].iter().zip(pair[1]) {
+                    largest = largest.max((after - before).abs());
+                }
+            }
+        }
+        (2.0 * largest).max(FLOOR)
     }
 
     /// The largest step the tone itself makes at `level`.
@@ -109,7 +137,7 @@ impl Clicks {
     pub fn steepest(&self, data: &[f32], channels: usize) -> f32 {
         let mut steepest = 0.0_f32;
         self.walk(data, channels, |click, level| {
-            if click.step > FLOOR && level > 0.0 {
+            if click.step > self.floor && level > 0.0 {
                 steepest = steepest.max(click.step / self.bound(level));
             }
         });
@@ -132,7 +160,7 @@ impl Clicks {
                     - data[(frame - 1) * channels + channel])
                     .abs();
                 let level = levels[frame].max(levels[frame - 1]);
-                let allowed = self.margin * self.bound(level) + FLOOR;
+                let allowed = self.margin * self.bound(level) + self.floor;
                 each(
                     Click {
                         frame,
@@ -188,6 +216,33 @@ mod tests {
         (0..frames)
             .map(|frame| gain(frame) * (f64::from(phase) + step * frame as f64).sin() as f32)
             .collect()
+    }
+
+    #[test]
+    fn a_floor_from_the_noise_of_a_recording_lets_that_noise_pass() {
+        let detector = Clicks::for_tone(TONE, RATE);
+        // A quiet tone with noise that steps by up to 2e-3 from sample to sample.
+        let noise = |frame: usize| if frame.is_multiple_of(2) { 1e-3 } else { -1e-3 };
+        let mut data = tone(RATE as usize, 0.3, |_| 0.01);
+        for (frame, sample) in data.iter_mut().enumerate() {
+            *sample += noise(frame);
+        }
+        assert_ne!(
+            detector.find(&data, 1),
+            Vec::new(),
+            "the noise reads as clicks"
+        );
+        let quiet: Vec<f32> = (0..1000).map(noise).collect();
+        let floor = Clicks::floor_of(&quiet, 1);
+        assert!((floor - 4e-3).abs() < 1e-6, "{floor}");
+        let lenient = detector.with_floor(floor);
+        assert_eq!(lenient.find(&data, 1), Vec::new());
+        // A real jump still stands out, and the floor never goes below the usual one.
+        data[20_000] += 0.05;
+        assert_ne!(lenient.find(&data, 1), Vec::new());
+        assert_eq!(Clicks::floor_of(&[0.0; 16], 2), FLOOR);
+        assert_eq!(Clicks::floor_of(&[], 0), FLOOR);
+        assert_eq!(detector.with_floor(0.0).floor, FLOOR);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 mod args;
 mod console;
+mod measure;
 mod monitor;
 mod remote;
 
@@ -66,6 +67,19 @@ fn main() -> ExitCode {
             .map_err(|e| e.to_string()),
         Command::Run(spec) => start_run(&spec),
         Command::Remote(request) => return remote::run(&request),
+        Command::Record(spec) => measure::record(&spec).map(|lines| {
+            for line in lines {
+                println!("{line}");
+            }
+        }),
+        Command::Clicks(spec) => match measure::clicks(&spec) {
+            Ok(verdict) => return measure::report(&verdict),
+            // Not the status of "clicks found": the recording could not be judged at all.
+            Err(why) => {
+                eprintln!("pult: {why}");
+                return ExitCode::from(2);
+            }
+        },
         Command::Tone(spec) => pult_engine::play_tone(&spec.sink, spec.frequency, spec.gain_db)
             .map_err(|e| e.to_string())
             .and_then(|playing| tone(&playing, &spec)),

@@ -12,6 +12,13 @@ pub const DEFAULT_TONE_DB: f32 = -30.0;
 /// Test tone frequency when `--freq` is not given.
 pub const DEFAULT_TONE_HZ: f32 = 440.0;
 
+/// How long `pult record` records when not told.
+const DEFAULT_RECORD_SECONDS: f64 = 10.0;
+
+/// The tone `pult clicks` expects when not told: the one of the click tests, low, so that a
+/// jump stands far above its steepest step.
+pub const DEFAULT_CLICK_TONE_HZ: f32 = 103.0;
+
 /// The bus name of a route given with `--to`.
 pub const INLINE_BUS: &str = "A1";
 
@@ -29,6 +36,8 @@ USAGE:
              [--log <FILE.csv>]
     pult run --profile <FILE.toml> [--log <FILE.csv>]
     pult tone --to <OUTPUT> [--gain-db <DB>] [--freq <HZ>]
+    pult record --from <INPUT|out:OUTPUT> --to <FILE.wav> [--seconds <S>]
+    pult clicks <FILE.wav> [--freq <HZ>] [--quiet <S>] [--skip <S>] [--until <S>]
     pult help | --help
     pult --version
 
@@ -72,7 +81,13 @@ outputs) and which input feeds which bus from a TOML file (see examples/pult.tom
 --log writes a CSV row with the levels and counters every 10 s (the file is overwritten; a
 run on a file that another run has open is refused).
 `tone` plays a sine (default 440 Hz at -30 dB) to check a chain of devices and stops on
-Enter. `run` takes commands while it runs (type help: gain, mute, solo, pan, show, save) and
+Enter. `record` writes what an input captures, or with out: before its name what an
+output plays, to a WAV file for --seconds (default 10) or until Enter. `clicks` looks
+for clicks in a recording of a steady tone of --freq Hz (default 103): steps steeper than
+that tone can make at its level. --quiet says how many seconds at its start hold no tone
+yet (their noise sets the floor), --skip how many to leave out at the start, --until
+where to stop (a route that ends cuts its sound off); its status is 0
+for no click, 1 for clicks and 2 when the recording cannot be judged. `run` takes commands while it runs (type help: gain, mute, solo, pan, show, save) and
 stops on an empty line, quit or Ctrl+C.
 
 EXAMPLE:
@@ -105,6 +120,32 @@ pub struct ToneSpec {
     pub gain_db: f32,
     /// Frequency in Hz.
     pub frequency: f32,
+}
+
+/// A recording to make.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordSpec {
+    /// An input device, or `out:` and an output device for what it plays.
+    pub source: String,
+    /// The WAV file to write.
+    pub file: PathBuf,
+    /// How long to record.
+    pub seconds: f64,
+}
+
+/// A recording of a test tone to look through for clicks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClicksSpec {
+    /// The WAV file to read.
+    pub file: PathBuf,
+    /// The frequency of the tone in Hz.
+    pub frequency: f32,
+    /// Seconds at the start that hold no tone yet: their noise sets the floor.
+    pub quiet: f64,
+    /// Seconds at the start that are not judged; at least `quiet`.
+    pub skip: f64,
+    /// The second up to which the recording is judged; to its end without one.
+    pub until: Option<f64>,
 }
 
 /// What to ask of the pult that is running.
@@ -156,6 +197,10 @@ pub enum Command {
     Run(RunSpec),
     /// Play a test tone until stopped.
     Tone(ToneSpec),
+    /// Record a device to a file.
+    Record(RecordSpec),
+    /// Look for clicks in a recording.
+    Clicks(ClicksSpec),
     /// Ask the pult that is running.
     Remote(Remote),
     /// Print the usage.
@@ -193,6 +238,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
         "programs" => no_more(args).map(|()| Command::Programs),
         "run" => parse_run(args).map(Command::Run),
         "tone" => parse_tone(args).map(Command::Tone),
+        "record" => parse_record(args).map(Command::Record),
+        "clicks" => parse_clicks(args).map(Command::Clicks),
         "scenes" => no_more(args).map(|()| Command::Remote(Remote::Scenes)),
         "show" => match args.next().as_deref() {
             None => Ok(Command::Remote(Remote::Show { json: false })),
@@ -373,6 +420,76 @@ fn parse_tone(mut args: impl Iterator<Item = String>) -> Result<ToneSpec, UsageE
     })
 }
 
+/// The value of the option `name`, a number of seconds from 0 to an hour.
+fn seconds(name: &str, raw: Option<String>) -> Result<f64, UsageError> {
+    let raw = raw.ok_or_else(|| usage(format!("{name} needs a value")))?;
+    raw.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|s| (0.0..=3600.0).contains(s))
+        .ok_or_else(|| usage(format!("{name} must be 0 to 3600 seconds, not \"{raw}\"")))
+}
+
+fn parse_record(mut args: impl Iterator<Item = String>) -> Result<RecordSpec, UsageError> {
+    let mut source = None;
+    let mut file = None;
+    let mut length = DEFAULT_RECORD_SECONDS;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--from" => {
+                let name = args.next().ok_or_else(|| usage("--from needs a value"))?;
+                once(&mut source, name, "--from")?;
+            }
+            "--to" => {
+                let name = args.next().ok_or_else(|| usage("--to needs a value"))?;
+                once(&mut file, PathBuf::from(name), "--to")?;
+            }
+            "--seconds" => length = seconds("--seconds", args.next())?,
+            other => return Err(usage(format!("unknown option \"{other}\""))),
+        }
+    }
+    Ok(RecordSpec {
+        source: source.ok_or_else(|| usage("record needs a device (--from)"))?,
+        file: file.ok_or_else(|| usage("record needs a file (--to)"))?,
+        seconds: length,
+    })
+}
+
+fn parse_clicks(mut args: impl Iterator<Item = String>) -> Result<ClicksSpec, UsageError> {
+    let mut file = None;
+    let mut frequency = DEFAULT_CLICK_TONE_HZ;
+    let mut quiet = 0.0;
+    let mut skip = 0.0;
+    let mut until = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--freq" => {
+                let raw = args.next().ok_or_else(|| usage("--freq needs a value"))?;
+                frequency = raw
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|hz| (20.0..=20_000.0).contains(hz))
+                    .ok_or_else(|| usage(format!("--freq must be 20 to 20000, not \"{raw}\"")))?;
+            }
+            "--quiet" => quiet = seconds("--quiet", args.next())?,
+            "--skip" => skip = seconds("--skip", args.next())?,
+            "--until" => until = Some(seconds("--until", args.next())?),
+            option if option.starts_with("--") => {
+                return Err(usage(format!("unknown option \"{option}\"")));
+            }
+            _ => once(&mut file, PathBuf::from(arg), "the file")?,
+        }
+    }
+    Ok(ClicksSpec {
+        file: file.ok_or_else(|| usage("clicks needs a recording (a WAV file)"))?,
+        frequency,
+        quiet,
+        skip,
+        until,
+    })
+}
+
 /// `NAME` or `NAME@GAIN_DB`, feeding the one bus of an inline route. The suffix only counts
 /// when it is a number, so a device name with an `@` in it still works.
 fn parse_source(raw: &str) -> Result<InputSpec, UsageError> {
@@ -550,6 +667,69 @@ mod tests {
                 .chain(args.iter().copied())
                 .map(String::from),
         )
+    }
+
+    fn words(line: &str) -> Result<Command, UsageError> {
+        parse(line.split_whitespace().map(String::from))
+    }
+
+    #[test]
+    fn record_takes_a_device_a_file_and_a_time() {
+        assert_eq!(
+            words("record --from out:In5 --to a.wav"),
+            Ok(Command::Record(RecordSpec {
+                source: "out:In5".to_owned(),
+                file: PathBuf::from("a.wav"),
+                seconds: DEFAULT_RECORD_SECONDS,
+            }))
+        );
+        let Ok(Command::Record(spec)) = words("record --to a.wav --seconds 2.5 --from mic") else {
+            panic!("a record command");
+        };
+        assert!((spec.seconds - 2.5).abs() < 1e-9);
+        for (line, why) in [
+            ("record --to a.wav", "--from"),
+            ("record --from mic", "--to"),
+            ("record --from mic --to a.wav --seconds -1", "3600"),
+            ("record --from mic --to a.wav --seconds", "needs a value"),
+            ("record --from mic --from mic --to a.wav", "only once"),
+            ("record --from mic --to a.wav --loud", "unknown option"),
+        ] {
+            let error = words(line).expect_err(line);
+            assert!(error.0.contains(why), "{line}: {error}");
+        }
+    }
+
+    #[test]
+    fn clicks_takes_a_file_and_what_to_expect_in_it() {
+        assert_eq!(
+            words("clicks a.wav"),
+            Ok(Command::Clicks(ClicksSpec {
+                file: PathBuf::from("a.wav"),
+                frequency: DEFAULT_CLICK_TONE_HZ,
+                quiet: 0.0,
+                skip: 0.0,
+                until: None,
+            }))
+        );
+        let Ok(Command::Clicks(spec)) =
+            words("clicks --freq 440 --quiet 1 a.wav --skip 3 --until 9")
+        else {
+            panic!("a clicks command");
+        };
+        assert!((spec.frequency - 440.0).abs() < 1e-6);
+        assert!((spec.quiet - 1.0).abs() < 1e-9 && (spec.skip - 3.0).abs() < 1e-9);
+        assert_eq!(spec.until, Some(9.0));
+        for (line, why) in [
+            ("clicks", "a recording"),
+            ("clicks a.wav b.wav", "only once"),
+            ("clicks a.wav --freq 5", "20 to 20000"),
+            ("clicks a.wav --quiet x", "3600"),
+            ("clicks a.wav --floor 1", "unknown option"),
+        ] {
+            let error = words(line).expect_err(line);
+            assert!(error.0.contains(why), "{line}: {error}");
+        }
     }
 
     #[test]

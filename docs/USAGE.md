@@ -32,6 +32,8 @@ pult tone --to Focusrite
 
 Spielt einen Sinus mit 440 Hz bei -30 dB, bis Enter gedrückt wird. Lauter oder anders: `--gain-db -20`, `--freq 1000`. Kommt der Ton aus den Boxen, stimmt der Weg Scarlett → Verstärker.
 
+Zum Messen gibt es zwei Befehle dazu. `pult record --from <Gerät> --to aufnahme.wav --seconds 20` nimmt ein Eingangsgerät auf, mit `out:` vor dem Namen das, was ein Ausgang gerade spielt (`--from "out:Focusrite"`, unter Windows ein Loopback; spielt dort nichts, kommt auch nichts, und die Aufnahme wird kürzer); Enter beendet sie früher. `pult clicks aufnahme.wav` sucht in der Aufnahme eines gleichmäßigen Testtons (`--freq`, Standard 103 Hz) nach Knacksern: Sprüngen von einem Sample zum nächsten, die steiler sind, als der Ton bei seinem Pegel sein kann. `--quiet 2` sagt, dass die ersten 2 s noch keinen Ton enthalten (ihr Rauschen setzt den Boden, wichtig bei einer Aufnahme über Wandler und Kabel), `--skip` und `--until` grenzen ein, was beurteilt wird. Status 0 heißt kein Knackser, 1 Knackser, 2 nicht beurteilbar. Beides zusammen, mit einer Folge von Änderungen an einem laufenden pult, fährt `tools/click-run.py` (siehe README).
+
 ## 4. Ton über pult leiten
 
 1. In Windows `CABLE Input` als **Standard-Wiedergabegerät** wählen (Taskleiste, Lautsprecher-Symbol, Ausgabegerät). Ab jetzt spielen alle Programme ins Kabel.

@@ -7,9 +7,10 @@ return {
   engine = "manual",
   steps = {
     -- Machine-checked (pult-engine/tests/clicks.rs, offline render with a click detector, in CI): ramps,
-    -- scene changes, mutes, the matrix, the equalizer's switch, the limiter's lookahead and switch. What is
-    -- left here is real music on real devices.
-    { ask = "Music on a real route: ramps and scene changes without a click? (machine-checked offline; here: real music, real device)" },
+    -- scene changes, mutes, the matrix, the equalizer's switch, the limiter's lookahead and switch. The same
+    -- sequence runs over real devices with tools/click-run.py (a tone through a running pult, recorded where
+    -- it comes out, by hand, not in CI). What is left here is real music and an ear.
+    { ask = "Music on a real route: ramps and scene changes without a click? (machine-checked offline and, with a test tone, over real devices by tools/click-run.py; here: real music, by ear)" },
     { ask = "The APC's faders on a real route work?" },
     { ask = "The one offset correction about 2 s after routing in (aligned) cannot be heard?" },
     { ask = "The Scene menu works by hand in the real window?" },
@@ -22,6 +23,6 @@ return {
     { ask = "The equalizer on the speakers (tab EQ): each band sounds as it says, and moving it does not click? (switching it off is machine-checked offline)" },
     { ask = "A scene that changes gate, compressor and equalizer: without a click?" },
     { ask = "The limiter on the speakers (bus fader far up, loud music): no distortion from clipping, LIM under the fader shows it working, and the pumping is bearable?" },
-    { ask = "Changing its lookahead (limit <bus> look 5) and switching it off and on while music plays: without a click? (machine-checked offline; here: real music, real device)" },
+    { ask = "Changing its lookahead (limit <bus> look 5) and switching it off and on while music plays: without a click? (machine-checked offline and, with a test tone, over real devices by tools/click-run.py; here: real music, by ear)" },
   },
 }

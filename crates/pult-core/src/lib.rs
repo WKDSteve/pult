@@ -43,6 +43,7 @@ pub mod stage;
 pub mod strip;
 pub mod tone;
 pub mod view;
+pub mod wav;
 
 pub use automix::{AutomixGroup, AutomixMember, PowerFollower};
 pub use clicks::{Click, Clicks};
