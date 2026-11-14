@@ -107,7 +107,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
 - `eq` sind die vier Bänder des EQ eines Busses in ihrer Reihenfolge, `eq_on` sein Schalter. `kind` ist `low`, `bell`
   oder `high`. Ein pult, das noch keinen EQ kennt, lässt beides weg: `eq` liest sich dann als leer. Jedes Band trägt
   außerdem `threshold_db`: unter 0 ist es dynamisch; 0, oder ein fehlendes Feld aus einem älteren Lauf, ist ein
-  gewöhnliches Band.
+  gewöhnliches Band. `eq_now_db` nennt den Gain, den jedes Band in diesem Moment hat (nur lesbar): bei einem
+  dynamischen Band, wie weit es gerade drin ist.
 - `limit_on`, `limit_db` und `limit_lookahead_ms` sind Schalter, Decke und Vorschau des Limiters eines Busses;
   `limited_db` sagt, wie weit er seit dem letzten Zustand höchstens zurückgedreht hat, 0 heißt gar nicht. Um die Vorschau
   verlässt der Ton den Bus später. Ein pult, das noch keinen Limiter kennt, lässt die Felder weg: `limit_on` liest sich

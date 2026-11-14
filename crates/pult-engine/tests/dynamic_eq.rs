@@ -60,8 +60,13 @@ fn a_dynamic_band_of_an_input_cuts_only_what_is_loud() {
     let mut o = offline(PROFILE);
     let loud = changed(&mut o, 1000.0, 0.5, 150);
     assert!((loud + 12.0).abs() < 0.5, "loud: {loud} dB");
+    // The route says what the band does now.
+    let now = o.running().inputs[0].controls.eq.gains_now();
+    assert!((now[1] + 12.0).abs() < 0.1, "{now:?}");
     let quiet = changed(&mut o, 1000.0, 0.01, 150);
     assert!(quiet.abs() < 0.2, "quiet: {quiet} dB");
+    let now = o.running().inputs[0].controls.eq.gains_now();
+    assert!(now[1].abs() < 0.1, "{now:?}");
     // Loud somewhere else does not bring it in.
     let bass = changed(&mut o, 100.0, 0.5, 150);
     assert!(bass.abs() < 0.2, "a bass: {bass} dB");
@@ -142,7 +147,10 @@ fn the_desk_shows_it_and_takes_its_actions() {
     let spec = profile::parse(PROFILE).expect("the profile is valid");
     let offline = Offline::new(&spec, RATE, 1).expect("the route builds");
     let mut desk = EngineDesk::new(offline.into_running(), None);
-    assert!(desk.view().inputs[0].eq[1].is_dynamic());
+    let view = desk.view();
+    assert!(view.inputs[0].eq[1].is_dynamic());
+    // Nothing played yet: the band has not come in.
+    assert!(view.inputs[0].eq_now_db[1].abs() < f32::EPSILON);
     desk.act(pult_core::view::Action::InputEqBand {
         input: 0,
         band: 1,

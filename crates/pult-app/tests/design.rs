@@ -122,6 +122,7 @@ fn showcase_inputs(t: f64) -> Vec<InputView> {
                 talkback: i == 5,
                 eq_on: true,
                 eq: showcase_input_eq(i),
+                eq_now_db: showcase_input_eq(i).map(|band| band.gain_db),
                 eq_pre: false,
                 // Mic 1 is held below -3 dB by its limiter.
                 limit_on: i == 0,
@@ -166,6 +167,11 @@ fn showcase_buses(t: f64) -> Vec<BusView> {
                 bands
             } else {
                 pult_core::Band::all_flat()
+            },
+            eq_now_db: if j == 0 {
+                [3.0, 0.0, -4.5, 0.0]
+            } else {
+                [0.0; 4]
             },
             limit: pult_core::view::LimitSettings {
                 on: j != 1,
@@ -368,8 +374,17 @@ fn equalizer_inputs() {
     // And its de-esser takes its sibilants down now.
     view.inputs[0].deess.threshold_db = -28.0;
     view.inputs[0].deess_reduction_db = 6.5;
+    // Its third band is dynamic and half way in; the last band of the bus too, and at rest.
+    view.inputs[0].eq[2].threshold_db = -30.0;
+    view.inputs[0].eq_now_db[2] = 1.4;
+    view.buses[0].eq[3] = pult_core::Band {
+        gain_db: -6.0,
+        threshold_db: -24.0,
+        ..view.buses[0].eq[3]
+    };
+    view.buses[0].eq_now_db[3] = 0.0;
     let mut harness = Harness::builder()
-        .with_size(vec2(2000.0, 1230.0))
+        .with_size(vec2(2000.0, 1420.0))
         .with_pixels_per_point(1.5)
         .build_ui(move |ui| {
             Theme::current().apply(ui.ctx());

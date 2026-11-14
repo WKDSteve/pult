@@ -1,6 +1,9 @@
 //! The equalizer view: a row per bus with its switch and its bands, each band with its kind, gain,
 //! frequency and width, and behind them its limiter with ceiling and lookahead and its delay; under the bands the
-//! curve of all of them together. A strip has no room for that; it only has the switches. Below
+//! curve of all of them together. A strip has no room for that; it only has the switches.
+//! Under the curve of each a line DYNAMIC: a threshold per band, which makes it dynamic, and how far
+//! in those bands are now; the curve then shows what the bands do at this moment, and faintly
+//! what they do at most. Below
 //! the buses a row per input: its equalizer, the switch that puts it before gate and compressor,
 //! its limiter, and under its curve its sidechain (what its gate and compressor listen to:
 //! another input, or itself through filters), its de-esser (the level above which the band of
@@ -78,6 +81,8 @@ struct Curve<'a> {
     bands: &'a [Band],
     on: bool,
     sample_rate: u32,
+    /// The gain each band has now in dB: where a dynamic band stands.
+    now_db: &'a [f32],
 }
 
 /// Draws the equalizers of `view`; a change of a control asks for it.
@@ -201,9 +206,20 @@ fn input_row(
             bands: &input.eq,
             on: input.eq_on,
             sample_rate: input.sample_rate,
+            now_db: &input.eq_now_db,
         },
     );
     ui.add_space(6.0);
+    dynamic_line(
+        ui,
+        Owner::Input(index),
+        input.eq_on,
+        &input.eq,
+        &input.eq_now_db,
+        values,
+        actions,
+    );
+    ui.add_space(2.0);
     sidechain_line(ui, index, input, values, actions);
     ui.add_space(2.0);
     deess_line(ui, index, input, values, actions);
@@ -337,27 +353,20 @@ fn key_line(
     });
 }
 
-/// The de-esser of an input: how much it takes from the band of the sibilants now, and its
-/// threshold and its corner, under the dials of the lines around it.
-fn deess_line(
-    ui: &mut Ui,
-    index: usize,
-    input: &InputView,
-    values: &mut Values<'_>,
-    actions: &mut Vec<Action>,
-) {
+/// A line under a curve that has dials only: what stands at its start and whether that is at
+/// work now, what stands under it, a sentence between, and its dials with what stands over each.
+struct DialLine<'a> {
+    head: String,
+    active: bool,
+    under: &'a str,
+    says: String,
+    dials: &'a [(Binding, &'a str)],
+}
+
+/// Draws `line`, as wide as the lines with keys around it, its dials under theirs.
+fn dial_line(ui: &mut Ui, line: &DialLine<'_>, values: &mut Values<'_>, actions: &mut Vec<Action>) {
     let p = &Theme::current().palette;
-    let taken = if input.deess.is_on() {
-        input.deess_reduction_db
-    } else {
-        0.0
-    };
-    let active = taken >= 0.05;
-    let (head, color) = if active {
-        (format!("DE-ESS  -{taken:.1} dB"), p.accent)
-    } else {
-        ("DE-ESS".to_owned(), p.text_faint)
-    };
+    let color = if line.active { p.accent } else { p.text_faint };
     #[allow(clippy::cast_precision_loss)]
     let dials_width = DUCK_DIAL_WIDTH * DUCK_DIALS.len() as f32;
     #[allow(clippy::cast_precision_loss)]
@@ -370,8 +379,8 @@ fn deess_line(
             Layout::top_down(Align::Min),
             |ui| {
                 ui.set_width(DUCK_HEAD_WIDTH);
-                ui.label(RichText::new(head).size(9.5).color(color));
-                ui.label(RichText::new("sibilants").size(8.5).color(p.text_faint));
+                ui.label(RichText::new(&line.head).size(9.5).color(color));
+                ui.label(RichText::new(line.under).size(8.5).color(p.text_faint));
             },
         );
         ui.allocate_ui_with_layout(
@@ -379,11 +388,7 @@ fn deess_line(
             Layout::top_down(Align::Min),
             |ui| {
                 ui.set_width(between);
-                ui.label(
-                    RichText::new("what is above HZ goes down while it is louder than THR")
-                        .size(8.5)
-                        .color(p.text_faint),
-                );
+                ui.label(RichText::new(&line.says).size(8.5).color(p.text_faint));
             },
         );
         ui.allocate_ui_with_layout(
@@ -391,13 +396,102 @@ fn deess_line(
             Layout::left_to_right(Align::Min),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                for (param, text) in [(DeessParam::Threshold, "THR"), (DeessParam::Freq, "HZ")] {
-                    let dial = Binding::Input(index, InputParam::Deess(param));
-                    actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, DUCK_DIAL_WIDTH));
+                for (dial, text) in line.dials {
+                    actions.extend(labelled(
+                        ui,
+                        values,
+                        *dial,
+                        text,
+                        DIAL_SIZE,
+                        DUCK_DIAL_WIDTH,
+                    ));
                 }
             },
         );
     });
+}
+
+/// The de-esser of an input: how much it takes from the band of the sibilants now, and its
+/// threshold and its corner.
+fn deess_line(
+    ui: &mut Ui,
+    index: usize,
+    input: &InputView,
+    values: &mut Values<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let taken = if input.deess.is_on() {
+        input.deess_reduction_db
+    } else {
+        0.0
+    };
+    let active = taken >= 0.05;
+    let at = |param| Binding::Input(index, InputParam::Deess(param));
+    let line = DialLine {
+        head: if active {
+            format!("DE-ESS  -{taken:.1} dB")
+        } else {
+            "DE-ESS".to_owned()
+        },
+        active,
+        under: "sibilants",
+        says: "what is above HZ goes down while it is louder than THR".to_owned(),
+        dials: &[
+            (at(DeessParam::Threshold), "THR"),
+            (at(DeessParam::Freq), "HZ"),
+        ],
+    };
+    dial_line(ui, &line, values, actions);
+}
+
+/// What the dynamic bands among `bands` do now, as the line DYNAMIC says it: `band 2 -4.5 of
+/// -12.0 dB`, one after the other; `None` when no band has a threshold.
+#[must_use]
+pub fn dynamic_now(bands: &[Band], now_db: &[f32]) -> Option<String> {
+    let said: Vec<String> = bands
+        .iter()
+        .enumerate()
+        .filter(|(_, band)| band.is_dynamic())
+        .map(|(index, band)| {
+            let now = now_db.get(index).copied().unwrap_or(0.0);
+            format!("band {} {now:+.1} of {:+.1} dB", index + 1, band.gain_db)
+        })
+        .collect();
+    (!said.is_empty()).then(|| said.join("   "))
+}
+
+/// The thresholds of the bands of an equalizer, one dial per band: a band with one is dynamic,
+/// and the line says how far in each of those is now.
+fn dynamic_line(
+    ui: &mut Ui,
+    owner: Owner,
+    on: bool,
+    bands: &[Band],
+    now_db: &[f32],
+    values: &mut Values<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let now = dynamic_now(bands, now_db).filter(|_| on);
+    let active = bands
+        .iter()
+        .zip(now_db)
+        .any(|(band, now)| on && band.is_dynamic() && now.abs() >= 0.05);
+    let dials: [(Binding, &str); EQ_BANDS] = std::array::from_fn(|band| {
+        (
+            owner.band(band, BandParam::Threshold),
+            ["THR 1", "THR 2", "THR 3", "THR 4"][band],
+        )
+    });
+    let line = DialLine {
+        head: "DYNAMIC".to_owned(),
+        active,
+        under: "bands above THR",
+        says: now.unwrap_or_else(|| {
+            "a band with a threshold has its gain only while its own range is louder".to_owned()
+        }),
+        dials: &dials,
+    };
+    dial_line(ui, &line, values, actions);
 }
 
 /// The sidechain of an input: a button per input its gate and compressor can listen to (and one
@@ -581,7 +675,18 @@ fn bus_row(
             bands: &bus.eq,
             on: bus.eq_on,
             sample_rate: bus.sample_rate,
+            now_db: &bus.eq_now_db,
         },
+    );
+    ui.add_space(6.0);
+    dynamic_line(
+        ui,
+        Owner::Bus(index),
+        bus.eq_on,
+        &bus.eq,
+        &bus.eq_now_db,
+        values,
+        actions,
     );
 }
 
@@ -594,10 +699,16 @@ fn curve(ui: &mut Ui, of: &Curve<'_>) {
     #[allow(clippy::cast_precision_loss)]
     let width = BAND_WIDTH * EQ_BANDS as f32 + BAND_GAP * (EQ_BANDS - 1) as f32;
     let (rect, response) = ui.allocate_exact_size(vec2(width, CURVE_HEIGHT), Sense::hover());
-    response.on_hover_text(format!(
-        "{}: what the bands do together, 20 Hz to 20 kHz",
-        of.name
-    ));
+    // With a dynamic band there are two curves: what the bands do now, and at most.
+    let moving = of.on && of.bands.iter().any(Band::is_dynamic);
+    response.on_hover_text(if moving {
+        format!(
+            "{}: what the bands do together now, 20 Hz to 20 kHz; faint, what they do at most",
+            of.name
+        )
+    } else {
+        format!("{}: what the bands do together, 20 Hz to 20 kHz", of.name)
+    });
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::same(m.radius), p.well);
 
@@ -664,8 +775,32 @@ fn curve(ui: &mut Ui, of: &Curve<'_>) {
         .iter()
         .map(|&(hz, db)| pos2(x_of(hz), y_of(db)))
         .collect();
-    let color = if of.on { p.accent } else { p.text_faint };
-    painter.line(line, Stroke::new(1.5, color));
+    if moving {
+        painter.line(line, Stroke::new(1.0, p.text_faint));
+        let now = bands_now(of.bands, of.now_db);
+        let line: Vec<Pos2> = points
+            .iter()
+            .map(|&(hz, _)| pos2(x_of(hz), y_of(response_db(&now, of.sample_rate, hz))))
+            .collect();
+        painter.line(line, Stroke::new(1.5, p.accent));
+    } else {
+        let color = if of.on { p.accent } else { p.text_faint };
+        painter.line(line, Stroke::new(1.5, color));
+    }
+}
+
+/// `bands` as they stand at this moment: a dynamic band with the gain it has now, the others
+/// as they are set.
+#[must_use]
+pub fn bands_now(bands: &[Band], now_db: &[f32]) -> Vec<Band> {
+    bands
+        .iter()
+        .enumerate()
+        .map(|(index, band)| match now_db.get(index) {
+            Some(now) if band.is_dynamic() => band.with_gain(*now),
+            _ => *band,
+        })
+        .collect()
 }
 
 /// Width of the column of the bus compressor: three dials.
@@ -852,4 +987,40 @@ fn band_column(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dynamic_bands_say_how_far_in_they_are() {
+        let mut bands = Band::all_flat();
+        assert_eq!(dynamic_now(&bands, &[0.0; EQ_BANDS]), None);
+        bands[1] = Band {
+            gain_db: -12.0,
+            threshold_db: -30.0,
+            ..bands[1]
+        };
+        bands[3] = Band {
+            gain_db: 4.0,
+            threshold_db: -20.0,
+            ..bands[3]
+        };
+        // A plain band with a gain is not named.
+        bands[0] = bands[0].with_gain(3.0);
+        let now = [3.0, -4.5, 0.0, 0.0];
+        assert_eq!(
+            dynamic_now(&bands, &now).as_deref(),
+            Some("band 2 -4.5 of -12.0 dB   band 4 +0.0 of +4.0 dB")
+        );
+        // The curve of this moment: the dynamic bands where they stand, the plain one as set,
+        // also while it still slides.
+        let standing = bands_now(&bands, &[1.0, -4.5, 0.0, 0.0]);
+        assert!((standing[0].gain_db - 3.0).abs() < f32::EPSILON);
+        assert!((standing[1].gain_db + 4.5).abs() < f32::EPSILON);
+        assert!(standing[3].gain_db.abs() < f32::EPSILON);
+        // A state that names no gains leaves the bands as they are set.
+        assert_eq!(bands_now(&bands, &[]), bands.to_vec());
+    }
 }

@@ -471,6 +471,34 @@ fn the_equalizer_view_sets_the_ducker_of_an_input() {
 }
 
 #[test]
+fn the_equalizer_view_makes_a_band_dynamic() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("EQ").click();
+    harness.run_steps(2);
+    let view = desk_view(&mut harness);
+    let bus = view.buses[0].shown_name().to_owned();
+    let input = view.inputs[SPOTIFY].shown_name().to_owned();
+    assert!(!view.buses[0].eq[1].is_dynamic());
+    harness
+        .get_by_label(&format!("{bus} equalizer band 2 threshold"))
+        .set_value_accesskit(-30.0);
+    harness
+        .get_by_label(&format!("{input} equalizer band 4 threshold"))
+        .set_value_accesskit(-12.0);
+    let view = desk_view(&mut harness);
+    assert!((view.buses[0].eq[1].threshold_db + 30.0).abs() < 0.5);
+    assert!((view.inputs[SPOTIFY].eq[3].threshold_db + 12.0).abs() < 0.5);
+    assert!(!view.buses[0].eq[0].is_dynamic(), "only this band");
+    assert!(!view.inputs[0].eq[3].is_dynamic(), "only this input");
+    // Back at the end where it starts, the band is a plain one again.
+    harness
+        .get_by_label(&format!("{bus} equalizer band 2 threshold"))
+        .set_value_accesskit(0.0);
+    assert!(!desk_view(&mut harness).buses[0].eq[1].is_dynamic());
+}
+
+#[test]
 fn the_equalizer_view_sets_the_de_esser_of_an_input() {
     let mut harness = harness();
     harness.run_steps(2);

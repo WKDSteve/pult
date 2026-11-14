@@ -140,6 +140,8 @@ pub struct InputView {
     pub eq_on: bool,
     /// The bands of its equalizer.
     pub eq: [Band; EQ_BANDS],
+    /// The gain each band has now in dB: on a slide, or as far in as a dynamic band is.
+    pub eq_now_db: [f32; EQ_BANDS],
     /// Its equalizer comes before gate and compressor instead of after them.
     pub eq_pre: bool,
     /// Whether its limiter is on; it has no lookahead.
@@ -266,6 +268,8 @@ pub struct BusView {
     pub eq_on: bool,
     /// The bands of its equalizer.
     pub eq: [Band; EQ_BANDS],
+    /// The gain each band has now in dB: on a slide, or as far in as a dynamic band is.
+    pub eq_now_db: [f32; EQ_BANDS],
     /// Its limiter; switched off, it keeps its settings.
     pub limit: LimitSettings,
     /// A monitor bus: solo acts on it (and, while the route has one, only on such buses).
@@ -767,6 +771,7 @@ fn demo_input(
         talkback: false,
         eq_on: true,
         eq: Band::all_flat(),
+        eq_now_db: [0.0; EQ_BANDS],
         eq_pre: false,
         limit_on: crate::limiter::LimitSettings::INPUT.on,
         limit_db: crate::limiter::LimitSettings::INPUT.ceiling_db,
@@ -794,6 +799,7 @@ impl FakeDesk {
             muted: false,
             eq_on: true,
             eq: Band::all_flat(),
+            eq_now_db: [0.0; EQ_BANDS],
             limit: LimitSettings::default(),
             monitor: false,
             minus: None,
@@ -1320,6 +1326,16 @@ impl Desk for FakeDesk {
                 kind: EventKind::Back,
                 text: format!("[3] {} is back", self.view.inputs[2].name),
             });
+        }
+        // The demo has no sound to listen to: every band stands where it is set.
+        let standing = |on: bool, bands: &[Band; EQ_BANDS]| {
+            bands.map(|band| if on { band.gain_db } else { 0.0 })
+        };
+        for input in &mut self.view.inputs {
+            input.eq_now_db = standing(input.eq_on, &input.eq);
+        }
+        for bus in &mut self.view.buses {
+            bus.eq_now_db = standing(bus.eq_on, &bus.eq);
         }
         let snapshot = self.view.clone();
         self.view.events.clear();

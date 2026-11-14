@@ -134,6 +134,10 @@ pub struct InputState {
     /// The bands of its equalizer; none from a run older than this.
     #[serde(default)]
     pub eq: Vec<Band>,
+    /// The gain each of those bands has now in dB (a dynamic band: as far in as it is); none
+    /// from a run older than dynamic bands.
+    #[serde(default)]
+    pub eq_now_db: Vec<f32>,
     /// Its equalizer comes before gate and compressor instead of after them.
     #[serde(default)]
     pub eq_pre: bool,
@@ -236,6 +240,10 @@ pub struct BusState {
     /// a run older than equalizers.
     #[serde(default)]
     pub eq: Vec<Band>,
+    /// The gain each of those bands has now in dB (a dynamic band: as far in as it is); none
+    /// from a run older than dynamic bands.
+    #[serde(default)]
+    pub eq_now_db: Vec<f32>,
     /// Its limiter, as the fields `limit_on`, `limit_db` and `limit_lookahead_ms`; off and zero
     /// from a run older than limiters ([`LimitSettings::OLDER_RUN`]).
     #[serde(flatten)]
@@ -428,6 +436,7 @@ impl InputState {
             talkback: input.talkback,
             eq_on: input.eq_on,
             eq: input.eq.to_vec(),
+            eq_now_db: input.eq_now_db.to_vec(),
             eq_pre: input.eq_pre,
             limit_on: input.limit_on,
             limit_db: input.limit_db,
@@ -467,6 +476,7 @@ impl BusState {
             muted: bus.muted,
             eq_on: bus.eq_on,
             eq: bus.eq.to_vec(),
+            eq_now_db: bus.eq_now_db.to_vec(),
             limit: bus.limit,
             monitor: bus.monitor,
             minus: bus.minus.map(|input| input + 1),

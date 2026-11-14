@@ -280,8 +280,11 @@ pult run --profile meinprofil.toml --log abend.csv
   Kuhschwanz durch einen Tief- oder Hochpass an seiner Frequenz. Ein lauter Bass bringt ein Band bei 4 kHz deshalb nicht
   herein. Der Gain gleitet wie bei jeder anderen Änderung eines Bandes (rund 1 dB je Millisekunde), nichts springt;
   zurück geht er mit 150 ms. Ratio und Zeiten sind fest. Von außen `bus/<name>/eq/<band>/threshold` und
-  `input/<n>/eq/<band>/threshold`, auch auf einem MIDI-Regler. Die Kurve im Fenster zeigt ein dynamisches Band mit
-  seinem ganzen Gain, also das, was es höchstens tut; einen Regler für die Schwelle hat das Fenster noch nicht.
+  `input/<n>/eq/<band>/threshold`, auch auf einem MIDI-Regler. Im Fenster steht in der Ansicht EQ unter jeder
+  Kurve die Zeile DYNAMIC: ein Regler je Band für seine Schwelle (THR 1 bis 4, am oberen Ende `off`), davor, wie weit
+  die dynamischen Bänder gerade drin sind (`band 3 +1.4 of +3.0 dB`). Hat ein Equalizer ein dynamisches Band, zeigt
+  seine Kurve, was die Bänder in diesem Moment tun, und blass dahinter, was sie höchstens tun. Im Zustand steht dafür
+  je Bus und Eingang `eq_now_db`, der Gain jedes Bandes in diesem Moment.
 - **Limiter:** Jeder Bus hat hinter seinem Fader einen Limiter, von Anfang an eingeschaltet: Was den Bus verlässt, bleibt
   unter der Decke `limit_db` (Standard -0,3 dB, möglich -20 bis 0), für jedes Signal. Alle Kanäle werden gleich geregelt,
   das Stereobild bleibt. `limit_lookahead_ms` (Standard 1 ms, möglich 0 bis 5) ist die Vorschau: Er sieht eine Spitze

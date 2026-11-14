@@ -269,6 +269,9 @@ pub struct EqControls {
     bands: [BandControls; EQ_BANDS],
     /// Counts the changes: the callback reads the bands only when it moved.
     version: AtomicU32,
+    /// The gain each band has now, as its callback last left it: on a slide, or as far in as a
+    /// dynamic band is.
+    now_db: [AtomicF32; EQ_BANDS],
 }
 
 impl Default for EqControls {
@@ -286,11 +289,19 @@ impl Default for EqControls {
                 }
             }),
             version: AtomicU32::new(0),
+            now_db: std::array::from_fn(|_| AtomicF32::new(0.0)),
         }
     }
 }
 
 impl EqControls {
+    /// The gain every band has now in dB, as the callback last left it: what a dynamic band
+    /// does at this moment. All 0 before anything played.
+    #[must_use]
+    pub fn gains_now(&self) -> [f32; EQ_BANDS] {
+        std::array::from_fn(|index| self.now_db[index].load())
+    }
+
     /// Sets band `index` (from 0), clamped to its ranges; an index beyond [`EQ_BANDS`] is
     /// ignored.
     pub fn set(&self, index: usize, band: Band) {
@@ -528,8 +539,22 @@ impl Equalizer {
         }
         self.follow(controls);
         if self.rests() {
+            self.tell(controls);
             return;
         }
+        self.filter(data, channels);
+        self.tell(controls);
+    }
+
+    /// Says where the bands stand, for whoever shows it.
+    fn tell(&self, controls: &EqControls) {
+        for (cell, band) in controls.now_db.iter().zip(&self.now) {
+            cell.store(band.gain_db);
+        }
+    }
+
+    /// [`Self::process`] once the bands are read and there is something to do.
+    fn filter(&mut self, data: &mut [f32], channels: usize) {
         let filtered = channels.min(EQ_CHANNELS);
         for block in data.chunks_mut(BLOCK * channels) {
             let frames = block.len() / channels;
@@ -1329,6 +1354,48 @@ mod tests {
         }
         assert!(level_db(&loud).abs() < 0.05);
         assert!(eq.rests());
+    }
+
+    #[test]
+    fn the_controls_say_where_the_bands_stand_now() {
+        let controls = EqControls::default();
+        assert!(
+            controls
+                .gains_now()
+                .iter()
+                .all(|db| db.abs() < f32::EPSILON)
+        );
+        controls.set(0, dynamic());
+        controls.set(3, band(BandKind::HighShelf, 8000.0, 3.0));
+        let mut eq = Equalizer::new(RATE);
+        let mut loud = sine(1000.0, 1);
+        for callback in loud.chunks_mut(480) {
+            eq.process(&controls, callback, 1);
+        }
+        let now = controls.gains_now();
+        assert!((now[0] + 12.0).abs() < 1e-3, "{now:?}");
+        assert!((now[3] - 3.0).abs() < 1e-3, "{now:?}");
+        // On a quiet sound the dynamic band lets go; the plain one stays.
+        let mut quiet: Vec<f32> = sine(1000.0, 1).iter().map(|s| s * 0.01).collect();
+        for callback in quiet.chunks_mut(480) {
+            eq.process(&controls, callback, 1);
+        }
+        let now = controls.gains_now();
+        assert!(now[0].abs() < 1e-3, "{now:?}");
+        assert!((now[3] - 3.0).abs() < 1e-3, "{now:?}");
+        // Switched off, all of it is flat, also once the equalizer rests.
+        controls.switch(false);
+        let mut data = sine(1000.0, 1);
+        for callback in data.chunks_mut(480) {
+            eq.process(&controls, callback, 1);
+        }
+        assert!(eq.rests());
+        assert!(
+            controls
+                .gains_now()
+                .iter()
+                .all(|db| db.abs() < f32::EPSILON)
+        );
     }
 
     #[test]
