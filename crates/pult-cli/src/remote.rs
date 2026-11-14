@@ -280,6 +280,10 @@ fn shown(state: &State) -> Vec<String> {
         if bus.limit != pult_core::view::LimitSettings::OLDER_RUN {
             line.push_str(&bus.limit.summary());
         }
+        if bus.delay_ms > 0.0 {
+            let _ = write!(line, "  delay {:.1} ms", bus.delay_ms);
+        }
+        line.push_str(&held_back(bus));
         if bus.muted {
             line.push_str("  muted");
         }
@@ -289,4 +293,66 @@ fn shown(state: &State) -> Vec<String> {
         lines.push(format!("scenes: {}", state.scenes.join(", ")));
     }
     lines
+}
+
+/// What holds the sound of `bus` back, as `show` in the input line says it: the rings of the
+/// inputs that feed it, what the bus itself adds, and what its device says. Nothing from a run
+/// older than these figures.
+fn held_back(bus: &pult_core::protocol::BusState) -> String {
+    let mut text = String::new();
+    for (n, ring) in bus.rings.iter().enumerate() {
+        text.push_str(if n == 0 { "  rings" } else { "," });
+        let _ = write!(text, " [{}] {:.1} ms", ring.input, ring.ms);
+    }
+    if bus.latency_ms > 0.0 {
+        let _ = write!(text, "  bus {:.1} ms", bus.latency_ms);
+    }
+    if let Some(ms) = bus.device_latency_ms {
+        let _ = write!(text, "  device {ms:.1} ms");
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use pult_core::view::RingView;
+    use pult_core::{Desk, FakeDesk};
+
+    use super::*;
+
+    #[test]
+    fn show_says_what_holds_the_sound_of_a_bus_back() {
+        let mut view = FakeDesk::new().view();
+        view.buses[0].delay_ms = 12.0;
+        view.buses[0].rings = vec![
+            RingView {
+                input: 0,
+                ms: 40.25,
+            },
+            RingView { input: 2, ms: 39.0 },
+        ];
+        view.buses[0].device_latency_ms = Some(23.44);
+        let lines = shown(&State::new(&view, Vec::new()));
+        let bus = lines
+            .iter()
+            .find(|line| line.starts_with("A1 "))
+            .expect("the line of A1");
+        // The demo bus limits with 1 ms of lookahead: 12 ms of delay and that.
+        assert!(
+            bus.ends_with(
+                "  delay 12.0 ms  rings [1] 40.2 ms, [3] 39.0 ms  bus 13.0 ms  device 23.4 ms"
+            ),
+            "{bus}"
+        );
+        // The other bus has nobody who measures: only what the bus itself adds.
+        let other = lines
+            .iter()
+            .find(|line| line.starts_with("A2 "))
+            .expect("the line of A2");
+        assert!(other.ends_with("  bus 1.0 ms"), "{other}");
+        assert!(
+            !other.contains("rings") && !other.contains("device"),
+            "{other}"
+        );
+    }
 }
