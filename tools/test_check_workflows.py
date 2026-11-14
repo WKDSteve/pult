@@ -28,6 +28,14 @@ def real():
 PIN = re.search(rf"{KIT}/publish@([0-9a-f]{{40}})", real()["release.yml"]).group(1)
 
 
+# The token of a publish job: it writes the release and attests its files (appkit's release-kit).
+PUBLISH_PERMISSIONS = (
+    "    permissions:\n      contents: write\n"
+    "      id-token: write        # the attestation of the files (appkit release-kit, see its README)\n"
+    "      attestations: write\n"
+)
+
+
 def sabotaged(name, old, new, count=1):
     """The real workflows with `old` replaced by `new` in one file; fails the test if `old` is not there."""
     texts = real()
@@ -164,7 +172,19 @@ class Rules(unittest.TestCase):
         self.found(sabotaged("release.yml", "permissions:\n  contents: read\n\nenv:", "permissions:\n  actions: read\n  contents: read\n\nenv:"), "whole workflow")
 
     def test_a_job_with_write_all_is_found(self):
-        self.found(sabotaged("release.yml", "    permissions:\n      contents: write\n", "    permissions: write-all\n"), "list them one by one")
+        self.found(sabotaged("release.yml", PUBLISH_PERMISSIONS, "    permissions: write-all\n"), "list them one by one")
+
+    def test_a_publish_job_that_may_not_attest_is_found(self):
+        for scope in ("id-token", "attestations"):
+            line = next(l for l in PUBLISH_PERMISSIONS.splitlines(keepends=True) if l.strip().startswith(scope))
+            for name in ("release.yml", "rolling.yml"):
+                self.found(sabotaged(name, line, ""), "needs id-token: write and attestations: write")
+
+    def test_an_id_token_that_is_only_read_is_found(self):
+        self.found(sabotaged("release.yml", "      attestations: write", "      attestations: read"), "no job here needs")
+
+    def test_the_rolling_prepare_job_may_not_attest(self):
+        self.found(sabotaged("rolling.yml", "    permissions:\n      contents: write\n", "    permissions:\n      contents: write\n      id-token: write\n"), "no job here needs")
 
     def test_another_write_right_in_a_job_is_found(self):
         self.found(sabotaged("release.yml", "    timeout-minutes: 40\n", "    timeout-minutes: 40\n    permissions:\n      packages: write\n"), "no job here needs")
@@ -188,7 +208,7 @@ class Rules(unittest.TestCase):
         self.found(sabotaged("ci.yml", "permissions:\n  contents: read\n\nconcurrency:", "concurrency:"), "whole workflow")
 
     def test_a_publish_job_without_write_is_found(self):
-        self.found(sabotaged("release.yml", "    permissions:\n      contents: write\n", ""), "needs contents: write")
+        self.found(sabotaged("release.yml", PUBLISH_PERMISSIONS, ""), "needs contents: write")
 
     # the release
     def test_a_release_that_publishes_is_found(self):

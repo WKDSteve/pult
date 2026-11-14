@@ -16,7 +16,8 @@ renamed file does not get around them:
   * every job runs on `[self-hosted, windows]` and has a timeout;
   * no workflow reacts to a pull request or a comment (it would run on the author's machine);
   * the token: `permissions: contents: read` for the whole workflow, `contents: write` only in the
-    jobs that publish (release: publish; rolling: prepare, publish), nothing else, no write-all;
+    jobs that publish (release: publish; rolling: prepare, publish), and `id-token: write` with
+    `attestations: write` only in the two `publish` jobs (the kit attests the files), nothing else, no write-all;
   * every checkout keeps no credentials (`persist-credentials: false`);
   * no `continue-on-error`, no `always()`/`cancelled()`/`failure()` in a condition, but for the upload
     of what a failed run of ci.yml leaves behind (the snapshot diffs);
@@ -55,6 +56,9 @@ EXPECTED = ("ci.yml", "release.yml", "rolling.yml")
 OUTSIDE_EVENTS = {"pull_request", "pull_request_target", "pull_request_review", "pull_request_review_comment", "issue_comment", "issues", "discussion", "discussion_comment", "fork", "watch"}
 ALLOWED_EVENTS = {"ci.yml": {"push", "workflow_dispatch"}, "release.yml": {"push"}, "rolling.yml": {"workflow_run"}}
 WRITERS = {"ci.yml": set(), "release.yml": {"publish"}, "rolling.yml": {"prepare", "publish"}}
+# The jobs whose release-kit publish attests the files (appkit >= v0.48): they, and only they, hold the OIDC token.
+ATTESTERS = {"ci.yml": set(), "release.yml": {"publish"}, "rolling.yml": {"publish"}}
+ATTEST = ("id-token", "attestations")
 TIP_IF = "${{ steps.tip.outputs.current == 'true' }}"
 
 
@@ -347,12 +351,18 @@ def check_common(name, text, wf):
             problems.append(f"{name}: job {job} has permissions {perms!r}; list them one by one")
             continue
         for key, value in perms.items():
+            if key in ATTEST:
+                if value != "write" or job not in ATTESTERS.get(name, set()):
+                    problems.append(f"{name}: job {job} has the permission {key}: {value}, which no job here needs")
+                continue
             if key not in ("contents", "actions") or value not in ("read", "write"):
                 problems.append(f"{name}: job {job} has the permission {key}: {value}, which no job here needs")
             elif value == "write" and not (key == "contents" and job in writers):
                 problems.append(f"{name}: job {job} has {key}: write; only {' and '.join(sorted(writers)) or 'no job'} may write")
         if job in writers and perms.get("contents") != "write":
             problems.append(f"{name}: job {job} needs contents: write")
+        if job in ATTESTERS.get(name, set()) and any(perms.get(key) != "write" for key in ATTEST):
+            problems.append(f"{name}: job {job} needs id-token: write and attestations: write (the release-kit attests)")
     for job in writers:
         if job in jobs and jobs[job].get("permissions") is None:
             problems.append(f"{name}: job {job} needs contents: write")
