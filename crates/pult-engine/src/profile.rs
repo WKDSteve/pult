@@ -40,6 +40,9 @@
 //! freq_hz = 500                # optional, 20 to 20000
 //! gain_db = 3                  # optional, -24 to 24
 //! q = 0.7                      # optional, 0.1 to 10: higher is narrower
+//! threshold_db = -30           # optional, -60 to 0 (off): the band is dynamic, its gain comes
+//!                              # in while the level in its range is above this, all of it 12 dB
+//!                              # higher
 //!
 //! [[input]]
 //! device = "CABLE Output"
@@ -245,6 +248,7 @@ struct EqEntry {
     freq_hz: Option<f32>,
     gain_db: Option<f32>,
     q: Option<f32>,
+    threshold_db: Option<f32>,
 }
 
 #[allow(clippy::struct_excessive_bools)] // The switches of an input, each a key of its own.
@@ -532,6 +536,7 @@ fn scene_bands(
             entry.freq_hz.map(BandChange::Freq),
             entry.gain_db.map(BandChange::Gain),
             entry.q.map(BandChange::Q),
+            entry.threshold_db.map(BandChange::Threshold),
         ];
         let before = changes.len();
         for setting in settings.into_iter().flatten() {
@@ -712,6 +717,7 @@ fn bands(what: &str, entries: Vec<EqEntry>) -> Result<[Band; EQ_BANDS], ProfileE
             freq_hz: entry.freq_hz.unwrap_or(start.freq_hz),
             gain_db: entry.gain_db.unwrap_or(start.gain_db),
             q: entry.q.unwrap_or(start.q),
+            threshold_db: entry.threshold_db.unwrap_or(start.threshold_db),
         }
         .checked()
         .map_err(|why| ProfileError(format!("{what}, band {}: {why}", entry.band)))?;
@@ -963,6 +969,7 @@ pub fn render(spec: &RouteSpec) -> String {
                     band.gain_db,
                     band.q
                 );
+                render_threshold(&mut text, band);
             }
         }
     }
@@ -1013,6 +1020,7 @@ pub fn render(spec: &RouteSpec) -> String {
                         BandChange::Freq(hz) => writeln!(text, "freq_hz = {hz}"),
                         BandChange::Gain(db) => writeln!(text, "gain_db = {db}"),
                         BandChange::Q(q) => writeln!(text, "q = {q}"),
+                        BandChange::Threshold(db) => writeln!(text, "threshold_db = {db}"),
                     };
                 }
             }
@@ -1070,6 +1078,12 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
 /// The lines of the equalizer and the limiter of an input that are not as they start; the bands
 /// last, since a table of them ends the keys of the input.
 #[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+fn render_threshold(text: &mut String, band: &Band) {
+    if band.is_dynamic() {
+        let _ = writeln!(text, "threshold_db = {}", band.threshold_db);
+    }
+}
+
 fn render_input_eq(text: &mut String, input: &InputSpec) {
     if !input.eq_on {
         text.push_str("eq_on = false\n");
@@ -1094,6 +1108,7 @@ fn render_input_eq(text: &mut String, input: &InputSpec) {
                 band.gain_db,
                 band.q
             );
+            render_threshold(text, band);
         }
     }
 }
@@ -1469,6 +1484,7 @@ fn set_bands(table: &mut Table, bands: &[Band; EQ_BANDS]) -> Option<()> {
             set_number_from(entry, "freq_hz", band.freq_hz, start.freq_hz);
             set_number_from(entry, "gain_db", band.gain_db, start.gain_db);
             set_number_from(entry, "q", band.q, start.q);
+            set_number_from(entry, "threshold_db", band.threshold_db, start.threshold_db);
         } else if *band != start {
             let mut entry = Table::new();
             entry.insert("band", Item::Value(number.into()));
@@ -1476,6 +1492,9 @@ fn set_bands(table: &mut Table, bands: &[Band; EQ_BANDS]) -> Option<()> {
             entry.insert("freq_hz", Item::Value(shortest(band.freq_hz)));
             entry.insert("gain_db", Item::Value(shortest(band.gain_db)));
             entry.insert("q", Item::Value(shortest(band.q)));
+            if band.is_dynamic() {
+                entry.insert("threshold_db", Item::Value(shortest(band.threshold_db)));
+            }
             entry.decor_mut().set_prefix("\n");
             entries.push(entry);
         }
@@ -1706,6 +1725,7 @@ mod tests {
             freq_hz: 6300.0,
             gain_db: -2.5,
             q: 1.4,
+            threshold_db: 0.0,
         };
         spec.buses[1].eq[0].gain_db = 4.0;
         let text = render(&spec);
@@ -1817,7 +1837,8 @@ mod tests {
                 kind: BandKind::Peak,
                 freq_hz: 9000.0,
                 gain_db: 0.0,
-                q: 2.0
+                q: 2.0,
+                threshold_db: 0.0,
             }
         );
         assert!(parse(&bus("")).expect("no equalizer").buses[0].eq_on);

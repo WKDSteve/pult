@@ -119,6 +119,8 @@ pub enum BandParam {
     Gain,
     /// Its width.
     Q,
+    /// Its threshold: the level in its range above which its gain comes in.
+    Threshold,
 }
 
 impl BandParam {
@@ -128,6 +130,7 @@ impl BandParam {
             "freq" => Self::Freq,
             "gain" => Self::Gain,
             "q" => Self::Q,
+            "threshold" => Self::Threshold,
             _ => return None,
         })
     }
@@ -139,6 +142,7 @@ impl BandParam {
             (Self::Freq, Value::Freq(hz)) => BandChange::Freq(hz),
             (Self::Gain, Value::Boost(db)) => BandChange::Gain(db),
             (Self::Q, Value::Width(q)) => BandChange::Q(q),
+            (Self::Threshold, Value::Threshold(db)) => BandChange::Threshold(db),
             _ => return None,
         })
     }
@@ -150,6 +154,7 @@ impl BandParam {
             Self::Freq => Value::Freq(band.freq_hz),
             Self::Gain => Value::Boost(band.gain_db),
             Self::Q => Value::Width(band.q),
+            Self::Threshold => Value::Threshold(band.threshold_db),
         }
     }
 
@@ -159,6 +164,7 @@ impl BandParam {
             Self::Freq => "freq",
             Self::Gain => "gain",
             Self::Q => "q",
+            Self::Threshold => "threshold",
         }
     }
 }
@@ -214,6 +220,8 @@ pub enum Value {
     Freq(f32),
     /// The width of a band (Q).
     Width(f32),
+    /// The threshold of a dynamic band in dB.
+    Threshold(f32),
     /// What a band does.
     Kind(BandKind),
     /// The ceiling of a limiter in dB.
@@ -299,6 +307,7 @@ impl Binding {
                 "freq" => BandParam::Freq,
                 "gain" => BandParam::Gain,
                 "q" => BandParam::Q,
+                "threshold" => BandParam::Threshold,
                 other => return Err(AddressError::NoParam(format!("eq/{number}/{other}"))),
             };
             return Ok(Self::Bus(index, BusParam::EqBand(band, param)));
@@ -479,6 +488,7 @@ impl Binding {
                             BandParam::Freq => Value::Freq(band.freq_hz),
                             BandParam::Gain => Value::Boost(band.gain_db),
                             BandParam::Q => Value::Width(band.q),
+                            BandParam::Threshold => Value::Threshold(band.threshold_db),
                         }
                     }
                     BusParam::Limit => Value::Switch(bus.limit.on),
@@ -590,6 +600,7 @@ impl Binding {
                     (BandParam::Freq, Value::Freq(hz)) => BandChange::Freq(hz),
                     (BandParam::Gain, Value::Boost(db)) => BandChange::Gain(db),
                     (BandParam::Q, Value::Width(q)) => BandChange::Q(q),
+                    (BandParam::Threshold, Value::Threshold(db)) => BandChange::Threshold(db),
                     _ => return None,
                 };
                 Action::BusEqBand { bus, band, change }
@@ -958,6 +969,14 @@ mod tests {
                 Binding::Bus(1, BusParam::EqBand(2, BandParam::Gain)),
             ),
             (
+                "bus/A2/eq/1/threshold",
+                Binding::Bus(1, BusParam::EqBand(0, BandParam::Threshold)),
+            ),
+            (
+                "input/2/eq/3/threshold",
+                Binding::Input(1, InputParam::EqBand(2, BandParam::Threshold)),
+            ),
+            (
                 "bus/A2/eq/4/q",
                 Binding::Bus(1, BusParam::EqBand(3, BandParam::Q)),
             ),
@@ -1217,6 +1236,7 @@ mod tests {
             freq_hz: 3000.0,
             gain_db: -4.5,
             q: 1.4,
+            threshold_db: 0.0,
         };
         let read = |address| Binding::parse(address, &view).unwrap().read(&view);
         assert_eq!(read("bus/A1/eq"), Some(Value::Switch(false)));
@@ -1347,6 +1367,11 @@ mod tests {
             write(band(BandParam::Q), Value::Width(2.0)),
             change(BandChange::Q(2.0))
         );
+        assert_eq!(
+            write(band(BandParam::Threshold), Value::Threshold(-30.0)),
+            change(BandChange::Threshold(-30.0))
+        );
+        assert_eq!(write(band(BandParam::Threshold), Value::Boost(-30.0)), None);
         assert_eq!(
             write(band(BandParam::Kind), Value::Kind(BandKind::LowShelf)),
             change(BandChange::Kind(BandKind::LowShelf))

@@ -105,7 +105,8 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
   `back`, `refused` oder `slow`.
 - `gain_db`, `pan`, `muted` und `buses` nennen das Ziel. Läuft eine Rampe, folgt der Ton noch.
 - `eq` sind die vier Bänder des EQ eines Busses in ihrer Reihenfolge, `eq_on` sein Schalter. `kind` ist `low`, `bell`
-  oder `high`. Ein pult, das noch keinen EQ kennt, lässt beides weg: `eq` liest sich dann als leer.
+  oder `high`. Ein pult, das noch keinen EQ kennt, lässt beides weg: `eq` liest sich dann als leer. Ein dynamisches
+  Band trägt außerdem `threshold_db` unter 0; fehlt das Feld oder ist es 0, ist das Band ein gewöhnliches.
 - `limit_on`, `limit_db` und `limit_lookahead_ms` sind Schalter, Decke und Vorschau des Limiters eines Busses;
   `limited_db` sagt, wie weit er seit dem letzten Zustand höchstens zurückgedreht hat, 0 heißt gar nicht. Um die Vorschau
   verlässt der Ton den Bus später. Ein pult, das noch keinen Limiter kennt, lässt die Felder weg: `limit_on` liest sich
@@ -162,11 +163,13 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `bus/<name>/eq/<band>/freq` | Zahl, 20 bis 20000 Hz |
 | `bus/<name>/eq/<band>/q` | Zahl, 0.1 bis 10 |
 | `bus/<name>/eq/<band>/kind` | `"low"`, `"bell"` oder `"high"` |
+| `bus/<name>/eq/<band>/threshold` | Zahl, -60 bis 0 dB (aus): das Band ist dynamisch, sein Gain kommt erst über diesem Pegel in seinem Bereich herein |
 | `matrix/<n>/<bus>` | `true` oder `false` |
 | `input/<n>/automix` | `true` oder `false`: im Automixer |
 | `input/<n>/automix/weight` | Zahl, -12 bis 12 dB: Vorrang im Automixer |
 | `input/<n>/eq`, `input/<n>/eq/pre`, `input/<n>/limit` | `true` oder `false`: EQ des Eingangs, EQ vor Gate und Kompressor, Limiter des Eingangs |
 | `input/<n>/eq/<band>/gain`, `/freq`, `/q`, `/kind` | wie am Bus: -24 bis 24 dB, 20 bis 20000 Hz, 0.1 bis 10, `"low"`/`"bell"`/`"high"` |
+| `input/<n>/eq/<band>/threshold` | wie am Bus: -60 bis 0 dB (aus) |
 | `input/<n>/limit/ceiling` | Zahl, -20 bis 0 dB; der Limiter eines Eingangs hat keine Vorschau |
 | `input/<n>/polarity` | `true` oder `false`: Polarität umgedreht |
 | `input/<n>/hpf` | Zahl, 20 (aus) bis 1000 Hz: Hochpass des Kanalzugs |

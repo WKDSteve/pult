@@ -1885,6 +1885,7 @@ mod tests {
                 freq_hz: 200.0,
                 gain_db: linear_to_db(2.0),
                 q: 0.7,
+                threshold_db: 0.0,
             },
         );
         let out = record(&mut mixer, &mut capture, 0.25, 20);
@@ -1914,6 +1915,7 @@ mod tests {
                 freq_hz: 200.0,
                 gain_db: linear_to_db(2.0),
                 q: 0.7,
+                threshold_db: 0.0,
             },
         );
         mixer.resume(1);

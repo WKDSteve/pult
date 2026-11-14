@@ -744,6 +744,7 @@ fn band_op(change: BandChange) -> (&'static str, OpValue) {
         BandChange::Freq(hz) => ("freq", OpValue::Number(hz)),
         BandChange::Gain(db) => ("gain", OpValue::Number(db)),
         BandChange::Q(q) => ("q", OpValue::Number(q)),
+        BandChange::Threshold(db) => ("threshold", OpValue::Number(db)),
     }
 }
 
@@ -766,6 +767,9 @@ fn band_value(param: BandParam, value: &OpValue, address: &str) -> Result<Value,
         (BandParam::Gain, OpValue::Number(db)) => checked(BandChange::Gain(*db), Value::Boost(*db)),
         (BandParam::Freq, OpValue::Number(hz)) => checked(BandChange::Freq(*hz), Value::Freq(*hz)),
         (BandParam::Q, OpValue::Number(q)) => checked(BandChange::Q(*q), Value::Width(*q)),
+        (BandParam::Threshold, OpValue::Number(db)) => {
+            checked(BandChange::Threshold(*db), Value::Threshold(*db))
+        }
         _ => Err(format!("{address} takes a number")),
     }
 }

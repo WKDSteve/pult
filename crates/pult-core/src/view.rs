@@ -1709,7 +1709,8 @@ mod tests {
                 kind: BandKind::Peak,
                 freq_hz: 1000.0,
                 gain_db: 6.0,
-                q: 0.7
+                q: 0.7,
+                threshold_db: 0.0,
             }
         );
         assert_eq!(view.buses[0].eq, Band::all_flat());

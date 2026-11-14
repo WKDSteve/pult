@@ -124,29 +124,31 @@ impl Dial {
                 both_ways: false,
             }),
             Binding::Bus(_, BusParam::EqBand(band, param))
-            | Binding::Input(_, InputParam::EqBand(band, param)) => {
-                let start = Band::at(band);
-                match param {
-                    BandParam::Gain => Some(Self {
-                        span: Span::even(EQ_GAIN_DB),
-                        home: start.gain_db,
-                        both_ways: true,
-                    }),
-                    BandParam::Freq => Some(Self {
-                        span: Span::octaves(EQ_FREQ_HZ),
-                        home: start.freq_hz,
-                        both_ways: false,
-                    }),
-                    BandParam::Q => Some(Self {
-                        span: Span::octaves(EQ_Q),
-                        home: start.q,
-                        both_ways: false,
-                    }),
-                    BandParam::Kind => None,
-                }
-            }
+            | Binding::Input(_, InputParam::EqBand(band, param)) => Self::of_band(band, param),
             _ => None,
         }
+    }
+
+    /// The dial of a setting of band `band` of an equalizer; `None` for its kind, a word.
+    fn of_band(band: usize, param: BandParam) -> Option<Self> {
+        let start = Band::at(band);
+        let (span, home, both_ways) = match param {
+            BandParam::Gain => (Span::even(EQ_GAIN_DB), start.gain_db, true),
+            BandParam::Freq => (Span::octaves(EQ_FREQ_HZ), start.freq_hz, false),
+            BandParam::Q => (Span::octaves(EQ_Q), start.q, false),
+            // Down from the end where the band is not dynamic.
+            BandParam::Threshold => (
+                Span::even(pult_core::eq::EQ_THRESHOLD_DB),
+                start.threshold_db,
+                true,
+            ),
+            BandParam::Kind => return None,
+        };
+        Some(Self {
+            span,
+            home,
+            both_ways,
+        })
     }
 
     /// The dial of a setting of a de-esser: its threshold evenly, down from the end where it
@@ -232,6 +234,7 @@ pub fn number(value: Value) -> Option<f32> {
         | Value::Boost(number)
         | Value::Freq(number)
         | Value::Width(number)
+        | Value::Threshold(number)
         | Value::Ceiling(number)
         | Value::Lookahead(number)
         | Value::Percent(number)
@@ -252,6 +255,7 @@ fn with_number(value: Value, number: f32) -> Value {
         Value::Boost(_) => Value::Boost(number),
         Value::Freq(_) => Value::Freq(number),
         Value::Width(_) => Value::Width(number),
+        Value::Threshold(_) => Value::Threshold(number),
         Value::Ceiling(_) => Value::Ceiling(number),
         Value::Lookahead(_) => Value::Lookahead(number),
         Value::Percent(_) => Value::Percent(number),
@@ -278,6 +282,8 @@ pub fn format_value(value: Value) -> String {
         Value::Freq(hz) if hz >= 1000.0 => format!("{:.1}k", hz / 1000.0),
         Value::Freq(hz) => format!("{hz:.0}"),
         Value::Width(q) => format!("{q:.2}"),
+        Value::Threshold(db) if db >= pult_core::eq::EQ_THRESHOLD_DB.1 => "off".to_owned(),
+        Value::Threshold(db) => format!("{db:.0} dB"),
         Value::Duck(DuckChange::Depth(db)) if db <= 0.0 => "off".to_owned(),
         Value::Ceiling(db) | Value::Duck(DuckChange::Depth(db)) => format!("{db:.1} dB"),
         Value::Lookahead(ms) | Value::Delay(ms) => format!("{ms:.1} ms"),

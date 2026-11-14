@@ -271,6 +271,17 @@ pult run --profile meinprofil.toml --log abend.csv
   über Vollaussteuerung, fängt das der Limiter ab. Im Fenster liegen die Bänder auf dem
   Tab **EQ**, darunter je Bus die Kurve aller Bänder zusammen (20 Hz bis 20 kHz, ausgegraut bei ausgeschaltetem EQ); der Schalter **EQ** steht dort und im Kanalzug des Busses. Die Fernbedienung im Browser hat den Schalter
   und die Regler von Gate und Kompressor, die Bänder nicht.
+- **Dynamischer EQ:** Ein Band mit einer Schwelle (`threshold_db = -60..0` unter `[[bus.eq]]` oder `[[input.eq]]`,
+  `eq A1 2 threshold -30` im Lauf, 0 dB oder `eq A1 2 threshold off` nimmt sie weg) wirkt erst, wenn es in seinem
+  eigenen Bereich laut genug ist: Unter der Schwelle ist das Band flach, darüber kommt sein Gain herein, und 12 dB über
+  der Schwelle hat es ihn ganz. Ein Band mit -6 dB bei 3 kHz nimmt so nur die Stellen zurück, an denen eine Stimme dort
+  scharf wird, und lässt sie sonst, wie sie ist; ein Band mit +4 dB hebt nur, was da ist, und kein Rauschen in den
+  Pausen. Gehört wird vor dem Equalizer: eine Glocke hört durch einen Bandpass mit ihrer Frequenz und Breite, ein
+  Kuhschwanz durch einen Tief- oder Hochpass an seiner Frequenz. Ein lauter Bass bringt ein Band bei 4 kHz deshalb nicht
+  herein. Der Gain gleitet wie bei jeder anderen Änderung eines Bandes (rund 1 dB je Millisekunde), nichts springt;
+  zurück geht er mit 150 ms. Ratio und Zeiten sind fest. Von außen `bus/<name>/eq/<band>/threshold` und
+  `input/<n>/eq/<band>/threshold`, auch auf einem MIDI-Regler. Die Kurve im Fenster zeigt ein dynamisches Band mit
+  seinem ganzen Gain, also das, was es höchstens tut; einen Regler für die Schwelle hat das Fenster noch nicht.
 - **Limiter:** Jeder Bus hat hinter seinem Fader einen Limiter, von Anfang an eingeschaltet: Was den Bus verlässt, bleibt
   unter der Decke `limit_db` (Standard -0,3 dB, möglich -20 bis 0), für jedes Signal. Alle Kanäle werden gleich geregelt,
   das Stereobild bleibt. `limit_lookahead_ms` (Standard 1 ms, möglich 0 bis 5) ist die Vorschau: Er sieht eine Spitze

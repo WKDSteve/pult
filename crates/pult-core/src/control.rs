@@ -38,7 +38,8 @@
 //! eq <target> on|off     switch the equalizer of a bus or of an input
 //! eq <target> <band> <setting> <value>
 //!                        one setting of one of its bands: gain <dB>, freq <Hz>, q <width>,
-//!                        kind low|bell|high (eq A1 2 gain 6, eq 2 3 gain -4)
+//!                        kind low|bell|high (eq A1 2 gain 6, eq 2 3 gain -4); threshold
+//!                        <dB>|off makes it dynamic: its gain comes in above that level
 //! eq <input> pre|post    the equalizer of an input before its gate and compressor, or behind
 //! limit <target> on|off  switch the limiter of a bus or of an input
 //! limit <target> <dB>    its ceiling, -20 to 0 (limit A1 -3, limit 2 -6)
@@ -212,7 +213,9 @@ pfl on|off           solo on a monitor bus listens before the fader: a soloed in
 eq <target> on|off   switch the equalizer of a bus or of an input
 eq <target> <band> <setting> <value>
                      one setting of one of its 4 bands: gain <dB>, freq <Hz>, q <width>,
-                     kind low|bell|high (eq A1 2 gain 6, eq 2 1 kind bell)
+                     kind low|bell|high (eq A1 2 gain 6, eq 2 1 kind bell); threshold
+                     <dB>|off makes the band dynamic: its gain comes in only while its own
+                     range is louder than that, -60 to 0 (eq A1 2 threshold -30)
 eq <input> pre|post  the equalizer of an input before its gate and compressor (the compressor
                      then sees the equalized sound), or behind them, as it starts
 limit <target> on|off
@@ -743,10 +746,14 @@ fn send<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, Pa
 
 /// `eq <bus> on|off` or `eq <bus> <band> <setting> <value>`; the bus may have several words.
 fn equalizer<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
-    let usage = "usage: eq <bus or input> on|off, eq <bus or input> <band> gain|freq|q|kind \
-                 <value>, or eq <input> pre|post";
+    let usage = "usage: eq <bus or input> on|off, eq <bus or input> <band> \
+                 gain|freq|q|kind|threshold <value>, or eq <input> pre|post";
+    // `eq A1 2 threshold off` ends like `eq A1 off`, but sets a band.
+    let of_a_band =
+        matches!(rest, [.., _, _, setting, _] if setting.eq_ignore_ascii_case("threshold"));
     if let [name @ .., word] = rest
         && !name.is_empty()
+        && !of_a_band
     {
         let word = word.to_ascii_lowercase();
         let found = || target(&name.join(" "), names);
@@ -780,6 +787,10 @@ fn equalizer<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Comman
         "gain" => BandChange::Gain(number("gain in dB")?),
         "freq" => BandChange::Freq(number("frequency in Hz")?),
         "q" => BandChange::Q(number("width")?),
+        "threshold" if value.eq_ignore_ascii_case("off") => {
+            BandChange::Threshold(crate::eq::EQ_THRESHOLD_DB.1)
+        }
+        "threshold" => BandChange::Threshold(number("threshold in dB")?),
         "kind" => match BandKind::from_word(value) {
             Some(kind) => BandChange::Kind(kind),
             None => {
@@ -1031,6 +1042,25 @@ mod tests {
         assert!(bad("gate A1 3").contains("inputs only"));
         assert!(bad("comp 2 mix 40").contains("buses only"));
         assert!(bad("comp A1 mix lots").contains("takes a number"));
+    }
+
+    #[test]
+    fn a_band_gets_a_threshold_and_loses_it_again() {
+        assert_eq!(
+            ok("eq A1 2 threshold -30"),
+            Command::EqBand(0, 1, BandChange::Threshold(-30.0))
+        );
+        // It ends like `eq A1 off`, and still sets the band.
+        assert_eq!(
+            ok("eq A1 2 threshold OFF"),
+            Command::EqBand(0, 1, BandChange::Threshold(0.0))
+        );
+        assert_eq!(
+            ok("eq cable 3 Threshold -12.5"),
+            Command::InputEqBand(0, 2, BandChange::Threshold(-12.5))
+        );
+        assert!(bad("eq A1 2 threshold low").contains("is no threshold in dB"));
+        assert_eq!(ok("eq A1 off"), Command::Eq(0, false));
     }
 
     #[test]

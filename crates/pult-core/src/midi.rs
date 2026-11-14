@@ -239,6 +239,17 @@ fn keyed_span(binding: Binding) -> Option<Span> {
     }
 }
 
+/// The way of a knob over a setting of a band of an equalizer; `None` for its kind, a word.
+fn band_span(param: BandParam) -> Option<Span> {
+    match param {
+        BandParam::Gain => Some(Span::even(EQ_GAIN_DB)),
+        BandParam::Freq => Some(Span::octaves(EQ_FREQ_HZ)),
+        BandParam::Q => Some(Span::octaves(EQ_Q)),
+        BandParam::Threshold => Some(Span::even(crate::eq::EQ_THRESHOLD_DB)),
+        BandParam::Kind => None,
+    }
+}
+
 /// The kinds of thing a target can be.
 #[derive(Debug, Clone, PartialEq)]
 enum Param {
@@ -273,14 +284,10 @@ impl Param {
             Binding::Input(_, InputParam::Gate | InputParam::Comp)
             | Binding::Bus(_, BusParam::Comp) => Self::Knob(binding, Span::even(AMOUNT_RANGE)),
             Binding::Bus(_, BusParam::EqBand(_, band))
-            | Binding::Input(_, InputParam::EqBand(_, band)) => match band {
-                BandParam::Gain => Self::Knob(binding, Span::even(EQ_GAIN_DB)),
-                BandParam::Freq => Self::Knob(binding, Span::octaves(EQ_FREQ_HZ)),
-                BandParam::Q => Self::Knob(binding, Span::octaves(EQ_Q)),
-                BandParam::Kind => {
-                    return Err(format!("{target} is a word, which no control can say"));
-                }
-            },
+            | Binding::Input(_, InputParam::EqBand(_, band)) => {
+                let no_knob = || format!("{target} is a word, which no control can say");
+                Self::Knob(binding, band_span(band).ok_or_else(no_knob)?)
+            }
             Binding::Bus(_, BusParam::CompMix) => Self::Knob(binding, Span::even((0.0, 100.0))),
             Binding::Bus(_, BusParam::Multiband(param)) => Self::Knob(
                 binding,
@@ -670,6 +677,7 @@ impl Map {
                         | Value::Boost(number)
                         | Value::Freq(number)
                         | Value::Width(number)
+                        | Value::Threshold(number)
                         | Value::Ceiling(number)
                         | Value::Lookahead(number)
                         | Value::Delay(number),
