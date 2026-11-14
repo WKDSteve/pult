@@ -42,6 +42,7 @@ clicks, and with 2 when the run itself failed.
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import struct
@@ -59,6 +60,9 @@ SETTLE = 4.0
 # Seconds between two changes: each has room to settle, as in the offline test.
 STEP = 0.5
 # The devices of the silent setup (tools/load-run.py uses the same two).
+# How far below the tone's peak the floor of the quiet start must lie for a judgement to count.
+HEADROOM_DB = 30.0
+
 SILENT_TONE = "Voicemeeter In 4"
 SILENT_BUS = "Voicemeeter In 5"
 
@@ -154,6 +158,23 @@ def profile_text(bus, side_bus, source):
     parts.append(f"[[input]]\n{source_line}\nbuses = [{buses}]\n")
     parts.append(SCENES)
     return "\n".join(parts)
+
+
+def loud_floor(judgement):
+    """What `pult clicks` said about peak and floor when the floor is too near the peak to judge.
+
+    The floor comes from the quiet start of the recording. When something else plays on the
+    recorded device, that start is not quiet, the floor rises, and steps below it do not count:
+    the judgement would say "no clicks" whatever happened. Returns (peak, floor) in dBFS when the
+    floor is less than HEADROOM_DB below the peak, None when it is fine or not named.
+    """
+    found = re.search(r"peak (-?[0-9.]+|-inf) dBFS, floor (-?[0-9.]+|-inf) dBFS", judgement)
+    if not found:
+        return None
+    peak, floor = (float(value) for value in found.groups())
+    if floor > peak - HEADROOM_DB:
+        return peak, floor
+    return None
 
 
 def cut_a_piece(source, target, at_seconds):
@@ -283,6 +304,12 @@ def main():
     say(verdict.stdout.strip())
     if verdict.returncode not in (0, 1):
         print(f"click-run: {verdict.stderr.strip()}", file=sys.stderr)
+        return 2
+    loud = loud_floor(verdict.stdout)
+    if loud:
+        print(f"click-run: the start of the recording was not quiet (floor {loud[1]:.1f} dBFS, "
+              f"tone {loud[0]:.1f} dBFS): something else plays on the recorded device, and "
+              "nothing can be judged", file=sys.stderr)
         return 2
 
     # The probe: the same judgement must find a piece cut out while the tone ran steadily,

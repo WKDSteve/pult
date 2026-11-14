@@ -74,6 +74,25 @@ class Probe(unittest.TestCase):
                 click_run.cut_a_piece(source, pathlib.Path(folder) / "b.wav", 0.5)
 
 
+class Floor(unittest.TestCase):
+    LINE = ("21.00 s at 48000 Hz, 2 ch, judged from 6.56 s to 19.41 s: peak {} dBFS, "
+            "floor {} dBFS (from the quiet start), steepest step 0.00 of what a 103 Hz tone can do")
+
+    def test_a_floor_near_the_tone_cannot_be_judged(self):
+        # What a forgotten tone on the recorded device did to a run: "no clicks", blindly.
+        self.assertEqual(click_run.loud_floor(self.LINE.format("-5.0", "-13.8")), (-5.0, -13.8))
+        self.assertEqual(click_run.loud_floor(self.LINE.format("-5.0", "-34.9")), (-5.0, -34.9))
+
+    def test_a_quiet_start_is_fine(self):
+        self.assertIsNone(click_run.loud_floor(self.LINE.format("-5.0", "-80.0")))
+        self.assertIsNone(click_run.loud_floor(self.LINE.format("-5.0", "-inf")))
+        self.assertIsNone(click_run.loud_floor(self.LINE.format("-5.0", "-35.0")))
+
+    def test_a_line_without_levels_says_nothing(self):
+        self.assertIsNone(click_run.loud_floor("no clicks"))
+        self.assertIsNone(click_run.loud_floor(""))
+
+
 class Port(unittest.TestCase):
     def test_a_free_port_is_a_port(self):
         self.assertTrue(1024 <= click_run.free_port() <= 65_535)
