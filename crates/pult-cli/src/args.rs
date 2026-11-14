@@ -46,6 +46,7 @@ USAGE:
              [--log <FILE.csv>]
     pult run --profile <FILE.toml> [--log <FILE.csv>]
     pult tone --to <OUTPUT> [--gain-db <DB>] [--freq <HZ>]
+              (a test tone: it ends at once, without a fade, and may click there)
     pult record --from <INPUT|out:OUTPUT> --to <FILE.wav> [--seconds <S>]
     pult clicks <FILE.wav> [--freq <HZ>] [--quiet <S>] [--skip <S>] [--until <S>]
     pult roundtrip --to <OUTPUT> --from <INPUT|out:OUTPUT> [--count <N>] [--gap-ms <MS>]
