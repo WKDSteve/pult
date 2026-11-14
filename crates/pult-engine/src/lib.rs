@@ -334,6 +334,9 @@ pub struct InputSpec {
     /// Its sidechain ([`pult_core::sidechain`]): what its gate and compressor listen to;
     /// themselves at first.
     pub sidechain: pult_core::sidechain::SidechainSettings,
+    /// Its de-esser ([`pult_core::deess`]): the band of its sibilants goes down above a level;
+    /// off at first.
+    pub deess: pult_core::deess::DeessSettings,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
     pub buses: Vec<usize>,
 }
@@ -405,6 +408,7 @@ impl InputSpec {
             limit_db: pult_core::limiter::LimitSettings::INPUT.ceiling_db,
             duck: pult_core::duck::DuckSettings::default(),
             sidechain: pult_core::sidechain::SidechainSettings::default(),
+            deess: pult_core::deess::DeessSettings::default(),
             buses,
         }
     }
@@ -572,6 +576,9 @@ impl RouteSpec {
                 pult_core::sidechain::check_key(index, sidechain.key, self.inputs.len())
             });
             if let Err(why) = sidechain {
+                return invalid(format!("input \"{}\": {why}", input.device));
+            }
+            if let Err(why) = input.deess.checked() {
                 return invalid(format!("input \"{}\": {why}", input.device));
             }
             for (what, amount) in [("gate", input.gate), ("comp", input.comp)] {
@@ -1325,6 +1332,7 @@ fn make_rings(
     }
     controls.duck.set_all(input.duck);
     controls.sidechain.set_all(input.sidechain);
+    controls.deess.set_all(input.deess);
     let (target, band, capacity) = buffering(sample_rate, rings.latency_ms);
     let ring = InputConfig {
         channels: usize::from(channels),

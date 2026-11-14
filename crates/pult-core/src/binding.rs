@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use crate::deess::{DeessChange, DeessParam};
 use crate::duck::{DuckChange, DuckParam};
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
@@ -52,6 +53,8 @@ pub enum InputParam {
     Duck(DuckParam),
     /// One setting of its sidechain: what its gate and compressor listen to.
     Sidechain(SidechainParam),
+    /// One setting of its de-esser.
+    Deess(DeessParam),
     /// Whether it is a talkback microphone: silent until someone talks.
     Talkback,
     /// The switch of its equalizer.
@@ -225,6 +228,8 @@ pub enum Value {
     Duck(DuckChange),
     /// One setting of a sidechain, as the change that sets it.
     Sidechain(SidechainChange),
+    /// One setting of a de-esser, as the change that sets it.
+    Deess(DeessChange),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -386,6 +391,7 @@ impl Binding {
                     InputParam::Width => "width",
                     InputParam::Duck(duck) => duck.address(),
                     InputParam::Sidechain(param) => param.address(),
+                    InputParam::Deess(param) => param.address(),
                     InputParam::Talkback => "talkback",
                     InputParam::Eq | InputParam::EqBand(..) => "eq",
                     InputParam::EqPre => "eq/pre",
@@ -450,6 +456,7 @@ impl Binding {
                     InputParam::Width => Value::Percent(input.strip.width),
                     InputParam::Duck(duck) => Value::Duck(duck.read(&input.duck)),
                     InputParam::Sidechain(param) => Value::Sidechain(param.read(&input.sidechain)),
+                    InputParam::Deess(param) => Value::Deess(param.read(&input.deess)),
                     InputParam::Talkback => Value::Switch(input.talkback),
                     InputParam::Eq => Value::Switch(input.eq_on),
                     InputParam::EqBand(band, param) => param.read(input.eq.get(band)?),
@@ -614,9 +621,14 @@ impl Binding {
     }
 
     /// [`Self::write`] for what belongs to listening and talking: dim and talkback; and for the
-    /// sidechain of an input.
+    /// sidechain and the de-esser of an input.
     fn write_monitoring(self, value: Value) -> Option<Action> {
         Some(match (self, value) {
+            (Self::Input(input, InputParam::Deess(param)), Value::Deess(change))
+                if change.param() == param =>
+            {
+                Action::InputDeess { input, change }
+            }
             (Self::Input(input, InputParam::Sidechain(param)), Value::Sidechain(change))
                 if change.param() == param =>
             {
@@ -695,6 +707,9 @@ impl Binding {
                     SidechainParam::Lpf => "sidechain low-pass",
                 };
                 format!("{} {what}", input(index))
+            }
+            Self::Input(index, InputParam::Deess(param)) => {
+                format!("{} {}", input(index), param.title())
             }
             Self::Input(index, InputParam::Talkback) => format!("{} talkback", input(index)),
             Self::Input(index, InputParam::Eq) => format!("{} equalizer", input(index)),
@@ -792,10 +807,15 @@ fn input_param(word: &str) -> Option<InputParam> {
             let index = place(number).filter(|&index| index < EQ_BANDS)?;
             InputParam::EqBand(index, BandParam::from_word(setting)?)
         }
-        other => match SidechainParam::from_address(other) {
-            Some(param) => InputParam::Sidechain(param),
-            None => InputParam::Duck(DuckParam::from_address(other)?),
-        },
+        other => {
+            if let Some(param) = SidechainParam::from_address(other) {
+                InputParam::Sidechain(param)
+            } else if let Some(param) = DeessParam::from_address(other) {
+                InputParam::Deess(param)
+            } else {
+                InputParam::Duck(DuckParam::from_address(other)?)
+            }
+        }
     })
 }
 
@@ -913,6 +933,14 @@ mod tests {
                 "input/2/sidechain/lpf",
                 Binding::Input(1, InputParam::Sidechain(SidechainParam::Lpf)),
             ),
+            (
+                "input/2/deess/threshold",
+                Binding::Input(1, InputParam::Deess(DeessParam::Threshold)),
+            ),
+            (
+                "input/2/deess/freq",
+                Binding::Input(1, InputParam::Deess(DeessParam::Freq)),
+            ),
             ("bus/A1/gain", Binding::Bus(0, BusParam::Gain)),
             ("bus/A1/mute", Binding::Bus(0, BusParam::Mute)),
             ("bus/A1/meter", Binding::Bus(0, BusParam::Meter)),
@@ -984,6 +1012,35 @@ mod tests {
             send.write(Value::Switch(true)),
             None,
             "a send takes a level"
+        );
+    }
+
+    #[test]
+    fn a_de_esser_reads_and_writes_its_settings() {
+        let mut view = FakeDesk::new().view();
+        view.inputs[0].deess.apply(DeessChange::Threshold(-30.0));
+        let threshold = Binding::Input(0, InputParam::Deess(DeessParam::Threshold));
+        let freq = Binding::Input(0, InputParam::Deess(DeessParam::Freq));
+        assert_eq!(
+            threshold.read(&view),
+            Some(Value::Deess(DeessChange::Threshold(-30.0)))
+        );
+        assert_eq!(
+            freq.read(&view),
+            Some(Value::Deess(DeessChange::Freq(6000.0)))
+        );
+        assert_eq!(
+            freq.write(Value::Deess(DeessChange::Freq(8000.0))),
+            Some(Action::InputDeess {
+                input: 0,
+                change: DeessChange::Freq(8000.0)
+            })
+        );
+        // A value of another setting is not for this address.
+        assert_eq!(freq.write(Value::Deess(DeessChange::Threshold(-3.0))), None);
+        assert_eq!(
+            threshold.title(&view),
+            format!("{} de-esser threshold", view.inputs[0].name)
         );
     }
 

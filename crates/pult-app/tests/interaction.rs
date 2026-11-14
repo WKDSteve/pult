@@ -471,6 +471,30 @@ fn the_equalizer_view_sets_the_ducker_of_an_input() {
 }
 
 #[test]
+fn the_equalizer_view_sets_the_de_esser_of_an_input() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("EQ").click();
+    harness.run_steps(2);
+    let name = harness.state_mut().desk.view().inputs[SPOTIFY]
+        .shown_name()
+        .to_owned();
+    assert!(!desk_view(&mut harness).inputs[SPOTIFY].deess.is_on());
+    harness
+        .get_by_label(&format!("{name} de-esser threshold"))
+        .set_value_accesskit(-30.0);
+    harness
+        .get_by_label(&format!("{name} de-esser frequency"))
+        .set_value_accesskit(8000.0);
+    let view = desk_view(&mut harness);
+    let deess = view.inputs[SPOTIFY].deess;
+    assert!((deess.threshold_db + 30.0).abs() < 0.5, "{deess:?}");
+    assert!((deess.freq_hz - 8000.0).abs() < 0.5, "{deess:?}");
+    assert!(deess.is_on());
+    assert!(!view.inputs[0].deess.is_on(), "only this input");
+}
+
+#[test]
 fn the_equalizer_view_sets_the_sidechain_of_an_input() {
     let mut harness = harness();
     harness.run_steps(2);

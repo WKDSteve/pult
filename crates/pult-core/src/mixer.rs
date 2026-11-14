@@ -117,6 +117,10 @@ pub struct InputControls {
     pub limited: PeakMeter,
     /// What gate and compressor listen to ([`crate::sidechain`]); themselves at first.
     pub sidechain: crate::sidechain::SidechainControls,
+    /// The de-esser behind the compressor ([`crate::deess`]); off at first.
+    pub deess: crate::deess::DeessControls,
+    /// The most the de-esser took from its band since the desk last read it, in dB (positive).
+    pub deess_reduction: PeakMeter,
     /// The ducker behind the compressor ([`crate::duck`]); off at first.
     pub duck: crate::duck::DuckControls,
     /// The most the ducker took away since the desk last read it, in dB (positive).
@@ -150,6 +154,8 @@ impl Default for InputControls {
             limiter: LimiterControls::default(),
             limited: PeakMeter::default(),
             sidechain: crate::sidechain::SidechainControls::default(),
+            deess: crate::deess::DeessControls::default(),
+            deess_reduction: PeakMeter::default(),
             duck: crate::duck::DuckControls::default(),
             duck_reduction: PeakMeter::default(),
             keys: OnceLock::new(),

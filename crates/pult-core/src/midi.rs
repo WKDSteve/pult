@@ -223,10 +223,16 @@ pub struct MidiBinding {
     pub target: String,
 }
 
-/// The way of a knob over a setting of a ducker (evenly) or a filter of a sidechain (by
-/// octaves); `None` for their keys, which name an input, and for any other address.
+/// The way of a knob over a setting of a ducker (evenly), a filter of a sidechain (by
+/// octaves) or a setting of a de-esser (its threshold evenly, its corner by octaves); `None`
+/// for the keys, which name an input, and for any other address.
 fn keyed_span(binding: Binding) -> Option<Span> {
+    use crate::deess::DeessParam;
     match binding {
+        Binding::Input(_, InputParam::Deess(param)) => Some(match param {
+            DeessParam::Threshold => Span::even(param.range()),
+            DeessParam::Freq => Span::octaves(param.range()),
+        }),
         Binding::Input(_, InputParam::Duck(duck)) => duck.range().map(Span::even),
         Binding::Input(_, InputParam::Sidechain(param)) => param.range().map(Span::octaves),
         _ => None,
@@ -310,7 +316,10 @@ impl Param {
             Binding::Input(_, InputParam::Width) => {
                 Self::Knob(binding, Span::even(crate::strip::WIDTH_RANGE))
             }
-            Binding::Input(_, InputParam::Duck(_) | InputParam::Sidechain(_)) => {
+            Binding::Input(
+                _,
+                InputParam::Duck(_) | InputParam::Sidechain(_) | InputParam::Deess(_),
+            ) => {
                 let no_knob = || format!("{target} names an input, which no control can say");
                 Self::Knob(binding, keyed_span(binding).ok_or_else(no_knob)?)
             }
@@ -667,6 +676,7 @@ impl Map {
                     ) => span.pos(number),
                     Some(Value::Duck(change)) => span.pos(change.number()),
                     Some(Value::Sidechain(change)) => span.pos(change.number()),
+                    Some(Value::Deess(change)) => span.pos(change.number()),
                     _ => return Step::default(),
                 };
                 let to_value = |pos: f32| OpValue::Number(span.value(pos));

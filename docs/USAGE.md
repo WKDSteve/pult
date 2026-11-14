@@ -30,7 +30,7 @@ Den Verstärker zuerst leise drehen, dann:
 pult tone --to Focusrite
 ```
 
-Spielt einen Sinus mit 440 Hz bei -30 dB, bis Enter gedrückt wird. Lauter oder anders: `--gain-db -20`, `--freq 1000`. Kommt der Ton aus den Boxen, stimmt der Weg Scarlett → Verstärker.
+Spielt einen Sinus mit 440 Hz bei -30 dB, bis Enter gedrückt wird. Lauter oder anders: `--gain-db -20`, `--freq 1000`. Kommt der Ton aus den Boxen, stimmt der Weg Scarlett → Verstärker. Der Ton endet hart, ohne Ausblenden, und kann dabei knacken: er ist ein Prüfton und bleibt so (eine Route dagegen blendet an ihrem Ende aus).
 
 Zum Messen gibt es zwei Befehle dazu. `pult record --from <Gerät> --to aufnahme.wav --seconds 20` nimmt ein Eingangsgerät auf, mit `out:` vor dem Namen das, was ein Ausgang gerade spielt (`--from "out:Focusrite"`, unter Windows ein Loopback; spielt dort nichts, kommt auch nichts, und die Aufnahme wird kürzer); Enter beendet sie früher. `pult clicks aufnahme.wav` sucht in der Aufnahme eines gleichmäßigen Testtons (`--freq`, Standard 103 Hz) nach Knacksern: Sprüngen von einem Sample zum nächsten, die steiler sind, als der Ton bei seinem Pegel sein kann. `--quiet 2` sagt, dass die ersten 2 s noch keinen Ton enthalten (ihr Rauschen setzt den Boden, wichtig bei einer Aufnahme über Wandler und Kabel), `--skip` und `--until` grenzen ein, was beurteilt wird. Status 0 heißt kein Knackser, 1 Knackser, 2 nicht beurteilbar. Beides zusammen, mit einer Folge von Änderungen an einem laufenden pult, fährt `tools/click-run.py` (siehe README).
 
@@ -252,6 +252,18 @@ pult run --profile meinprofil.toml --log abend.csv
   und drückt nichts, und fällt sein Gerät aus, gilt er nach 250 ms als still. Mit einem Schlüssel wirken die Filter
   nicht: von ihm gibt es nur den Pegel. Im Fenster steht der Sidechain in der Ansicht EQ unter der Kurve jedes
   Eingangs, über dem Ducker: SELF oder eine Taste je Eingang, daneben HPF und LPF.
+- **De-Esser:** Ein Kompressor hinter einem Sidechain-Hochpass hört nur die Zischlaute, drückt bei ihnen aber den ganzen
+  Ton. Der De-Esser eines Eingangs nimmt nur das Band der Zischlaute zurück: Der Ton wird an einer Frequenz geteilt
+  (`deess_hz = 2000..12000` am Eingang, am Anfang 6000; `deess 1 freq 7000` im Lauf), der Teil darüber geht durch einen
+  schnellen Kompressor (6:1), der Teil darunter bleibt, wie er ist. Die Schwelle (`deess_db = -60..0`, `deess 1 -30`)
+  ist der Pegel dieses oberen Bandes, ab dem zurückgenommen wird; 0 dB ist aus (`deess 1 off`), und so steht er am
+  Anfang. Von außen `input/<n>/deess/threshold` und `/freq`; im Zustand sagt `deess_reduction_db`, wie viel er seit dem
+  letzten Zustand höchstens genommen hat. Er sitzt hinter dem Kompressor des Eingangs (der Zischlaute lauter macht) und
+  vor dem Equalizer, wenn der hinter Gate und Kompressor steht, und verzögert nichts. Die Weiche ist dieselbe wie im
+  Multiband-Kompressor (Linkwitz-Riley, vierte Ordnung): unter der Schwelle ändert sich nur die Phase, nicht der Pegel.
+  Wer denselben Ton über zwei Eingänge mischt (zwei Mikrofone an einer Quelle) und nur einen davon de-esst, hört diese
+  Phase als leichte Färbung um die Trennfrequenz. Ein- und Ausschalten blendet in 5 ms über, nichts knackt. Im Fenster
+  steht er in der Ansicht EQ unter dem Sidechain: THR und HZ, davor wie viel er gerade nimmt.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil

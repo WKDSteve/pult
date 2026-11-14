@@ -113,6 +113,8 @@ fn showcase_inputs(t: f64) -> Vec<InputView> {
                 gate_open: true,
                 comp_reduction_db: [4.5, 1.2, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 sidechain: pult_core::sidechain::SidechainSettings::default(),
+                deess: pult_core::deess::DeessSettings::default(),
+                deess_reduction_db: 0.0,
                 duck: pult_core::duck::DuckSettings::default(),
                 duck_reduction_db: 0.0,
                 strip: showcase_strip(i),
@@ -363,8 +365,11 @@ fn equalizer_inputs() {
     view.buses[0].delay_ms = 12.5;
     // The first one compresses by the top of its own sound only.
     view.inputs[0].sidechain.hpf_hz = 4000.0;
+    // And its de-esser takes its sibilants down now.
+    view.inputs[0].deess.threshold_db = -28.0;
+    view.inputs[0].deess_reduction_db = 6.5;
     let mut harness = Harness::builder()
-        .with_size(vec2(2000.0, 1100.0))
+        .with_size(vec2(2000.0, 1230.0))
         .with_pixels_per_point(1.5)
         .build_ui(move |ui| {
             Theme::current().apply(ui.ctx());

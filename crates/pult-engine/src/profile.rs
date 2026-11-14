@@ -69,6 +69,9 @@
 //! sidechain_by = 2             # optional: its gate and compressor listen to input 2
 //! sidechain_hpf_hz = 20        # optional, 20 (off) to 10000: a high-pass before its detectors
 //! sidechain_lpf_hz = 20000     # optional, 100 to 20000 (off): a low-pass before them
+//! deess_db = -30               # optional, -60 to 0 (off): its de-esser turns the band of the
+//!                              # sibilants down while that band is above this level
+//! deess_hz = 6000              # optional, 2000 to 12000: where that band begins
 //!
 //! [[input.eq]]                 # optional: one band of this input's equalizer, as [[bus.eq]]
 //! band = 1
@@ -105,6 +108,7 @@ use serde::Deserialize;
 
 use std::fmt::Write as _;
 
+use pult_core::deess::DeessSettings;
 use pult_core::duck::{DuckChange, DuckSettings};
 use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitSettings};
@@ -293,9 +297,22 @@ struct InputEntry {
     sidechain_by: Option<usize>,
     sidechain_hpf_hz: Option<f32>,
     sidechain_lpf_hz: Option<f32>,
+    deess_db: Option<f32>,
+    deess_hz: Option<f32>,
 }
 
 impl InputEntry {
+    /// Its de-esser, with both numbers checked.
+    fn deess(&self, what: &str) -> Result<DeessSettings, ProfileError> {
+        let neutral = DeessSettings::default();
+        DeessSettings {
+            threshold_db: self.deess_db.unwrap_or(neutral.threshold_db),
+            freq_hz: self.deess_hz.unwrap_or(neutral.freq_hz),
+        }
+        .checked()
+        .map_err(|why| ProfileError(format!("{what}: {why}")))
+    }
+
     /// Its sidechain, with every corner checked; the key is checked with the route
     /// ([`RouteSpec::validate`]).
     fn sidechain(&self, what: &str) -> Result<SidechainSettings, ProfileError> {
@@ -638,6 +655,7 @@ fn inputs(entries: Vec<InputEntry>, buses: &[BusSpec]) -> Result<Vec<InputSpec>,
         };
         let duck = entry.duck(&what)?;
         let sidechain = entry.sidechain(&what)?;
+        let deess = entry.deess(&what)?;
         inputs.push(InputSpec {
             device: name,
             kind,
@@ -667,6 +685,7 @@ fn inputs(entries: Vec<InputEntry>, buses: &[BusSpec]) -> Result<Vec<InputSpec>,
             limit_db,
             duck,
             sidechain,
+            deess,
             buses: routed,
         });
     }
@@ -1044,6 +1063,7 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
     }
     render_duck(text, &input.duck);
     render_sidechain(text, &input.sidechain);
+    render_deess(text, input.deess);
     render_input_eq(text, input);
 }
 
@@ -1075,6 +1095,18 @@ fn render_input_eq(text: &mut String, input: &InputSpec) {
                 band.q
             );
         }
+    }
+}
+
+/// The lines of a de-esser that is not as it starts.
+#[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+fn render_deess(text: &mut String, deess: DeessSettings) {
+    let neutral = DeessSettings::default();
+    if deess.threshold_db != neutral.threshold_db {
+        let _ = writeln!(text, "deess_db = {}", deess.threshold_db);
+    }
+    if deess.freq_hz != neutral.freq_hz {
+        let _ = writeln!(text, "deess_hz = {}", deess.freq_hz);
     }
 }
 
@@ -1209,6 +1241,13 @@ fn set_strip(table: &mut Table, strip: &StripSettings) {
     set_number_from(table, "lpf_hz", strip.lpf_hz, neutral.lpf_hz);
     set_number_from(table, "delay_ms", strip.delay_ms, neutral.delay_ms);
     set_number_from(table, "width", strip.width, neutral.width);
+}
+
+/// The de-esser of an input into its table.
+fn set_deess(table: &mut Table, deess: DeessSettings) {
+    let neutral = DeessSettings::default();
+    set_number_from(table, "deess_db", deess.threshold_db, neutral.threshold_db);
+    set_number_from(table, "deess_hz", deess.freq_hz, neutral.freq_hz);
 }
 
 /// The sidechain of an input into its table.
@@ -1389,6 +1428,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         set_bands(table, &input.eq)?;
         set_duck(table, &input.duck);
         set_sidechain(table, &input.sidechain);
+        set_deess(table, input.deess);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
     let text = file.to_string();

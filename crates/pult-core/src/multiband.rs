@@ -289,27 +289,27 @@ impl MultibandControls {
 
 /// A Linkwitz-Riley filter of the fourth order for one channel: two Butterworth filters in a row.
 #[derive(Debug, Clone, Copy, Default)]
-struct Pair([Biquad; 2]);
+pub(crate) struct Pair([Biquad; 2]);
 
 impl Pair {
-    fn low_pass(&mut self, hz: f32, rate: f32) {
+    pub(crate) fn low_pass(&mut self, hz: f32, rate: f32) {
         for filter in &mut self.0 {
             filter.low_pass(hz, rate);
         }
     }
 
-    fn high_pass(&mut self, hz: f32, rate: f32) {
+    pub(crate) fn high_pass(&mut self, hz: f32, rate: f32) {
         for filter in &mut self.0 {
             filter.high_pass(hz, rate);
         }
     }
 
-    fn next(&mut self, x: f32) -> f32 {
+    pub(crate) fn next(&mut self, x: f32) -> f32 {
         let once = self.0[0].next(x);
         self.0[1].next(once)
     }
 
-    fn start_over(&mut self) {
+    pub(crate) fn start_over(&mut self) {
         self.0.iter_mut().for_each(Biquad::start_over);
     }
 }

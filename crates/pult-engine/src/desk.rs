@@ -158,6 +158,7 @@ impl EngineDesk {
             Action::InputStrip { input, change } => self.running.strip(input, change),
             Action::InputDuck { input, change } => self.running.duck(input, change),
             Action::InputSidechain { input, change } => self.running.sidechain(input, change),
+            Action::InputDeess { input, change } => self.running.deess(input, change),
             Action::InputAutomixWeight { input, db } => self.running.automix(input, None, Some(db)),
             Action::Send {
                 input,
@@ -255,6 +256,8 @@ fn input_view(input: &crate::RunningInput, spec: &crate::InputSpec, solo: bool) 
         limited_db: input.controls.limited.take(),
         duck: spec.duck,
         sidechain: spec.sidechain,
+        deess: spec.deess,
+        deess_reduction_db: input.controls.deess_reduction.take(),
         duck_reduction_db: input.controls.duck_reduction.take(),
         buses: input
             .routes

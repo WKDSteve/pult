@@ -8,6 +8,7 @@ use std::f32::consts::PI;
 use eframe::egui::{
     Align, Layout, Response, RichText, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, vec2,
 };
+use pult_core::deess::{DeessChange, DeessParam};
 use pult_core::duck::{DuckChange, DuckParam, DuckSettings};
 use pult_core::eq::{Band, EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
 use pult_core::limiter::{
@@ -68,6 +69,7 @@ impl Dial {
             }),
             Binding::Input(_, InputParam::Duck(param)) => Self::of_ducker(param),
             Binding::Input(_, InputParam::Sidechain(param)) => Self::of_sidechain(param),
+            Binding::Input(_, InputParam::Deess(param)) => Some(Self::of_deess(param)),
             // A bus is held back as far as an input: both line one thing up with another.
             Binding::Input(_, InputParam::Delay) | Binding::Bus(_, BusParam::Delay) => Some(Self {
                 span: Span::even((0.0, MAX_DELAY_MS)),
@@ -147,6 +149,24 @@ impl Dial {
         }
     }
 
+    /// The dial of a setting of a de-esser: its threshold evenly, down from the end where it
+    /// is off, its corner by octaves around where it starts.
+    fn of_deess(param: DeessParam) -> Self {
+        let range = param.range();
+        match param {
+            DeessParam::Threshold => Self {
+                span: Span::even(range),
+                home: range.1,
+                both_ways: true,
+            },
+            DeessParam::Freq => Self {
+                span: Span::octaves(range),
+                home: pult_core::deess::DeessSettings::default().freq_hz,
+                both_ways: true,
+            },
+        }
+    }
+
     /// The dial of a filter of a sidechain, by octaves from the end where it is off; `None` for
     /// its key, which is an input.
     fn of_sidechain(param: SidechainParam) -> Option<Self> {
@@ -219,6 +239,7 @@ pub fn number(value: Value) -> Option<f32> {
         Value::Duck(DuckChange::Key(_)) | Value::Sidechain(SidechainChange::Key(_)) => None,
         Value::Duck(change) => Some(change.number()),
         Value::Sidechain(change) => Some(change.number()),
+        Value::Deess(change) => Some(change.number()),
         _ => None,
     }
 }
@@ -241,6 +262,7 @@ fn with_number(value: Value, number: f32) -> Value {
         Value::Sidechain(change) if change.param() != SidechainParam::Key => {
             Value::Sidechain(change.param().change(number))
         }
+        Value::Deess(change) => Value::Deess(change.param().change(number)),
         other => other,
     }
 }
@@ -260,7 +282,13 @@ pub fn format_value(value: Value) -> String {
         Value::Ceiling(db) | Value::Duck(DuckChange::Depth(db)) => format!("{db:.1} dB"),
         Value::Lookahead(ms) | Value::Delay(ms) => format!("{ms:.1} ms"),
         Value::Percent(percent) => format!("{percent:.0} %"),
-        Value::Duck(DuckChange::Threshold(db)) => format!("{db:.0} dB"),
+        Value::Deess(DeessChange::Threshold(db)) if db >= pult_core::deess::THRESHOLD_DB.1 => {
+            "off".to_owned()
+        }
+        Value::Deess(DeessChange::Freq(hz)) => format_value(Value::Freq(hz)),
+        Value::Duck(DuckChange::Threshold(db)) | Value::Deess(DeessChange::Threshold(db)) => {
+            format!("{db:.0} dB")
+        }
         Value::Duck(DuckChange::Attack(ms) | DuckChange::Hold(ms) | DuckChange::Release(ms)) => {
             format!("{ms:.0} ms")
         }
@@ -613,6 +641,31 @@ mod tests {
             "-40 dB"
         );
         assert_eq!(format_value(Value::Duck(DuckChange::Hold(400.0))), "400 ms");
+    }
+
+    #[test]
+    fn a_de_esser_has_a_dial_for_its_threshold_and_its_corner() {
+        let at = |param| Binding::Input(0, InputParam::Deess(param));
+        let threshold = Dial::of(at(DeessParam::Threshold)).expect("a dial");
+        assert_eq!(threshold.home, 0.0);
+        assert!(threshold.both_ways);
+        let freq = Dial::of(at(DeessParam::Freq)).expect("a dial");
+        assert_eq!(freq.home, 6000.0);
+        let off = Value::Deess(DeessChange::Threshold(0.0));
+        assert_eq!(format_for(at(DeessParam::Threshold), off), "off");
+        assert_eq!(
+            with_number(off, -30.0),
+            Value::Deess(DeessChange::Threshold(-30.0))
+        );
+        assert_eq!(format_value(with_number(off, -30.0)), "-30 dB");
+        assert_eq!(
+            format_value(Value::Deess(DeessChange::Freq(7000.0))),
+            "7.0k"
+        );
+        assert_eq!(
+            number(Value::Deess(DeessChange::Freq(7000.0))),
+            Some(7000.0)
+        );
     }
 
     #[test]

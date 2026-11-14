@@ -23,6 +23,10 @@
 //!                        <input> off lets them listen to the input itself again
 //! sidechain <input> hpf|lpf <Hz>|off
 //!                        filters before its detectors only, 20 to 10000 and 100 to 20000
+//! deess <input> <dB>|off
+//!                        the de-esser of an input: the band of its sibilants goes down above
+//!                        this level, -60 to 0 (0 is off); deess <input> freq <Hz> moves the
+//!                        corner, 2000 to 12000
 //! mb <bus> low|mid|high <0..10>
 //!                        the multiband compressor of a bus, one knob per band; mb <bus> split
 //!                        low|high <Hz> moves the corners between them
@@ -57,6 +61,7 @@
 
 use std::fmt;
 
+use crate::deess::DeessChange;
 use crate::duck::DuckChange;
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
@@ -131,6 +136,8 @@ pub enum Command {
     Duck(usize, DuckChange),
     /// Changes one setting of the sidechain of an input.
     Sidechain(usize, SidechainChange),
+    /// Changes one setting of the de-esser of an input.
+    Deess(usize, DeessChange),
     /// Takes an input into the automixer or out of it.
     Automix(usize, bool),
     /// Sets the priority of an input in the automixer in dB.
@@ -187,6 +194,10 @@ sidechain <input> by <key>
 sidechain <input> hpf|lpf <Hz>|off
                      filters before its detectors only, the sound stays as it is: a high-pass,
                      20 to 10000, and a low-pass, 100 to 20000 (sidechain 1 hpf 4000)
+deess <input> <dB>|off
+                     the de-esser of an input: only the band of its sibilants goes down while
+                     it is above this level, -60 to 0 (deess 1 -30; 0 is off); deess <input>
+                     freq <Hz> moves the corner of that band, 2000 to 12000
 mb <bus> low|mid|high <0..10>
                      the multiband compressor of a bus: one knob per band, so a loud bass no
                      longer turns the voices down (mb A1 low 4, mb A1 mid off); mb <bus> split
@@ -345,6 +356,7 @@ pub fn parse<S: AsRef<str>>(
         "mb" | "multiband" => multiband(rest, names),
         "duck" => duck(rest, names),
         "sidechain" => sidechain(rest, names),
+        "deess" | "de-ess" => deess(rest, names),
         "polarity" | "phase" | "hpf" | "lpf" | "delay" | "width" => {
             strip(&keyword.to_lowercase(), rest, names)
         }
@@ -433,6 +445,44 @@ fn strip<S: AsRef<str>>(
             _ => error(format!("{keyword} works on inputs only")),
         },
     }
+}
+
+/// `deess <input> <dB>|off` or `deess <input> freq <Hz>`; the input may have several words.
+/// Whether a number is inside its range, the desk says.
+fn deess<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    let usage = "usage: deess <input> <dB>|off, or deess <input> freq <Hz>";
+    let only_input = |words: &[&str]| match target(&words.join(" "), names)? {
+        Target::Input(index) => Ok(index),
+        Target::Bus(_) => error("a de-esser belongs to an input, not a bus"),
+    };
+    let number = |value: &str| -> Result<f32, ParseError> {
+        match value.parse::<f32>() {
+            Ok(number) if number.is_finite() => Ok(number),
+            _ => error(format!("\"{value}\" is not a number; {usage}")),
+        }
+    };
+    if let [input @ .., word, value] = rest
+        && !input.is_empty()
+        && word.eq_ignore_ascii_case("freq")
+    {
+        let hz = number(value)?;
+        return Ok(Command::Deess(only_input(input)?, DeessChange::Freq(hz)));
+    }
+    let [input @ .., value] = rest else {
+        return error(usage);
+    };
+    if input.is_empty() {
+        return error(usage);
+    }
+    let db = if value.eq_ignore_ascii_case("off") {
+        crate::deess::THRESHOLD_DB.1
+    } else {
+        number(value)?
+    };
+    Ok(Command::Deess(
+        only_input(input)?,
+        DeessChange::Threshold(db),
+    ))
 }
 
 /// `sidechain <input> by <key>`, `sidechain <input> off` or `sidechain <input> hpf|lpf
@@ -981,6 +1031,28 @@ mod tests {
         assert!(bad("gate A1 3").contains("inputs only"));
         assert!(bad("comp 2 mix 40").contains("buses only"));
         assert!(bad("comp A1 mix lots").contains("takes a number"));
+    }
+
+    #[test]
+    fn a_de_esser_is_set_by_its_threshold_and_its_corner() {
+        assert_eq!(
+            ok("deess 1 -30"),
+            Command::Deess(0, DeessChange::Threshold(-30.0))
+        );
+        assert_eq!(
+            ok("deess cable OFF"),
+            Command::Deess(0, DeessChange::Threshold(0.0))
+        );
+        assert_eq!(
+            ok("deess 3 freq 7000"),
+            Command::Deess(2, DeessChange::Freq(7000.0))
+        );
+        assert!(bad("deess A1 -30").contains("not a bus"));
+        assert!(bad("deess 9 -30").contains("no input 9"));
+        assert!(bad("deess 1 lots").contains("not a number"));
+        assert!(bad("deess 1 freq high").contains("not a number"));
+        assert!(bad("deess 1").contains("usage: deess"));
+        assert!(bad("deess").contains("usage: deess"));
     }
 
     #[test]

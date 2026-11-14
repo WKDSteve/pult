@@ -186,6 +186,7 @@ impl Running {
             Command::Strip(input, change) => self.strip(*input, *change),
             Command::Duck(input, change) => self.duck(*input, *change),
             Command::Sidechain(input, change) => self.sidechain(*input, *change),
+            Command::Deess(input, change) => self.deess(*input, *change),
             Command::Automix(input, on) => self.automix(*input, Some(*on), None),
             Command::AutomixWeight(input, db) => self.automix(*input, None, Some(*db)),
             Command::Send(input, bus, gain_db, ramp_ms) => {
@@ -739,6 +740,27 @@ impl Running {
         Ok(vec![format!("{label}: {}", change.said())])
     }
 
+    /// Changes one setting of the de-esser of `input`.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such input or the number is out of its range.
+    pub fn deess(
+        &mut self,
+        input: usize,
+        change: pult_core::deess::DeessChange,
+    ) -> Result<Vec<String>, String> {
+        let Some(running) = self.inputs.get(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        let change = change.checked()?;
+        let spec = &mut self.spec.inputs[input];
+        spec.deess.apply(change);
+        running.controls.deess.set_all(spec.deess);
+        let label = self.target_label(Target::Input(input));
+        Ok(vec![format!("{label}: {}", change.said())])
+    }
+
     /// Changes one setting of the sidechain of `input`: what its gate and compressor listen to.
     ///
     /// # Errors
@@ -957,6 +979,7 @@ impl Running {
                 });
             }
             line.push_str(&spec.sidechain.summary());
+            line.push_str(&spec.deess.summary());
             line.push_str(&spec.duck.summary());
             for send in &spec.sends {
                 let point = if send.pre { " pre" } else { "" };

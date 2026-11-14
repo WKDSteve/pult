@@ -180,6 +180,8 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `input/<n>/sidechain/key` | Zahl: Nummer des Eingangs, auf den Gate und Kompressor hören; 0 für den Eingang selbst |
 | `input/<n>/sidechain/hpf` | Zahl, 20 (aus) bis 10000 Hz: Hochpass vor den Detektoren von Gate und Kompressor |
 | `input/<n>/sidechain/lpf` | Zahl, 100 bis 20000 Hz (aus): Tiefpass vor den Detektoren |
+| `input/<n>/deess/threshold` | Zahl, -60 bis 0 dB (aus): Pegel des Zischlaut-Bandes, ab dem der De-Esser es zurücknimmt |
+| `input/<n>/deess/freq` | Zahl, 2000 bis 12000 Hz: wo dieses Band beginnt |
 | `bus/<name>/comp` | Zahl, 0 (aus) bis 10: der Bus-Kompressor |
 | `bus/<name>/comp/mix` | Zahl, 0 (trocken) bis 100 (ganz komprimiert) |
 | `bus/<name>/comp/hpf` | Zahl, 20 bis 500 Hz: Hochpass im Steuersignal |
@@ -208,6 +210,10 @@ den Reglern GATE und COMP: `open` oder `shut -40`, und die dB des Kompressors, h
 
 Im Zustand trägt jeder Eingang seinen Equalizer und Limiter als `eq_on`, `eq` (die vier Bänder), `eq_pre`,
 `limit_on`, `limit_db` und `limited_db` (wie weit der Limiter seit dem letzten Zustand zurückgedreht hat).
+
+Sein De-Esser steht als `deess`: `{"threshold_db": 0, "freq_hz": 6000}` (0 dB ist aus), dazu `deess_reduction_db`: wie
+viel er dem Band der Zischlaute seit dem letzten Zustand höchstens genommen hat. Ein Zustand aus einem älteren Lauf
+nennt beides nicht; dann gilt aus und 0.
 
 Der Kanalzug eines Eingangs steht im Zustand als `strip`: `{"polarity": false, "hpf_hz": 20, "lpf_hz": 20000,
 "delay_ms": 0, "width": 100}` (so ist er neutral).

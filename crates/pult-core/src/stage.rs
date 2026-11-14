@@ -10,7 +10,8 @@
 //! 2. the channel strip ([`crate::strip`]): polarity, high- and low-pass, delay, width;
 //! 3. the gate, then the compressor ([`crate::dynamics`]), each listening to the sound itself
 //!    or to the sidechain of the input ([`crate::sidechain`]: the sound through filters, or the
-//!    level of another input from the key board), and the equalizer of the input
+//!    level of another input from the key board), behind the compressor the de-esser
+//!    ([`crate::deess`]), and the equalizer of the input
 //!    ([`crate::eq`]) behind them, or before them when [`InputControls::eq_pre`] says so (the
 //!    order a console lets one choose: the compressor then sees the equalized sound);
 //!    then the limiter of the input ([`crate::limiter`]), without lookahead;
@@ -32,6 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::automix::PowerFollower;
+use crate::deess::Deesser;
 use crate::duck::Ducker;
 use crate::dynamics::{Compressor, Gate, loudest};
 use crate::eq::Equalizer;
@@ -56,6 +58,7 @@ pub struct InputStage {
     follower: PowerFollower,
     ducker: Ducker,
     sidechain: Sidechain,
+    deesser: Deesser,
     block: Vec<f32>,
 }
 
@@ -80,6 +83,7 @@ impl InputStage {
             follower: PowerFollower::new(rate),
             ducker: Ducker::new(rate),
             sidechain: Sidechain::new(channels, rate, STAGE_FRAMES),
+            deesser: Deesser::new(channels, rate, STAGE_FRAMES),
             block: vec![0.0; STAGE_FRAMES * channels],
         }
     }
@@ -100,6 +104,7 @@ impl InputStage {
         self.follower.start_over();
         self.ducker.start_over();
         self.sidechain.start_over();
+        self.deesser.start_over();
     }
 
     /// Meters the whole frames of `data`, gates and compresses them and hands them to `sink`,
@@ -141,6 +146,10 @@ impl InputStage {
                     .compressor
                     .process(&self.controls.compressor, block, ch),
             }
+            self.deesser.process(&self.controls.deess, block);
+            self.controls
+                .deess_reduction
+                .record(self.deesser.reduction_db());
             if !eq_pre {
                 self.eq.process(&self.controls.eq, block, ch);
             }

@@ -21,6 +21,7 @@ pub mod buscomp;
 pub mod busdelay;
 pub mod clicks;
 pub mod control;
+pub mod deess;
 pub mod drift;
 pub mod dropouts;
 pub mod duck;

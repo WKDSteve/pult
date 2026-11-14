@@ -150,6 +150,10 @@ pub struct InputView {
     pub limited_db: f32,
     /// Its sidechain: what its gate and compressor listen to.
     pub sidechain: crate::sidechain::SidechainSettings,
+    /// Its de-esser: the level above which the band of its sibilants goes down, and its corner.
+    pub deess: crate::deess::DeessSettings,
+    /// The most its de-esser took from that band since the previous view, in dB.
+    pub deess_reduction_db: f32,
     /// Its ducker: the input that turns it down, how far and how fast.
     pub duck: crate::duck::DuckSettings,
     /// The most its ducker took away since the previous view, in dB.
@@ -553,6 +557,13 @@ pub enum Action {
         /// The new setting.
         change: crate::multiband::MultibandChange,
     },
+    /// Changes one setting of the de-esser of an input.
+    InputDeess {
+        /// Index of the input.
+        input: usize,
+        /// What to set.
+        change: crate::deess::DeessChange,
+    },
     /// Changes one setting of the sidechain of an input.
     InputSidechain {
         /// Index of the input.
@@ -749,6 +760,8 @@ fn demo_input(
         comp_reduction_db: 0.0,
         strip: crate::strip::StripSettings::default(),
         sidechain: crate::sidechain::SidechainSettings::default(),
+        deess: crate::deess::DeessSettings::default(),
+        deess_reduction_db: 0.0,
         duck: crate::duck::DuckSettings::default(),
         duck_reduction_db: 0.0,
         talkback: false,
@@ -990,6 +1003,28 @@ impl FakeDesk {
         let bus = self.bus_mut(bus)?;
         bus.multiband.apply(change);
         Ok(vec![format!("{} {}", bus.name, change.said())])
+    }
+
+    /// One setting of the channel strip of `input`.
+    fn set_strip(
+        &mut self,
+        input: usize,
+        change: crate::strip::StripChange,
+    ) -> Result<Vec<String>, String> {
+        let change = change.checked()?;
+        self.input_mut(input)?.strip.apply(change);
+        Ok(vec![format!("[{}] {}", input + 1, change.said())])
+    }
+
+    /// One setting of the de-esser of `input`.
+    fn set_deess(
+        &mut self,
+        input: usize,
+        change: crate::deess::DeessChange,
+    ) -> Result<Vec<String>, String> {
+        let change = change.checked()?;
+        self.input_mut(input)?.deess.apply(change);
+        Ok(vec![format!("[{}] {}", input + 1, change.said())])
     }
 
     /// One setting of the sidechain of `input`.
@@ -1347,13 +1382,10 @@ impl Desk for FakeDesk {
             }
             Action::InputAutomix { input, on } => self.set_automix(input, Some(on), None),
             Action::InputAutomixWeight { input, db } => self.set_automix(input, None, Some(db)),
-            Action::InputStrip { input, change } => {
-                let change = change.checked()?;
-                self.input_mut(input)?.strip.apply(change);
-                Ok(vec![format!("[{}] {}", input + 1, change.said())])
-            }
+            Action::InputStrip { input, change } => self.set_strip(input, change),
             Action::InputDuck { input, change } => self.set_duck(input, change),
             Action::InputSidechain { input, change } => self.set_sidechain(input, change),
+            Action::InputDeess { input, change } => self.set_deess(input, change),
             Action::BusMultiband { bus, change } => self.set_multiband(bus, change),
             Action::InputEq { .. }
             | Action::InputEqBand { .. }

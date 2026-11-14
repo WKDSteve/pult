@@ -3,14 +3,16 @@
 //! curve of all of them together. A strip has no room for that; it only has the switches. Below
 //! the buses a row per input: its equalizer, the switch that puts it before gate and compressor,
 //! its limiter, and under its curve its sidechain (what its gate and compressor listen to:
-//! another input, or itself through filters) and its ducker: the input that turns it down, how
-//! far and how fast, and how much it takes away now.
+//! another input, or itself through filters), its de-esser (the level above which the band of
+//! its sibilants goes down, where that band begins, and how much it takes now) and its ducker:
+//! the input that turns it down, how far and how fast, and how much it takes away now.
 
 use eframe::egui::{
     Align, Align2, CornerRadius, FontId, Frame, Layout, Margin, Pos2, RichText, ScrollArea, Sense,
     Stroke, Ui, pos2, vec2,
 };
 use pult_core::Band;
+use pult_core::deess::DeessParam;
 use pult_core::duck::{DuckChange, DuckParam};
 use pult_core::multiband::MultibandParam;
 use pult_core::response_db;
@@ -103,7 +105,7 @@ pub fn show(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new("INPUTS  the equalizer of an input sits behind its gate and compressor, or before them (PRE); its limiter has no lookahead; SIDECHAIN is what its gate and compressor listen to; its ducker turns it down while its key sounds")
+            RichText::new("INPUTS  the equalizer of an input sits behind its gate and compressor, or before them (PRE); its limiter has no lookahead; SIDECHAIN is what its gate and compressor listen to; DE-ESS turns only its sibilants down; its ducker turns it down while its key sounds")
                 .size(10.0)
                 .color(p.text_faint),
         );
@@ -203,6 +205,8 @@ fn input_row(
     );
     ui.add_space(6.0);
     sidechain_line(ui, index, input, values, actions);
+    ui.add_space(2.0);
+    deess_line(ui, index, input, values, actions);
     ui.add_space(2.0);
     duck_line(ui, index, input, values, actions);
 }
@@ -327,6 +331,69 @@ fn key_line(
                         DIAL_SIZE,
                         DUCK_DIAL_WIDTH,
                     ));
+                }
+            },
+        );
+    });
+}
+
+/// The de-esser of an input: how much it takes from the band of the sibilants now, and its
+/// threshold and its corner, under the dials of the lines around it.
+fn deess_line(
+    ui: &mut Ui,
+    index: usize,
+    input: &InputView,
+    values: &mut Values<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let p = &Theme::current().palette;
+    let taken = if input.deess.is_on() {
+        input.deess_reduction_db
+    } else {
+        0.0
+    };
+    let active = taken >= 0.05;
+    let (head, color) = if active {
+        (format!("DE-ESS  -{taken:.1} dB"), p.accent)
+    } else {
+        ("DE-ESS".to_owned(), p.text_faint)
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let dials_width = DUCK_DIAL_WIDTH * DUCK_DIALS.len() as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let row_width = (BAND_WIDTH + BAND_GAP) * EQ_BANDS as f32 + LIMIT_WIDTH;
+    let between = row_width - DUCK_HEAD_WIDTH - dials_width - 2.0 * BAND_GAP;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = BAND_GAP;
+        ui.allocate_ui_with_layout(
+            vec2(DUCK_HEAD_WIDTH, DIAL_ROW_HEIGHT),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(DUCK_HEAD_WIDTH);
+                ui.label(RichText::new(head).size(9.5).color(color));
+                ui.label(RichText::new("sibilants").size(8.5).color(p.text_faint));
+            },
+        );
+        ui.allocate_ui_with_layout(
+            vec2(between, DIAL_ROW_HEIGHT),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(between);
+                ui.label(
+                    RichText::new("what is above HZ goes down while it is louder than THR")
+                        .size(8.5)
+                        .color(p.text_faint),
+                );
+            },
+        );
+        ui.allocate_ui_with_layout(
+            vec2(dials_width, DIAL_ROW_HEIGHT),
+            Layout::left_to_right(Align::Min),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for (param, text) in [(DeessParam::Threshold, "THR"), (DeessParam::Freq, "HZ")] {
+                    let dial = Binding::Input(index, InputParam::Deess(param));
+                    actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, DUCK_DIAL_WIDTH));
                 }
             },
         );
