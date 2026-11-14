@@ -206,6 +206,15 @@ pub struct LoudnessView {
     pub true_peak_db: Option<f32>,
 }
 
+/// What of one input waits before a bus takes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RingView {
+    /// The input, from 0.
+    pub input: usize,
+    /// What waits in its ring to this bus, in milliseconds, averaged.
+    pub ms: f32,
+}
+
 /// One bus as its master strip shows it.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Switches of a console, each on its own.
@@ -242,6 +251,12 @@ pub struct BusView {
     pub comp_hpf_hz: f32,
     /// Its delay in milliseconds, behind the limiter.
     pub delay_ms: f32,
+    /// Per input that feeds it, what waits in the ring between them; empty where nobody
+    /// measures (a desk without an engine).
+    pub rings: Vec<RingView>,
+    /// How long its device says sound takes from the callback to the output, in
+    /// milliseconds; `None` where the device does not say, or is gone.
+    pub device_latency_ms: Option<f32>,
     /// Its dim switch: turned down by [`Self::dim_db`]. A monitor bus is dimmed too while
     /// someone talks, without this switch.
     pub dim: bool,
@@ -268,6 +283,18 @@ impl BusView {
     #[must_use]
     pub fn shown_name(&self) -> &str {
         self.label.as_deref().unwrap_or(&self.name)
+    }
+
+    /// How much later sound leaves the bus than it was mixed, in milliseconds: the lookahead
+    /// of its limiter while that is on, and its delay.
+    #[must_use]
+    pub fn latency_ms(&self) -> f32 {
+        let look = if self.limit.on {
+            self.limit.lookahead_ms
+        } else {
+            0.0
+        };
+        look + self.delay_ms
     }
 }
 
@@ -718,6 +745,8 @@ impl FakeDesk {
             comp_mix: 100.0,
             comp_hpf_hz: 20.0,
             delay_ms: 0.0,
+            rings: Vec::new(),
+            device_latency_ms: None,
             dim: false,
             dim_db: DEFAULT_DIM_DB,
             comp_reduction_db: 0.0,
@@ -1326,6 +1355,21 @@ impl Desk for FakeDesk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_latency_of_a_bus_is_its_delay_and_the_lookahead_of_a_limiter_that_is_on() {
+        let mut bus = FakeDesk::new().view().buses.swap_remove(0);
+        bus.limit = LimitSettings {
+            on: true,
+            ceiling_db: -1.0,
+            lookahead_ms: 2.0,
+        };
+        bus.delay_ms = 12.5;
+        assert_eq!(bus.latency_ms(), 14.5);
+        // Switched off, the limiter drops its delay.
+        bus.limit.on = false;
+        assert_eq!(bus.latency_ms(), 12.5);
+    }
 
     #[test]
     fn the_fake_moves_its_meters_and_honours_mute_and_solo() {

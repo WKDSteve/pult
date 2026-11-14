@@ -129,6 +129,13 @@ impl DriftControl {
         (self.primed && self.played >= self.settle).then_some(self.level - self.target as f64)
     }
 
+    /// The (smoothed) level after a read, in frames, once the ring is primed; `None` while it
+    /// primes. During a settling phase it stands at the target.
+    #[must_use]
+    pub fn level(&self) -> Option<f64> {
+        self.primed.then_some(self.level)
+    }
+
     /// The plan for a callback that needs `needed` frames while `available` are buffered.
     pub fn plan(&mut self, available: usize, needed: usize) -> (Plan, Event) {
         if !self.primed {

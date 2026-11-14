@@ -52,7 +52,7 @@ pub use dynamics::{
     Compressor, CompressorControls, CompressorParams, Gate, GateControls, GateParams,
 };
 pub use eq::{Band, BandKind, EQ_BANDS, EqControls, Equalizer, response_db};
-pub use level::{AtomicF32, Counter, PeakMeter, db_to_linear, linear_to_db};
+pub use level::{AtomicF32, Counter, Latency, PeakMeter, db_to_linear, linear_to_db};
 pub use limiter::{LimitChange, Limiter, LimiterControls};
 pub use loudness::{LoudnessMeter, LoudnessStats, LoudnessTap, loudness};
 pub use mixer::{
@@ -67,5 +67,5 @@ pub use stage::{InputStage, STAGE_FRAMES};
 pub use tone::Sine;
 pub use view::{
     Action, BusView, Desk, EventKind, EventView, FakeDesk, InputView, LoudnessView, MeterPoint,
-    MixerView, Reply, SendView, SourceKind,
+    MixerView, Reply, RingView, SendView, SourceKind,
 };

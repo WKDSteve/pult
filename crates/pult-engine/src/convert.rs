@@ -3,6 +3,8 @@
 //! through a buffer made beforehand, a piece at a time: however long a callback is, nothing
 //! allocates in it. An `f32` stream takes no detour.
 
+use std::time::Duration;
+
 use cpal::traits::DeviceTrait;
 use cpal::{Device, FromSample, Sample, SampleFormat, SizedSample, Stream, SupportedStreamConfig};
 use cpal::{I24, U24};
@@ -89,6 +91,7 @@ fn output_as<T>(
     device: &Device,
     config: &SupportedStreamConfig,
     mut pull: impl FnMut(&mut [f32]) + Send + 'static,
+    mut timed: impl FnMut(Duration) + Send + 'static,
     errors: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<Stream, cpal::Error>
 where
@@ -97,7 +100,10 @@ where
     let mut converter = Converter::new(usize::from(config.channels()));
     device.build_output_stream::<T, _, _>(
         config.config(),
-        move |out, _| converter.output(out, &mut pull),
+        move |out, info| {
+            timed(latency(info));
+            converter.output(out, &mut pull);
+        },
         errors,
         Some(OPEN_TIMEOUT),
     )
@@ -154,18 +160,29 @@ pub(crate) fn build_input(
     built.map_err(audio(format!("opening {name}")))
 }
 
-/// A playback stream in the device's format that `pull` fills in `f32`.
+/// How long the device says what this callback writes takes to its output.
+fn latency(info: &cpal::OutputCallbackInfo) -> Duration {
+    let at = info.timestamp();
+    at.playback.duration_since(at.callback)
+}
+
+/// A playback stream in the device's format that `pull` fills in `f32`. Before each callback
+/// is pulled, `timed` hears how long the device says its sound takes to the output.
 pub(crate) fn build_output(
     device: &Device,
     config: &SupportedStreamConfig,
     mut pull: impl FnMut(&mut [f32]) + Send + 'static,
+    mut timed: impl FnMut(Duration) + Send + 'static,
     errors: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<Stream, Error> {
     let name = device.to_string();
     let built = if config.sample_format() == SampleFormat::F32 {
         device.build_output_stream::<f32, _, _>(
             config.config(),
-            move |out, _| pull(out),
+            move |out, info| {
+                timed(latency(info));
+                pull(out);
+            },
             errors,
             Some(OPEN_TIMEOUT),
         )
@@ -173,7 +190,7 @@ pub(crate) fn build_output(
         by_format!(
             config.sample_format(),
             name,
-            output_as(device, config, pull, errors)
+            output_as(device, config, pull, timed, errors)
         )
     };
     built.map_err(audio(format!("opening {name}")))

@@ -358,6 +358,10 @@ impl Slot {
         let name = device.to_string();
         let stream = if role == Role::Output {
             let beats = Arc::clone(health);
+            // The callback owns the mixer; what the device says of its latency reaches the
+            // stats of the bus through this cell, which the callback reads next.
+            let said = Arc::new(pult_core::AtomicF32::new(f32::NAN));
+            let heard = Arc::clone(&said);
             let mut realtime = Realtime::default();
             convert::build_output(
                 device,
@@ -367,11 +371,15 @@ impl Slot {
                     assert_no_alloc(|| {
                         beats.beats.add(1);
                         match returning.get_mut() {
-                            Some(Feed::Bus(mixer)) => mixer.process(data),
+                            Some(Feed::Bus(mixer)) => {
+                                mixer.note_device_latency_ms(heard.load());
+                                mixer.process(data);
+                            }
                             _ => data.fill(0.0),
                         }
                     });
                 },
+                move |latency| said.store(latency.as_secs_f32() * 1e3),
                 fault_recorder(health, xruns),
             )?
         } else {

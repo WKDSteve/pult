@@ -880,6 +880,44 @@ impl Running {
         }
     }
 
+    /// What holds the sound of bus `index` back, for its line of `show`: the rings of the
+    /// inputs that feed it, what the bus itself adds, and what its device says.
+    fn latency_summary(&self, index: usize) -> String {
+        let mut text = String::new();
+        let rings = self.inputs.iter().enumerate().flat_map(|(input, running)| {
+            running
+                .routes
+                .iter()
+                .filter(move |route| route.bus == index && route.is_routed())
+                .map(move |route| (input, route.stats.buffered_ms.load()))
+        });
+        for (n, (input, ms)) in rings.enumerate() {
+            text.push_str(if n == 0 { "  rings" } else { "," });
+            let _ = write!(text, " [{}] {ms:.1} ms", input + 1);
+        }
+        let spec = &self.spec.buses[index];
+        let own = spec.delay_ms
+            + if spec.limit.on {
+                spec.limit.lookahead_ms
+            } else {
+                0.0
+            };
+        if own > 0.0 {
+            let _ = write!(text, "  bus {own:.1} ms");
+        }
+        let bus = &self.buses[index];
+        if let Some(ms) = bus
+            .handle
+            .stats
+            .device_latency
+            .get()
+            .filter(|_| bus.present)
+        {
+            let _ = write!(text, "  device {ms:.1} ms");
+        }
+        text
+    }
+
     /// One line per input and bus with its settings.
     fn show(&self) -> Vec<String> {
         let mut lines = Vec::with_capacity(self.inputs.len() + self.buses.len());
@@ -964,6 +1002,7 @@ impl Running {
             if spec.delay_ms > 0.0 {
                 let _ = write!(line, "  delay {:.1} ms", spec.delay_ms);
             }
+            line.push_str(&self.latency_summary(index));
             if spec.muted {
                 line.push_str("  muted");
             }

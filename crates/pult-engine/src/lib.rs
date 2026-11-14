@@ -1089,6 +1089,7 @@ pub fn play_tone(sink: &str, frequency: f32, gain_db: f32) -> Result<Tone, Error
         &device,
         &config,
         move |data| assert_no_alloc(|| oscillator.fill(data, channels)),
+        |_| {},
         fault_recorder(&health, &Arc::new(Counter::default())),
     )?;
     stream.play().map_err(audio(format!("starting {name}")))?;

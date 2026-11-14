@@ -198,6 +198,15 @@ pub struct SendState {
     pub pre: bool,
 }
 
+/// What of one input waits before a bus takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RingState {
+    /// The number of the input, from 1, as in the addresses (`input/2/gain`).
+    pub input: usize,
+    /// What waits in its ring to this bus, in milliseconds, averaged.
+    pub ms: f32,
+}
+
 /// One bus.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)] // Switches of a console, each on its own.
@@ -246,6 +255,19 @@ pub struct BusState {
     /// Its delay in milliseconds; none from a run older than bus delays.
     #[serde(default)]
     pub delay_ms: f32,
+    /// How much later sound leaves the bus than it was mixed, in milliseconds: the lookahead
+    /// of its limiter while that is on, plus `delay_ms`. 0 from a run older than this.
+    #[serde(default)]
+    pub latency_ms: f32,
+    /// Per input that feeds it, what waits in the ring between them; none from a run older
+    /// than this, and none from a desk that does not measure.
+    #[serde(default)]
+    pub rings: Vec<RingState>,
+    /// How long its device says sound takes from the callback to the output, in
+    /// milliseconds, averaged; `null` where the device does not say, while it is gone, and
+    /// from a run older than this.
+    #[serde(default)]
+    pub device_latency_ms: Option<f32>,
     /// Its dim switch.
     #[serde(default)]
     pub dim: bool,
@@ -444,6 +466,16 @@ impl BusState {
             comp_mix: bus.comp_mix,
             comp_hpf_hz: bus.comp_hpf_hz,
             delay_ms: bus.delay_ms,
+            latency_ms: bus.latency_ms(),
+            rings: bus
+                .rings
+                .iter()
+                .map(|ring| RingState {
+                    input: ring.input + 1,
+                    ms: ring.ms,
+                })
+                .collect(),
+            device_latency_ms: bus.device_latency_ms,
             dim: bus.dim,
             dim_db: bus.dim_db,
             comp_reduction_db: bus.comp_reduction_db,
@@ -1450,6 +1482,41 @@ mod tests {
             refused(r#"{"op":"set","address":"matrix/1/A1","value":true,"ramp_ms":100}"#)
                 .contains("can ramp")
         );
+    }
+
+    #[test]
+    fn a_bus_says_what_holds_its_sound_back_and_reads_without_it() {
+        let mut view = view();
+        view.buses[0].delay_ms = 10.0;
+        view.buses[0].rings = vec![
+            crate::view::RingView { input: 0, ms: 20.5 },
+            crate::view::RingView { input: 2, ms: 19.0 },
+        ];
+        view.buses[0].device_latency_ms = Some(31.0);
+        let state = State::new(&view, Vec::new());
+        let json = serde_json::to_value(&state).expect("to JSON");
+        let bus = &json["buses"][0];
+        // The demo bus has its limiter on with 1 ms of lookahead.
+        assert_eq!(bus["latency_ms"], serde_json::json!(11.0));
+        assert_eq!(
+            bus["rings"],
+            serde_json::json!([{ "input": 1, "ms": 20.5 }, { "input": 3, "ms": 19.0 }])
+        );
+        assert_eq!(bus["device_latency_ms"], serde_json::json!(31.0));
+        assert_eq!(
+            json["buses"][1]["device_latency_ms"],
+            serde_json::Value::Null
+        );
+        // A run older than these figures says nothing of them.
+        let mut older = json.clone();
+        let bus = older["buses"][0].as_object_mut().expect("a bus");
+        for key in ["latency_ms", "rings", "device_latency_ms"] {
+            assert!(bus.remove(key).is_some(), "{key}");
+        }
+        let read: State = serde_json::from_value(older).expect("from JSON");
+        assert_eq!(read.buses[0].latency_ms, 0.0);
+        assert_eq!(read.buses[0].rings, Vec::new());
+        assert_eq!(read.buses[0].device_latency_ms, None);
     }
 
     #[test]

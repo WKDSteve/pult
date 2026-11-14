@@ -100,9 +100,73 @@ impl PeakMeter {
     }
 }
 
+/// Weight of one report in the average of a [`Latency`]: with 10 ms callbacks about a second.
+const LATENCY_ALPHA: f32 = 0.01;
+
+/// How long sound takes from a callback to the device, as the device reports it per callback,
+/// averaged; unknown until the first report.
+///
+/// The audio thread reports, the control thread reads. Reports that are no time (NaN, negative,
+/// infinite) are ignored.
+#[derive(Debug)]
+pub struct Latency(AtomicU32);
+
+impl Default for Latency {
+    fn default() -> Self {
+        Self(AtomicU32::new(f32::NAN.to_bits()))
+    }
+}
+
+impl Latency {
+    /// Takes one report in milliseconds into the average; the first one is the average.
+    pub fn report(&self, ms: f32) {
+        if !ms.is_finite() || ms < 0.0 {
+            return;
+        }
+        let old = f32::from_bits(self.0.load(Ordering::Relaxed));
+        let new = if old.is_nan() {
+            ms
+        } else {
+            old + LATENCY_ALPHA * (ms - old)
+        };
+        self.0.store(new.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Forgets the average: the device is gone, or another one took its place.
+    pub fn forget(&self) {
+        self.0.store(f32::NAN.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The average in milliseconds; `None` before the first report.
+    pub fn get(&self) -> Option<f32> {
+        let ms = f32::from_bits(self.0.load(Ordering::Relaxed));
+        (!ms.is_nan()).then_some(ms)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_latency_is_unknown_until_reported_and_then_follows_slowly() {
+        let latency = Latency::default();
+        assert_eq!(latency.get(), None);
+        latency.report(f32::NAN);
+        latency.report(-3.0);
+        assert_eq!(latency.get(), None);
+        latency.report(20.0);
+        assert_eq!(latency.get(), Some(20.0));
+        latency.report(30.0);
+        let after_one = latency.get().unwrap_or_default();
+        assert!(after_one > 20.0 && after_one < 20.5, "{after_one}");
+        for _ in 0..1000 {
+            latency.report(30.0);
+        }
+        assert!((latency.get().unwrap_or_default() - 30.0).abs() < 0.01);
+        latency.forget();
+        assert_eq!(latency.get(), None);
+    }
 
     #[test]
     fn decibels_round_trip() {

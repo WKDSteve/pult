@@ -109,3 +109,49 @@ fn a_profile_keeps_the_delay() {
     let bad = PROFILE.replace("delay_ms = 10", "delay_ms = 900");
     assert!(profile::parse(&bad).unwrap_err().0.contains("delay"));
 }
+
+#[test]
+fn the_view_says_what_holds_the_sound_of_a_bus_back() {
+    let spec = profile::parse(PROFILE).expect("valid profile");
+    let mut o = Offline::new(&spec, 48_000, 1).expect("the route builds");
+    // Three seconds: the rings are primed, settled and steady at their target of 20 ms.
+    render(&mut o, 300, |_| 0.25);
+    let show = o.running().apply(&Command::Show).expect("show");
+    let mut desk = pult_engine::EngineDesk::new(o.into_running(), None);
+    let view = pult_core::Desk::view(&mut desk);
+    for bus in &view.buses {
+        assert_eq!(bus.rings.len(), 1, "{bus:?}");
+        assert_eq!(bus.rings[0].input, 0);
+        assert!(
+            (bus.rings[0].ms - 20.0).abs() < 5.0,
+            "{} holds {} ms",
+            bus.name,
+            bus.rings[0].ms
+        );
+        // No device here, so none that says how long it takes.
+        assert_eq!(bus.device_latency_ms, None);
+    }
+    // The limiters are off: only the delay of the speakers counts.
+    assert_eq!(view.buses[0].latency_ms(), 10.0);
+    assert_eq!(view.buses[1].latency_ms(), 0.0);
+    let bus_lines = &show[show.len() - 2..];
+    assert!(bus_lines[0].contains("rings [1] "), "{}", bus_lines[0]);
+    assert!(bus_lines[0].contains("  bus 10.0 ms"), "{}", bus_lines[0]);
+    assert!(!bus_lines[1].contains("  bus "), "{}", bus_lines[1]);
+    assert!(!bus_lines[0].contains("device"), "{}", bus_lines[0]);
+}
+
+#[test]
+fn an_input_taken_off_a_bus_leaves_its_rings() {
+    let spec = profile::parse(PROFILE).expect("valid profile");
+    let mut o = Offline::new(&spec, 48_000, 1).expect("the route builds");
+    render(&mut o, 100, |_| 0.25);
+    o.running()
+        .apply(&Command::Route(0, 1, false))
+        .expect("off the phones");
+    render(&mut o, 100, |_| 0.25);
+    let mut desk = pult_engine::EngineDesk::new(o.into_running(), None);
+    let view = pult_core::Desk::view(&mut desk);
+    assert_eq!(view.buses[0].rings.len(), 1);
+    assert_eq!(view.buses[1].rings, Vec::new());
+}

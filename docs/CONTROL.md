@@ -84,6 +84,9 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
       "limit_lookahead_ms": 1.0,
       "limited_db": 0.0,
       "delay_ms": 0.0,
+      "latency_ms": 1.0,
+      "rings": [{ "input": 1, "ms": 20.3 }],
+      "device_latency_ms": 23.4,
       "present": true,
       "peak_db": -12.1,
       "clipped": 0
@@ -109,6 +112,15 @@ Der ganze Zustand als JSON. `503 not_ready`, bis der Besitzer der Route das erst
   dann als `false`.
 - `delay_ms` ist die Verzögerung eines Busses in Millisekunden; ein pult, das sie noch nicht kennt, lässt sie weg: Sie
   liest sich dann als 0.
+- Was den Ton eines Busses aufhält, steht in drei Zahlen, alle in Millisekunden. `rings` nennt je Eingang, der auf den
+  Bus geht (`input` zählt ab 1 wie in den Adressen), was im Ring zwischen beiden wartet, gemittelt; im Gleichgewicht
+  ist das `latency_ms` des Profils. `latency_ms` am Bus ist, was der Bus selbst dazulegt: die Vorschau des Limiters,
+  solange er an ist, plus `delay_ms`. `device_latency_ms` ist, was das Ausgabegerät meldet: die Zeit vom Callback
+  bis zum Ausgang, über etwa eine Sekunde gemittelt (unter Windows, was im Gerätepuffer liegt, plus die Latenz, die
+  WASAPI für den Strom nennt); `null`, solange das Gerät nichts sagt oder fehlt. Die Zahl kommt vom Treiber, nicht
+  von einer Messung: Wandler und Funkstrecken (Bluetooth) nennt er oft zu kurz. Der Weg eines Eingangs bis zum
+  Ausgang ist also etwa `rings[].ms + latency_ms + device_latency_ms`, dazu die Aufnahmeseite und der Resampler
+  (gut 1 ms). Ein pult, das die drei noch nicht kennt, lässt sie weg: 0, leer und `null`.
 - `gate` und `comp` sind die Regler von Gate und Kompressor des Eingangs, 0 (aus) bis 10. Ein pult, das beides noch nicht
   kennt, lässt die Felder weg; sie lesen sich dann als 0.
 - `scenes` sind die Szenen des Profils in dessen Reihenfolge.

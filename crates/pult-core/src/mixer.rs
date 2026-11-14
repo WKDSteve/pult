@@ -44,7 +44,7 @@ use crate::automix::{AutomixGroup, glide_gain};
 use crate::drift::{DriftControl, Event};
 use crate::dynamics::{CompressorControls, GateControls};
 use crate::eq::{EqControls, Equalizer};
-use crate::level::{AtomicF32, Counter, PeakMeter};
+use crate::level::{AtomicF32, Counter, Latency, PeakMeter};
 use crate::limiter::{Limiter, LimiterControls};
 use crate::ramp::{Aim, Follower, Glide, MIN_RAMP_MS};
 use crate::rate::RateControl;
@@ -173,6 +173,10 @@ pub struct InputStats {
     pub correction_ppm: AtomicF32,
     /// Frames skipped once at the end of a settling phase.
     pub aligned: Counter,
+    /// What waits in the ring after a read, in milliseconds, as the drift control averages
+    /// it: this long the input is held before its bus takes it. While the ring primes, what
+    /// has gathered so far; 0 while it does not play.
+    pub buffered_ms: AtomicF32,
 }
 
 /// Gain and mute of one bus, set by the control thread.
@@ -231,6 +235,8 @@ pub struct BusStats {
     pub limited_db: PeakMeter,
     /// The same over the whole run; nobody takes it.
     pub most_limited_db: PeakMeter,
+    /// How long the device says sound takes from its callback to the output, averaged.
+    pub device_latency: Latency,
 }
 
 /// The control thread's side of one input ring.
@@ -493,6 +499,7 @@ impl MixerInput {
         } else if !routed && self.playing && self.gain.is_silent() {
             self.playing = false;
             self.stats.correction_ppm.store(0.0);
+            self.stats.buffered_ms.store(0.0);
             self.open.store(false, Ordering::Release);
         }
         self.playing.then_some(routed)
@@ -510,6 +517,7 @@ impl MixerInput {
         self.onset = 0;
         self.rate.reset();
         self.stats.correction_ppm.store(0.0);
+        self.stats.buffered_ms.store(0.0);
     }
 
     /// Resamples `frames` output frames from the ring, chunk by chunk, and adds them into
@@ -663,6 +671,12 @@ impl MixerInput {
             Event::Aligned => self.stats.aligned.add(plan.skip as u64),
             Event::None | Event::Priming => {}
         }
+        // After an underrun the control primes again: what the ring holds then is `available`.
+        let waiting = self.drift.level().unwrap_or(available as f64);
+        #[allow(clippy::cast_possible_truncation)]
+        self.stats
+            .buffered_ms
+            .store((waiting / self.input_rate * 1e3) as f32);
         if event == Event::Priming {
             return false;
         }
@@ -792,8 +806,10 @@ impl Mixer {
     /// a bus whose output device is gone and whose mixer therefore no longer drains them.
     pub fn suspend(&mut self) {
         self.opening = false;
+        self.stats.device_latency.forget();
         for input in &self.inputs {
             input.open.store(false, Ordering::Release);
+            input.stats.buffered_ms.store(0.0);
         }
     }
 
@@ -875,6 +891,13 @@ impl Mixer {
         if let Some(tap) = &mut self.loudness {
             tap.feed(out, self.out_channels);
         }
+    }
+
+    /// Takes what the device says lies between this callback and its output into the average
+    /// of [`BusStats::device_latency`]. Called from the output callback, before or after
+    /// [`Self::process`].
+    pub fn note_device_latency_ms(&self, ms: f32) {
+        self.stats.device_latency.report(ms);
     }
 
     /// Hands every output from now on to a loudness meter ([`crate::loudness`]).

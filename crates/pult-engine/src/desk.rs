@@ -9,7 +9,7 @@ use std::time::Instant;
 use pult_core::control::{Command, Target};
 use pult_core::{
     Action, BusView, Desk, Dropouts, EventKind, EventView, InputView, LoudnessView, MeterPoint,
-    MixerView, Reply, SendView, SourceKind, linear_to_db,
+    MixerView, Reply, RingView, SendView, SourceKind, linear_to_db,
 };
 
 use crate::{Change, InputKind, Running, profile};
@@ -293,6 +293,24 @@ fn sends_of(spec: &crate::InputSpec, buses: usize) -> Vec<SendView> {
         .collect()
 }
 
+/// What of each input that feeds `bus` waits in the ring between them.
+fn rings_of(inputs: &[crate::RunningInput], bus: usize) -> Vec<RingView> {
+    inputs
+        .iter()
+        .enumerate()
+        .flat_map(|(input, running)| {
+            running
+                .routes
+                .iter()
+                .filter(move |route| route.bus == bus && route.is_routed())
+                .map(move |route| RingView {
+                    input,
+                    ms: route.stats.buffered_ms.load(),
+                })
+        })
+        .collect()
+}
+
 fn farther(a: f32, b: f32) -> f32 {
     if b.abs() > a.abs() { b } else { a }
 }
@@ -353,6 +371,11 @@ impl Desk for EngineDesk {
                 comp_mix: spec.comp_mix,
                 comp_hpf_hz: spec.comp_hpf_hz,
                 delay_ms: spec.delay_ms,
+                rings: rings_of(&running.inputs, index),
+                device_latency_ms: bus
+                    .present
+                    .then(|| bus.handle.stats.device_latency.get())
+                    .flatten(),
                 dim: running.is_dimmed(index),
                 dim_db: spec.dim_db,
                 comp_reduction_db: bus.handle.controls.comp.reduction.take(),

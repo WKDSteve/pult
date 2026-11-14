@@ -292,8 +292,13 @@ pult run --profile meinprofil.toml --log abend.csv
   also, was das Gerät spielt. Eine neue Verzögerung springt nicht, sie blendet in 5 ms über. Während des Laufs `delay A1 12`
   (`delay A1 off` für keine), von außen `bus/<name>/delay`, per MIDI lernbar, im Fenster die Spalte DELAY in der
   Ansicht EQ hinter dem Limiter. Die gesetzte Verzögerung steht im Zustand
-  (`delay_ms`) und in `show`. Den Versatz zwischen zwei Ausgängen misst pult noch nicht selbst; er gehört von Hand
-  bestimmt (Klatschen oder ein Klick, mit einem Mikrofon zwischen beiden aufgenommen).
+  (`delay_ms`) und in `show`. Damit man sie nicht blind stellt, nennt `show` je Bus, was den Ton aufhält: `rings [1]
+  20.1 ms` (was je Eingang im Ring vor dem Bus wartet), `bus 13.0 ms` (Vorschau des Limiters plus Verzögerung) und
+  `device 23.4 ms` (was das Gerät als Weg vom Callback zum Ausgang meldet); im Zustand `rings`, `latency_ms` und
+  `device_latency_ms`. Der Unterschied der Summen zweier Busse ist ein erster Wert für die Verzögerung. Die Zahl des
+  Geräts kommt vom Treiber, Wandler und Funkstrecken nennt er oft zu kurz: den Versatz zwischen zwei Ausgängen misst
+  pult nicht selbst, er gehört am Ende von Hand bestimmt (Klatschen oder ein Klick, mit einem Mikrofon zwischen
+  beiden aufgenommen).
 - **Multiband-Kompressor:** Hinter dem Bus-Kompressor teilt jeder Bus seine Summe in drei Bänder, jedes mit eigenem
   Kompressor und einem Regler: `mb_low`, `mb_mid`, `mb_high = 0..10` am Bus (0 = aus). Ein lauter Bass drückt dann nicht
   mehr die Stimmen mit herunter, wie es ein Kompressor über die ganze Summe tut. `mb_low_hz = 60..1000` (Standard 200)
