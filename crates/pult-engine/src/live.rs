@@ -185,6 +185,7 @@ impl Running {
             Command::BusDelay(bus, ms) => self.bus_delay(*bus, *ms),
             Command::Strip(input, change) => self.strip(*input, *change),
             Command::Duck(input, change) => self.duck(*input, *change),
+            Command::Sidechain(input, change) => self.sidechain(*input, *change),
             Command::Automix(input, on) => self.automix(*input, Some(*on), None),
             Command::AutomixWeight(input, db) => self.automix(*input, None, Some(*db)),
             Command::Send(input, bus, gain_db, ramp_ms) => {
@@ -738,6 +739,31 @@ impl Running {
         Ok(vec![format!("{label}: {}", change.said())])
     }
 
+    /// Changes one setting of the sidechain of `input`: what its gate and compressor listen to.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such input, a corner is out of its range, or the key is an
+    /// input the route does not have or the input itself.
+    pub fn sidechain(
+        &mut self,
+        input: usize,
+        change: pult_core::sidechain::SidechainChange,
+    ) -> Result<Vec<String>, String> {
+        let Some(running) = self.inputs.get(input) else {
+            return Err(format!("there is no input {}", input + 1));
+        };
+        let change = change.checked()?;
+        if let pult_core::sidechain::SidechainChange::Key(key) = change {
+            pult_core::sidechain::check_key(input, key, self.inputs.len())?;
+        }
+        let spec = &mut self.spec.inputs[input];
+        spec.sidechain.apply(change);
+        running.controls.sidechain.set_all(spec.sidechain);
+        let label = self.target_label(Target::Input(input));
+        Ok(vec![format!("{label}: {}", change.said())])
+    }
+
     /// Changes one setting of the ducker of `input`.
     ///
     /// # Errors
@@ -892,6 +918,7 @@ impl Running {
                     "  talkback"
                 });
             }
+            line.push_str(&spec.sidechain.summary());
             line.push_str(&spec.duck.summary());
             for send in &spec.sends {
                 let point = if send.pre { " pre" } else { "" };

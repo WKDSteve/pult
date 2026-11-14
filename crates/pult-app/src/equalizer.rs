@@ -2,8 +2,9 @@
 //! frequency and width, and behind them its limiter with ceiling and lookahead; under the bands the
 //! curve of all of them together. A strip has no room for that; it only has the switches. Below
 //! the buses a row per input: its equalizer, the switch that puts it before gate and compressor,
-//! its limiter, and under its curve its ducker: the input that turns it down, how far and how
-//! fast, and how much it takes away now.
+//! its limiter, and under its curve its sidechain (what its gate and compressor listen to:
+//! another input, or itself through filters) and its ducker: the input that turns it down, how
+//! far and how fast, and how much it takes away now.
 
 use eframe::egui::{
     Align, Align2, CornerRadius, FontId, Frame, Layout, Margin, Pos2, RichText, ScrollArea, Sense,
@@ -13,6 +14,7 @@ use pult_core::Band;
 use pult_core::duck::{DuckChange, DuckParam};
 use pult_core::multiband::MultibandParam;
 use pult_core::response_db;
+use pult_core::sidechain::{SidechainChange, SidechainParam};
 use pult_core::view::{Action, BandKind, BusView, EQ_BANDS, InputView, MixerView};
 
 use crate::binding::{BandParam, Binding, BusParam, InputParam, Value, Values};
@@ -101,7 +103,7 @@ pub fn show(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new("INPUTS  the equalizer of an input sits behind its gate and compressor, or before them (PRE); its limiter has no lookahead; its ducker turns it down while its key sounds")
+            RichText::new("INPUTS  the equalizer of an input sits behind its gate and compressor, or before them (PRE); its limiter has no lookahead; SIDECHAIN is what its gate and compressor listen to; its ducker turns it down while its key sounds")
                 .size(10.0)
                 .color(p.text_faint),
         );
@@ -200,6 +202,8 @@ fn input_row(
         },
     );
     ui.add_space(6.0);
+    sidechain_line(ui, index, input, values, actions);
+    ui.add_space(2.0);
     duck_line(ui, index, input, values, actions);
 }
 
@@ -227,31 +231,37 @@ fn key_text(number: usize, name: &str) -> String {
     format!("{number} {short}")
 }
 
-/// The ducker of an input: how much it takes away now, a button per input that can be its key
-/// (and one for none), and its depth, its threshold and its times.
-fn duck_line(
+/// A line under the curve of an input that has a key: its head, a button per input that can be
+/// the key (and one for none), and its dials.
+struct KeyLine<'a> {
+    /// What stands at its start, and whether that is at work now.
+    head: String,
+    active: bool,
+    /// What stands under the head: what the key does.
+    does: &'a str,
+    /// The address of the key, and the input it names now (from 1, 0 for none).
+    key: Binding,
+    current: usize,
+    /// What the button for no key says, and the word for it in its accessible name.
+    none: (&'a str, &'a str),
+    /// The value that makes input `number` the key.
+    value: fn(usize) -> Value,
+    /// Its dials, with what stands over each.
+    dials: &'a [(Binding, &'a str)],
+}
+
+/// Draws `line` for input `index`.
+fn key_line(
     ui: &mut Ui,
     index: usize,
-    input: &InputView,
+    line: &KeyLine<'_>,
     values: &mut Values<'_>,
     actions: &mut Vec<Action>,
 ) {
     let p = &Theme::current().palette;
-    let key = Binding::Input(index, InputParam::Duck(DuckParam::Key));
-    let Some(Value::Duck(DuckChange::Key(current))) = values.read(key) else {
-        return;
-    };
     let view = values.view();
-    let taken = if input.duck.is_on() {
-        input.duck_reduction_db
-    } else {
-        0.0
-    };
-    let (head, color) = if taken >= 0.05 {
-        (format!("DUCK  -{taken:.1} dB"), p.accent)
-    } else {
-        ("DUCK".to_owned(), p.text_faint)
-    };
+    let color = if line.active { p.accent } else { p.text_faint };
+    // Room for the dials of the line that has most, so the buttons of all lines line up.
     #[allow(clippy::cast_precision_loss)]
     let dials_width = DUCK_DIAL_WIDTH * DUCK_DIALS.len() as f32;
     // As wide as the bands and the limiter above it, so the row keeps its width.
@@ -265,8 +275,8 @@ fn duck_line(
             Layout::top_down(Align::Min),
             |ui| {
                 ui.set_width(DUCK_HEAD_WIDTH);
-                ui.label(RichText::new(head).size(9.5).color(color));
-                ui.label(RichText::new("ducked by").size(8.5).color(p.text_faint));
+                ui.label(RichText::new(&line.head).size(9.5).color(color));
+                ui.label(RichText::new(line.does).size(8.5).color(p.text_faint));
             },
         );
         ui.allocate_ui_with_layout(
@@ -275,8 +285,10 @@ fn duck_line(
             |ui| {
                 ui.set_width(keys_width);
                 ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
-                let title = key.title(view);
-                let none = std::iter::once((0, "NONE".to_owned(), format!("{title} none")));
+                let title = line.key.title(view);
+                let (none_text, none_word) = line.none;
+                let none =
+                    std::iter::once((0, none_text.to_owned(), format!("{title} {none_word}")));
                 let others = view
                     .inputs
                     .iter()
@@ -291,12 +303,12 @@ fn duck_line(
                         )
                     });
                 for (number, text, label) in none.chain(others) {
-                    let mut on = current == number;
+                    let mut on = line.current == number;
                     let size = vec2(DUCK_KEY_WIDTH, KIND_HEIGHT);
                     let response = toggle(ui, &mut on, &text, &label, Role::Assign, size);
                     // A click on the key it has changes nothing: one of them is always on.
                     if response.changed() && on {
-                        actions.extend(values.write(key, Value::Duck(DuckChange::Key(number))));
+                        actions.extend(values.write(line.key, (line.value)(number)));
                     }
                 }
             },
@@ -306,13 +318,88 @@ fn duck_line(
             Layout::left_to_right(Align::Min),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                for (param, text) in DUCK_DIALS {
-                    let dial = Binding::Input(index, InputParam::Duck(param));
-                    actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, DUCK_DIAL_WIDTH));
+                for (dial, text) in line.dials {
+                    actions.extend(labelled(
+                        ui,
+                        values,
+                        *dial,
+                        text,
+                        DIAL_SIZE,
+                        DUCK_DIAL_WIDTH,
+                    ));
                 }
             },
         );
     });
+}
+
+/// The sidechain of an input: a button per input its gate and compressor can listen to (and one
+/// for the input itself), and the filters before their detectors.
+fn sidechain_line(
+    ui: &mut Ui,
+    index: usize,
+    input: &InputView,
+    values: &mut Values<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let at = |param| Binding::Input(index, InputParam::Sidechain(param));
+    let key = at(SidechainParam::Key);
+    let Some(Value::Sidechain(SidechainChange::Key(current))) = values.read(key) else {
+        return;
+    };
+    let line = KeyLine {
+        head: "SIDECHAIN".to_owned(),
+        active: !input.sidechain.is_neutral(),
+        does: "gate, comp hear",
+        key,
+        current,
+        none: ("SELF", "self"),
+        value: |number| Value::Sidechain(SidechainChange::Key(number)),
+        dials: &[
+            (at(SidechainParam::Hpf), "HPF"),
+            (at(SidechainParam::Lpf), "LPF"),
+        ],
+    };
+    key_line(ui, index, &line, values, actions);
+}
+
+/// The ducker of an input: how much it takes away now, a button per input that can be its key
+/// (and one for none), and its depth, its threshold and its times.
+fn duck_line(
+    ui: &mut Ui,
+    index: usize,
+    input: &InputView,
+    values: &mut Values<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let key = Binding::Input(index, InputParam::Duck(DuckParam::Key));
+    let Some(Value::Duck(DuckChange::Key(current))) = values.read(key) else {
+        return;
+    };
+    let taken = if input.duck.is_on() {
+        input.duck_reduction_db
+    } else {
+        0.0
+    };
+    let active = taken >= 0.05;
+    let head = if active {
+        format!("DUCK  -{taken:.1} dB")
+    } else {
+        "DUCK".to_owned()
+    };
+    let dials =
+        DUCK_DIALS.map(|(param, text)| (Binding::Input(index, InputParam::Duck(param)), text));
+    let line = KeyLine {
+        head,
+        active,
+        does: "ducked by",
+        key,
+        current,
+        none: ("NONE", "none"),
+        value: |number| Value::Duck(DuckChange::Key(number)),
+        dials: &dials,
+    };
+    key_line(ui, index, &line, values, actions);
 }
 
 /// The limiter of an input: its switch, its ceiling, and how far it turns down now.

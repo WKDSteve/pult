@@ -148,6 +148,8 @@ pub struct InputView {
     pub limit_db: f32,
     /// How far its limiter turned down at most since the previous view, in dB; 0 when it did not.
     pub limited_db: f32,
+    /// Its sidechain: what its gate and compressor listen to.
+    pub sidechain: crate::sidechain::SidechainSettings,
     /// Its ducker: the input that turns it down, how far and how fast.
     pub duck: crate::duck::DuckSettings,
     /// The most its ducker took away since the previous view, in dB.
@@ -480,6 +482,13 @@ pub enum Action {
         /// The new setting.
         change: crate::multiband::MultibandChange,
     },
+    /// Changes one setting of the sidechain of an input.
+    InputSidechain {
+        /// Index of the input.
+        input: usize,
+        /// What to set.
+        change: crate::sidechain::SidechainChange,
+    },
     /// Changes one setting of the ducker of an input.
     InputDuck {
         /// Input index.
@@ -668,6 +677,7 @@ fn demo_input(
         gate_open: true,
         comp_reduction_db: 0.0,
         strip: crate::strip::StripSettings::default(),
+        sidechain: crate::sidechain::SidechainSettings::default(),
         duck: crate::duck::DuckSettings::default(),
         duck_reduction_db: 0.0,
         talkback: false,
@@ -907,6 +917,20 @@ impl FakeDesk {
         let bus = self.bus_mut(bus)?;
         bus.multiband.apply(change);
         Ok(vec![format!("{} {}", bus.name, change.said())])
+    }
+
+    /// One setting of the sidechain of `input`.
+    fn set_sidechain(
+        &mut self,
+        input: usize,
+        change: crate::sidechain::SidechainChange,
+    ) -> Result<Vec<String>, String> {
+        let change = change.checked()?;
+        if let crate::sidechain::SidechainChange::Key(key) = change {
+            crate::sidechain::check_key(input, key, self.view.inputs.len())?;
+        }
+        self.input_mut(input)?.sidechain.apply(change);
+        Ok(vec![format!("[{}] {}", input + 1, change.said())])
     }
 
     /// One setting of the ducker of `input`.
@@ -1256,6 +1280,7 @@ impl Desk for FakeDesk {
                 Ok(vec![format!("[{}] {}", input + 1, change.said())])
             }
             Action::InputDuck { input, change } => self.set_duck(input, change),
+            Action::InputSidechain { input, change } => self.set_sidechain(input, change),
             Action::BusMultiband { bus, change } => self.set_multiband(bus, change),
             Action::InputEq { .. }
             | Action::InputEqBand { .. }

@@ -455,6 +455,52 @@ fn the_equalizer_view_sets_the_ducker_of_an_input() {
 }
 
 #[test]
+fn the_equalizer_view_sets_the_sidechain_of_an_input() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("EQ").click();
+    harness.run_steps(2);
+    let name = harness.state_mut().desk.view().inputs[SPOTIFY]
+        .shown_name()
+        .to_owned();
+    let own = format!("{name} sidechain key {}", SPOTIFY + 1);
+    assert!(harness.query_by_label(&own).is_none());
+
+    // Its row is far down the page: a click needs it in sight.
+    harness
+        .get_by_label(&format!("{name} sidechain key 2"))
+        .scroll_to_me();
+    // The page glides there.
+    harness.run_steps(30);
+    harness
+        .get_by_label(&format!("{name} sidechain key 2"))
+        .click();
+    harness.run_steps(2);
+    harness
+        .get_by_label(&format!("{name} sidechain high-pass"))
+        .set_value_accesskit(4000.0);
+    harness
+        .get_by_label(&format!("{name} sidechain low-pass"))
+        .set_value_accesskit(9000.0);
+    let view = desk_view(&mut harness);
+    let sidechain = view.inputs[SPOTIFY].sidechain;
+    assert_eq!(sidechain.key, 2);
+    assert!((sidechain.hpf_hz - 4000.0).abs() < 0.5, "{sidechain:?}");
+    assert!((sidechain.lpf_hz - 9000.0).abs() < 0.5, "{sidechain:?}");
+    assert!(view.inputs[0].sidechain.is_neutral(), "only this input");
+    assert_eq!(
+        view.inputs[SPOTIFY].duck.key, 0,
+        "the ducker has its own key"
+    );
+
+    harness
+        .get_by_label(&format!("{name} sidechain key self"))
+        .click();
+    let view = desk_view(&mut harness);
+    assert_eq!(view.inputs[SPOTIFY].sidechain.key, 0);
+}
+
+#[test]
 fn keys_step_a_focused_fader() {
     let mut harness = harness();
     harness.run_steps(2);

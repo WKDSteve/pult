@@ -115,6 +115,8 @@ pub struct InputControls {
     pub limiter: LimiterControls,
     /// How far that limiter turned down at most since the desk last read it, in dB.
     pub limited: PeakMeter,
+    /// What gate and compressor listen to ([`crate::sidechain`]); themselves at first.
+    pub sidechain: crate::sidechain::SidechainControls,
     /// The ducker behind the compressor ([`crate::duck`]); off at first.
     pub duck: crate::duck::DuckControls,
     /// The most the ducker took away since the desk last read it, in dB (positive).
@@ -147,6 +149,7 @@ impl Default for InputControls {
             eq_pre: AtomicBool::new(false),
             limiter: LimiterControls::default(),
             limited: PeakMeter::default(),
+            sidechain: crate::sidechain::SidechainControls::default(),
             duck: crate::duck::DuckControls::default(),
             duck_reduction: PeakMeter::default(),
             keys: OnceLock::new(),

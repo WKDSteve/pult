@@ -38,6 +38,7 @@ pub mod rate;
 pub mod remix;
 pub mod scale;
 pub mod select;
+pub mod sidechain;
 pub mod stage;
 pub mod strip;
 pub mod tone;

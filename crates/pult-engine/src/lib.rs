@@ -327,6 +327,9 @@ pub struct InputSpec {
     /// Its ducker ([`pult_core::duck`]): the input that turns it down, how far and how fast; off
     /// at first.
     pub duck: pult_core::duck::DuckSettings,
+    /// Its sidechain ([`pult_core::sidechain`]): what its gate and compressor listen to;
+    /// themselves at first.
+    pub sidechain: pult_core::sidechain::SidechainSettings,
     /// The buses it feeds, as indices into [`RouteSpec::buses`].
     pub buses: Vec<usize>,
 }
@@ -397,6 +400,7 @@ impl InputSpec {
             limit_on: pult_core::limiter::LimitSettings::INPUT.on,
             limit_db: pult_core::limiter::LimitSettings::INPUT.ceiling_db,
             duck: pult_core::duck::DuckSettings::default(),
+            sidechain: pult_core::sidechain::SidechainSettings::default(),
             buses,
         }
     }
@@ -558,6 +562,12 @@ impl RouteSpec {
                 .checked()
                 .and_then(|duck| pult_core::duck::check_key(index, duck.key, self.inputs.len()));
             if let Err(why) = duck {
+                return invalid(format!("input \"{}\": {why}", input.device));
+            }
+            let sidechain = input.sidechain.checked().and_then(|sidechain| {
+                pult_core::sidechain::check_key(index, sidechain.key, self.inputs.len())
+            });
+            if let Err(why) = sidechain {
                 return invalid(format!("input \"{}\": {why}", input.device));
             }
             for (what, amount) in [("gate", input.gate), ("comp", input.comp)] {
@@ -1243,6 +1253,7 @@ fn make_rings(
         let _ = controls.keys.set((Arc::clone(&rings.keys), index));
     }
     controls.duck.set_all(input.duck);
+    controls.sidechain.set_all(input.sidechain);
     let (target, band, capacity) = buffering(sample_rate, rings.latency_ms);
     let ring = InputConfig {
         channels: usize::from(channels),

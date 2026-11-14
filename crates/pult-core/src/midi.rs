@@ -223,6 +223,16 @@ pub struct MidiBinding {
     pub target: String,
 }
 
+/// The way of a knob over a setting of a ducker (evenly) or a filter of a sidechain (by
+/// octaves); `None` for their keys, which name an input, and for any other address.
+fn keyed_span(binding: Binding) -> Option<Span> {
+    match binding {
+        Binding::Input(_, InputParam::Duck(duck)) => duck.range().map(Span::even),
+        Binding::Input(_, InputParam::Sidechain(param)) => param.range().map(Span::octaves),
+        _ => None,
+    }
+}
+
 /// The kinds of thing a target can be.
 #[derive(Debug, Clone, PartialEq)]
 enum Param {
@@ -300,12 +310,10 @@ impl Param {
             Binding::Input(_, InputParam::Width) => {
                 Self::Knob(binding, Span::even(crate::strip::WIDTH_RANGE))
             }
-            Binding::Input(_, InputParam::Duck(duck)) => match duck.range() {
-                Some(range) => Self::Knob(binding, Span::even(range)),
-                None => {
-                    return Err(format!("{target} names an input, which no control can say"));
-                }
-            },
+            Binding::Input(_, InputParam::Duck(_) | InputParam::Sidechain(_)) => {
+                let no_knob = || format!("{target} names an input, which no control can say");
+                Self::Knob(binding, keyed_span(binding).ok_or_else(no_knob)?)
+            }
             Binding::Bus(_, BusParam::LimitCeiling)
             | Binding::Input(_, InputParam::LimitCeiling) => {
                 Self::Knob(binding, Span::even(LIMIT_CEILING_DB))
@@ -658,6 +666,7 @@ impl Map {
                         | Value::Delay(number),
                     ) => span.pos(number),
                     Some(Value::Duck(change)) => span.pos(change.number()),
+                    Some(Value::Sidechain(change)) => span.pos(change.number()),
                     _ => return Step::default(),
                 };
                 let to_value = |pos: f32| OpValue::Number(span.value(pos));

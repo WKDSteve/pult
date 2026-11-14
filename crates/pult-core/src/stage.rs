@@ -8,13 +8,17 @@
 //!    the samples of the device (before any resampler, so an overshoot of its filter never
 //!    shows as a clip of the source), and whether the input is routed anywhere or not;
 //! 2. the channel strip ([`crate::strip`]): polarity, high- and low-pass, delay, width;
-//! 3. the gate, then the compressor ([`crate::dynamics`]), and the equalizer of the input
+//! 3. the gate, then the compressor ([`crate::dynamics`]), each listening to the sound itself
+//!    or to the sidechain of the input ([`crate::sidechain`]: the sound through filters, or the
+//!    level of another input from the key board), and the equalizer of the input
 //!    ([`crate::eq`]) behind them, or before them when [`InputControls::eq_pre`] says so (the
 //!    order a console lets one choose: the compressor then sees the equalized sound);
 //!    then the limiter of the input ([`crate::limiter`]), without lookahead;
 //! 4. the level for the automixer, when the input is in a group ([`crate::automix`]);
 //! 5. its level onto the key board of the route, for the inputs it ducks, then its own ducker
-//!    ([`crate::duck`]): the key is taken before the ducker, so two inputs can duck each other;
+//!    ([`crate::duck`]): the key is taken before the ducker, so two inputs can duck each other
+//!    (its level before gate and compressor goes there too, right behind the strip, for the
+//!    sidechains of the others);
 //! 6. the result into every ring ([`Capture::push`]).
 //!
 //! Gain, pan, mute, solo and the matrix stay in the rings: they are per bus, or must glide
@@ -33,6 +37,7 @@ use crate::dynamics::{Compressor, Gate, loudest};
 use crate::eq::Equalizer;
 use crate::limiter::Limiter;
 use crate::mixer::{Capture, InputControls};
+use crate::sidechain::{Detector, Sidechain};
 use crate::strip::ChannelStrip;
 
 /// Frames the stage works on at once; a longer callback goes through in several pieces.
@@ -50,6 +55,7 @@ pub struct InputStage {
     limiter: Limiter,
     follower: PowerFollower,
     ducker: Ducker,
+    sidechain: Sidechain,
     block: Vec<f32>,
 }
 
@@ -73,6 +79,7 @@ impl InputStage {
             limiter: Limiter::new(rate, channels),
             follower: PowerFollower::new(rate),
             ducker: Ducker::new(rate),
+            sidechain: Sidechain::new(channels, rate, STAGE_FRAMES),
             block: vec![0.0; STAGE_FRAMES * channels],
         }
     }
@@ -92,6 +99,7 @@ impl InputStage {
         self.limiter.prepare(self.channels);
         self.follower.start_over();
         self.ducker.start_over();
+        self.sidechain.start_over();
     }
 
     /// Meters the whole frames of `data`, gates and compresses them and hands them to `sink`,
@@ -109,9 +117,30 @@ impl InputStage {
             if eq_pre {
                 self.eq.process(&self.controls.eq, block, ch);
             }
-            self.gate.process(&self.controls.gate, block, ch);
-            self.compressor
-                .process(&self.controls.compressor, block, ch);
+            let muted = self.controls.muted.load(Ordering::Relaxed);
+            let keys = self.controls.keys.get();
+            if let Some((board, index)) = keys {
+                // What the sidechains of the others listen to: before gate and compressor.
+                board.store_raw(*index, if muted { 0.0 } else { loudest(block) });
+            }
+            self.sidechain.begin(
+                &self.controls.sidechain,
+                keys.map(|(board, _)| &**board),
+                block.len() / ch,
+            );
+            match self.sidechain.key(Detector::Gate, block) {
+                Some(key) => self.gate.process_keyed(&self.controls.gate, block, key, ch),
+                None => self.gate.process(&self.controls.gate, block, ch),
+            }
+            match self.sidechain.key(Detector::Compressor, block) {
+                Some(key) => {
+                    self.compressor
+                        .process_keyed(&self.controls.compressor, block, key, ch);
+                }
+                None => self
+                    .compressor
+                    .process(&self.controls.compressor, block, ch),
+            }
             if !eq_pre {
                 self.eq.process(&self.controls.eq, block, ch);
             }
@@ -131,14 +160,10 @@ impl InputStage {
                     .member(*index)
                     .store_power(self.follower.follow(block, ch));
             }
-            if let Some((board, index)) = self.controls.keys.get() {
+            if let Some((board, index)) = keys {
                 // What the others duck by: after gate and compressor, before this input's own
                 // ducker and fader. A muted input keys nothing.
-                let level = if self.controls.muted.load(Ordering::Relaxed) {
-                    0.0
-                } else {
-                    loudest(block)
-                };
+                let level = if muted { 0.0 } else { loudest(block) };
                 board.store(*index, level);
                 self.ducker.process(&self.controls.duck, board, block, ch);
                 self.controls

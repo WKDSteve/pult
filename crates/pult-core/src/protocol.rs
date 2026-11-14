@@ -146,6 +146,10 @@ pub struct InputState {
     /// How far its limiter turned down at most since the previous state, in dB.
     #[serde(default)]
     pub limited_db: f32,
+    /// Its sidechain; neutral from a run older than it. `key` is the number of the input its
+    /// gate and compressor listen to, 0 for itself.
+    #[serde(default)]
+    pub sidechain: crate::sidechain::SidechainSettings,
     /// Its ducker; off from a run older than ducking. `key` is the number of the input that
     /// ducks it, 0 for none.
     #[serde(default)]
@@ -400,6 +404,7 @@ impl InputState {
             limit_on: input.limit_on,
             limit_db: input.limit_db,
             limited_db: input.limited_db,
+            sidechain: input.sidechain,
             duck: input.duck,
             duck_reduction_db: input.duck_reduction_db,
             buses: input.buses.iter().filter_map(bus_name).collect(),
@@ -638,6 +643,11 @@ fn set_of(command: &Command) -> Option<(Place, String, OpValue, u32)> {
             change.param().address(),
             Number(change.number()),
         ),
+        Command::Sidechain(input, change) => at(
+            Input(input),
+            change.param().address(),
+            Number(change.number()),
+        ),
         Command::Automix(input, on) => at(Input(input), "automix", Switch(on)),
         Command::AutomixWeight(input, db) => at(Input(input), "automix/weight", Number(db)),
         Command::Talkback(input, on) => at(Input(input), "talkback", Switch(on)),
@@ -871,6 +881,11 @@ fn value_for(binding: Binding, value: &OpValue, address: &str) -> Result<Value, 
             .change(wants_number(*number)?)
             .checked()
             .map(Value::Duck)
+            .map_err(|why| format!("{address}: {why}")),
+        (Binding::Input(_, InputParam::Sidechain(param)), OpValue::Number(number)) => param
+            .change(wants_number(*number)?)
+            .checked()
+            .map(Value::Sidechain)
             .map_err(|why| format!("{address}: {why}")),
         (
             Binding::Input(_, InputParam::Comp) | Binding::Bus(_, BusParam::Comp),

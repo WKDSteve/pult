@@ -66,6 +66,9 @@
 //! duck_attack_ms = 60          # optional, 1 to 1000: how fast it turns down
 //! duck_hold_ms = 400           # optional, 0 to 5000: how long it stays down after input 2
 //! duck_release_ms = 800        # optional, 10 to 5000: how fast it comes back
+//! sidechain_by = 2             # optional: its gate and compressor listen to input 2
+//! sidechain_hpf_hz = 20        # optional, 20 (off) to 10000: a high-pass before its detectors
+//! sidechain_lpf_hz = 20000     # optional, 100 to 20000 (off): a low-pass before them
 //!
 //! [[input.eq]]                 # optional: one band of this input's equalizer, as [[bus.eq]]
 //! band = 1
@@ -106,6 +109,7 @@ use pult_core::duck::{DuckChange, DuckSettings};
 use pult_core::eq::BandChange;
 use pult_core::limiter::{DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LimitSettings};
 use pult_core::multiband::MultibandSettings;
+use pult_core::sidechain::{SidechainChange, SidechainSettings};
 use pult_core::strip::StripSettings;
 use pult_core::{Band, BandKind, EQ_BANDS, MAX_RAMP_MS};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
@@ -286,9 +290,29 @@ struct InputEntry {
     duck_attack_ms: Option<f32>,
     duck_hold_ms: Option<f32>,
     duck_release_ms: Option<f32>,
+    sidechain_by: Option<usize>,
+    sidechain_hpf_hz: Option<f32>,
+    sidechain_lpf_hz: Option<f32>,
 }
 
 impl InputEntry {
+    /// Its sidechain, with every corner checked; the key is checked with the route
+    /// ([`RouteSpec::validate`]).
+    fn sidechain(&self, what: &str) -> Result<SidechainSettings, ProfileError> {
+        let mut sidechain = SidechainSettings::default();
+        let changes = [
+            self.sidechain_by.map(SidechainChange::Key),
+            self.sidechain_hpf_hz.map(SidechainChange::Hpf),
+            self.sidechain_lpf_hz.map(SidechainChange::Lpf),
+        ];
+        for change in changes.into_iter().flatten() {
+            sidechain.apply(change);
+        }
+        sidechain
+            .checked()
+            .map_err(|why| ProfileError(format!("{what}: {why}")))
+    }
+
     /// Its ducker, with every number checked; the key is checked with the route
     /// ([`RouteSpec::validate`]), which knows how many inputs there are.
     fn duck(&self, what: &str) -> Result<DuckSettings, ProfileError> {
@@ -613,6 +637,7 @@ fn inputs(entries: Vec<InputEntry>, buses: &[BusSpec]) -> Result<Vec<InputSpec>,
             None => pult_core::limiter::LimitSettings::INPUT.ceiling_db,
         };
         let duck = entry.duck(&what)?;
+        let sidechain = entry.sidechain(&what)?;
         inputs.push(InputSpec {
             device: name,
             kind,
@@ -641,6 +666,7 @@ fn inputs(entries: Vec<InputEntry>, buses: &[BusSpec]) -> Result<Vec<InputSpec>,
             limit_on: entry.limit_on,
             limit_db,
             duck,
+            sidechain,
             buses: routed,
         });
     }
@@ -1017,6 +1043,7 @@ fn render_input(text: &mut String, spec: &RouteSpec, input: &InputSpec) {
         let _ = writeln!(text, "talkback = true");
     }
     render_duck(text, &input.duck);
+    render_sidechain(text, &input.sidechain);
     render_input_eq(text, input);
 }
 
@@ -1048,6 +1075,21 @@ fn render_input_eq(text: &mut String, input: &InputSpec) {
                 band.q
             );
         }
+    }
+}
+
+/// The lines of a sidechain that is not as it starts.
+#[allow(clippy::float_cmp)] // Exactly: as it starts, or written down.
+fn render_sidechain(text: &mut String, sidechain: &SidechainSettings) {
+    let neutral = SidechainSettings::default();
+    if sidechain.key > 0 {
+        let _ = writeln!(text, "sidechain_by = {}", sidechain.key);
+    }
+    if sidechain.hpf_hz != neutral.hpf_hz {
+        let _ = writeln!(text, "sidechain_hpf_hz = {}", sidechain.hpf_hz);
+    }
+    if sidechain.lpf_hz != neutral.lpf_hz {
+        let _ = writeln!(text, "sidechain_lpf_hz = {}", sidechain.lpf_hz);
     }
 }
 
@@ -1167,6 +1209,21 @@ fn set_strip(table: &mut Table, strip: &StripSettings) {
     set_number_from(table, "lpf_hz", strip.lpf_hz, neutral.lpf_hz);
     set_number_from(table, "delay_ms", strip.delay_ms, neutral.delay_ms);
     set_number_from(table, "width", strip.width, neutral.width);
+}
+
+/// The sidechain of an input into its table.
+fn set_sidechain(table: &mut Table, sidechain: &SidechainSettings) {
+    let neutral = SidechainSettings::default();
+    if sidechain.key > 0 {
+        let number = i64::try_from(sidechain.key).unwrap_or(i64::MAX);
+        if table.get("sidechain_by").and_then(Item::as_integer) != Some(number) {
+            set(table, "sidechain_by", number.into());
+        }
+    } else {
+        table.remove("sidechain_by");
+    }
+    set_number_from(table, "sidechain_hpf_hz", sidechain.hpf_hz, neutral.hpf_hz);
+    set_number_from(table, "sidechain_lpf_hz", sidechain.lpf_hz, neutral.lpf_hz);
 }
 
 /// The ducker of an input into its table. A depth the file does not name reads as the one a
@@ -1331,6 +1388,7 @@ fn merged(existing: &str, spec: &RouteSpec) -> Option<String> {
         );
         set_bands(table, &input.eq)?;
         set_duck(table, &input.duck);
+        set_sidechain(table, &input.sidechain);
     }
     // The parser reads line ends as \n; a Windows file keeps its own.
     let text = file.to_string();

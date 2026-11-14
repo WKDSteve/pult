@@ -18,6 +18,11 @@
 //! duck <input> depth <dB>
 //!                        how far, 0 to 60; also threshold <dB>, attack <ms>, hold <ms>,
 //!                        release <ms>
+//! sidechain <input> by <key>
+//!                        gate and compressor of an input listen to another one; sidechain
+//!                        <input> off lets them listen to the input itself again
+//! sidechain <input> hpf|lpf <Hz>|off
+//!                        filters before its detectors only, 20 to 10000 and 100 to 20000
 //! mb <bus> low|mid|high <0..10>
 //!                        the multiband compressor of a bus, one knob per band; mb <bus> split
 //!                        low|high <Hz> moves the corners between them
@@ -57,6 +62,7 @@ use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
 use crate::multiband::{BAND_WORDS, MultibandChange};
 use crate::select::{SelectError, select};
+use crate::sidechain::SidechainChange;
 use crate::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ, StripChange};
 
 /// An input or a bus of the running route.
@@ -123,6 +129,8 @@ pub enum Command {
     InputLimit(usize, LimitChange),
     /// Changes one setting of the ducker of an input.
     Duck(usize, DuckChange),
+    /// Changes one setting of the sidechain of an input.
+    Sidechain(usize, SidechainChange),
     /// Takes an input into the automixer or out of it.
     Automix(usize, bool),
     /// Sets the priority of an input in the automixer in dB.
@@ -173,6 +181,12 @@ duck <input> by <key>
                      turn an input down while another one sounds (duck music by mic);
                      duck <input> off undoes it; duck <input> depth <dB> says how far, 0 to
                      60, and threshold <dB>, attack <ms>, hold <ms>, release <ms> set the rest
+sidechain <input> by <key>
+                     gate and compressor of an input listen to another one (sidechain bass by
+                     kick); sidechain <input> off lets them listen to the input itself again
+sidechain <input> hpf|lpf <Hz>|off
+                     filters before its detectors only, the sound stays as it is: a high-pass,
+                     20 to 10000, and a low-pass, 100 to 20000 (sidechain 1 hpf 4000)
 mb <bus> low|mid|high <0..10>
                      the multiband compressor of a bus: one knob per band, so a loud bass no
                      longer turns the voices down (mb A1 low 4, mb A1 mid off); mb <bus> split
@@ -330,6 +344,7 @@ pub fn parse<S: AsRef<str>>(
         "automix" => automix(rest, names),
         "mb" | "multiband" => multiband(rest, names),
         "duck" => duck(rest, names),
+        "sidechain" => sidechain(rest, names),
         "polarity" | "phase" | "hpf" | "lpf" | "delay" | "width" => {
             strip(&keyword.to_lowercase(), rest, names)
         }
@@ -418,6 +433,56 @@ fn strip<S: AsRef<str>>(
             _ => error(format!("{keyword} works on inputs only")),
         },
     }
+}
+
+/// `sidechain <input> by <key>`, `sidechain <input> off` or `sidechain <input> hpf|lpf
+/// <Hz>|off`; both inputs may have several words.
+fn sidechain<S: AsRef<str>>(rest: &[&str], names: Names<'_, S>) -> Result<Command, ParseError> {
+    use crate::sidechain::{HPF_HZ, LPF_HZ};
+    let usage = "usage: sidechain <input> by <key input>, sidechain <input> off, or sidechain \
+                 <input> hpf|lpf <Hz>|off";
+    let only_input = |words: &[&str], what: &str| match target(&words.join(" "), names)? {
+        Target::Input(index) => Ok(index),
+        Target::Bus(_) => error(format!("{what} an input, not a bus")),
+    };
+    // The first `by` with words on both sides divides the input from its key.
+    if let Some(place) = rest
+        .iter()
+        .position(|word| word.eq_ignore_ascii_case("by"))
+        .filter(|&place| place > 0 && place + 1 < rest.len())
+    {
+        let input = only_input(&rest[..place], "a sidechain belongs to")?;
+        let key = only_input(&rest[place + 1..], "the key is")?;
+        return Ok(Command::Sidechain(input, SidechainChange::Key(key + 1)));
+    }
+    // A filter: its word and its corner behind the input.
+    if let [input @ .., filter, value] = rest
+        && !input.is_empty()
+    {
+        let off = value.eq_ignore_ascii_case("off");
+        let change = match filter.to_ascii_lowercase().as_str() {
+            "hpf" if off => Some(SidechainChange::Hpf(HPF_HZ.0)),
+            "lpf" if off => Some(SidechainChange::Lpf(LPF_HZ.1)),
+            word @ ("hpf" | "lpf") => match value.parse::<f32>() {
+                Ok(hz) if hz.is_finite() && word == "hpf" => Some(SidechainChange::Hpf(hz)),
+                Ok(hz) if hz.is_finite() => Some(SidechainChange::Lpf(hz)),
+                _ => return error(format!("\"{value}\" is not a number; {usage}")),
+            },
+            _ => None,
+        };
+        if let Some(change) = change {
+            let input = only_input(input, "a sidechain belongs to")?;
+            return Ok(Command::Sidechain(input, change));
+        }
+    }
+    if let [input @ .., last] = rest
+        && !input.is_empty()
+        && last.eq_ignore_ascii_case("off")
+    {
+        let input = only_input(input, "a sidechain belongs to")?;
+        return Ok(Command::Sidechain(input, SidechainChange::Key(0)));
+    }
+    error(usage)
 }
 
 /// `duck <input> by <key>`, `duck <input> off` or `duck <input> <setting> <value>` with the
@@ -916,6 +981,40 @@ mod tests {
         assert!(bad("gate A1 3").contains("inputs only"));
         assert!(bad("comp 2 mix 40").contains("buses only"));
         assert!(bad("comp A1 mix lots").contains("takes a number"));
+    }
+
+    #[test]
+    fn a_sidechain_is_set_by_its_key_and_its_filters() {
+        assert_eq!(
+            ok("sidechain 1 by 2"),
+            Command::Sidechain(0, SidechainChange::Key(2))
+        );
+        assert_eq!(
+            ok("sidechain cable off"),
+            Command::Sidechain(0, SidechainChange::Key(0))
+        );
+        assert_eq!(
+            ok("sidechain 3 hpf 4000"),
+            Command::Sidechain(2, SidechainChange::Hpf(4000.0))
+        );
+        assert_eq!(
+            ok("sidechain 3 HPF off"),
+            Command::Sidechain(2, SidechainChange::Hpf(20.0))
+        );
+        assert_eq!(
+            ok("sidechain 3 lpf off"),
+            Command::Sidechain(2, SidechainChange::Lpf(20_000.0))
+        );
+        assert_eq!(
+            ok("sidechain 3 lpf 800"),
+            Command::Sidechain(2, SidechainChange::Lpf(800.0))
+        );
+        assert!(bad("sidechain A1 by 2").contains("not a bus"));
+        assert!(bad("sidechain 1 by A1").contains("the key is an input"));
+        assert!(bad("sidechain 1 by 9").contains("no input 9"));
+        assert!(bad("sidechain 1 hpf high").contains("not a number"));
+        assert!(bad("sidechain 1").contains("usage: sidechain"));
+        assert!(bad("sidechain").contains("usage: sidechain"));
     }
 
     #[test]

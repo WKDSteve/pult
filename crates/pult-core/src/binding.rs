@@ -15,6 +15,7 @@ use crate::duck::{DuckChange, DuckParam};
 use crate::eq::{BandChange, BandKind, EQ_BANDS};
 use crate::limiter::LimitChange;
 use crate::multiband::MultibandParam;
+use crate::sidechain::{SidechainChange, SidechainParam};
 use crate::strip::StripChange;
 use crate::view::{Action, BusView, GAIN_RANGE_DB, InputView, MixerView};
 
@@ -49,6 +50,8 @@ pub enum InputParam {
     Width,
     /// One setting of its ducker.
     Duck(DuckParam),
+    /// One setting of its sidechain: what its gate and compressor listen to.
+    Sidechain(SidechainParam),
     /// Whether it is a talkback microphone: silent until someone talks.
     Talkback,
     /// The switch of its equalizer.
@@ -220,6 +223,8 @@ pub enum Value {
     Delay(f32),
     /// One setting of a ducker, as the change that sets it.
     Duck(DuckChange),
+    /// One setting of a sidechain, as the change that sets it.
+    Sidechain(SidechainChange),
     /// A peak in dBFS; `None` for silence.
     Peak(Option<f32>),
 }
@@ -380,6 +385,7 @@ impl Binding {
                     InputParam::Delay => "delay",
                     InputParam::Width => "width",
                     InputParam::Duck(duck) => duck.address(),
+                    InputParam::Sidechain(param) => param.address(),
                     InputParam::Talkback => "talkback",
                     InputParam::Eq | InputParam::EqBand(..) => "eq",
                     InputParam::EqPre => "eq/pre",
@@ -443,6 +449,7 @@ impl Binding {
                     InputParam::Delay => Value::Delay(input.strip.delay_ms),
                     InputParam::Width => Value::Percent(input.strip.width),
                     InputParam::Duck(duck) => Value::Duck(duck.read(&input.duck)),
+                    InputParam::Sidechain(param) => Value::Sidechain(param.read(&input.sidechain)),
                     InputParam::Talkback => Value::Switch(input.talkback),
                     InputParam::Eq => Value::Switch(input.eq_on),
                     InputParam::EqBand(band, param) => param.read(input.eq.get(band)?),
@@ -606,9 +613,15 @@ impl Binding {
         })
     }
 
-    /// [`Self::write`] for what belongs to listening and talking: dim and talkback.
+    /// [`Self::write`] for what belongs to listening and talking: dim and talkback; and for the
+    /// sidechain of an input.
     fn write_monitoring(self, value: Value) -> Option<Action> {
         Some(match (self, value) {
+            (Self::Input(input, InputParam::Sidechain(param)), Value::Sidechain(change))
+                if change.param() == param =>
+            {
+                Action::InputSidechain { input, change }
+            }
             (Self::Input(input, InputParam::Talkback), Value::Switch(on)) => {
                 Action::InputTalkback { input, on }
             }
@@ -672,6 +685,14 @@ impl Binding {
                     DuckParam::Attack => "ducking attack",
                     DuckParam::Hold => "ducking hold",
                     DuckParam::Release => "ducking release",
+                };
+                format!("{} {what}", input(index))
+            }
+            Self::Input(index, InputParam::Sidechain(param)) => {
+                let what = match param {
+                    SidechainParam::Key => "sidechain key",
+                    SidechainParam::Hpf => "sidechain high-pass",
+                    SidechainParam::Lpf => "sidechain low-pass",
                 };
                 format!("{} {what}", input(index))
             }
@@ -771,7 +792,10 @@ fn input_param(word: &str) -> Option<InputParam> {
             let index = place(number).filter(|&index| index < EQ_BANDS)?;
             InputParam::EqBand(index, BandParam::from_word(setting)?)
         }
-        other => InputParam::Duck(DuckParam::from_address(other)?),
+        other => match SidechainParam::from_address(other) {
+            Some(param) => InputParam::Sidechain(param),
+            None => InputParam::Duck(DuckParam::from_address(other)?),
+        },
     })
 }
 
@@ -877,6 +901,18 @@ mod tests {
                 "input/2/duck/release",
                 Binding::Input(1, InputParam::Duck(DuckParam::Release)),
             ),
+            (
+                "input/2/sidechain/key",
+                Binding::Input(1, InputParam::Sidechain(SidechainParam::Key)),
+            ),
+            (
+                "input/2/sidechain/hpf",
+                Binding::Input(1, InputParam::Sidechain(SidechainParam::Hpf)),
+            ),
+            (
+                "input/2/sidechain/lpf",
+                Binding::Input(1, InputParam::Sidechain(SidechainParam::Lpf)),
+            ),
             ("bus/A1/gain", Binding::Bus(0, BusParam::Gain)),
             ("bus/A1/mute", Binding::Bus(0, BusParam::Mute)),
             ("bus/A1/meter", Binding::Bus(0, BusParam::Meter)),
@@ -948,6 +984,35 @@ mod tests {
             send.write(Value::Switch(true)),
             None,
             "a send takes a level"
+        );
+    }
+
+    #[test]
+    fn a_sidechain_reads_and_writes_its_settings() {
+        let mut view = FakeDesk::new().view();
+        view.inputs[0].sidechain.apply(SidechainChange::Key(2));
+        let key = Binding::Input(0, InputParam::Sidechain(SidechainParam::Key));
+        let hpf = Binding::Input(0, InputParam::Sidechain(SidechainParam::Hpf));
+        assert_eq!(
+            key.read(&view),
+            Some(Value::Sidechain(SidechainChange::Key(2)))
+        );
+        assert_eq!(
+            hpf.read(&view),
+            Some(Value::Sidechain(SidechainChange::Hpf(20.0)))
+        );
+        assert_eq!(
+            hpf.write(Value::Sidechain(SidechainChange::Hpf(4000.0))),
+            Some(Action::InputSidechain {
+                input: 0,
+                change: SidechainChange::Hpf(4000.0)
+            })
+        );
+        // A value of another setting is not for this address.
+        assert_eq!(hpf.write(Value::Sidechain(SidechainChange::Key(3))), None);
+        assert_eq!(
+            key.title(&view),
+            format!("{} sidechain key", view.inputs[0].name)
         );
     }
 

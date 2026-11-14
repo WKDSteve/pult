@@ -165,6 +165,9 @@ Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Fel
 | `input/<n>/duck/key` | Zahl: Nummer des Eingangs, der ihn absenkt; 0 für keinen |
 | `input/<n>/duck/threshold` | Zahl, -70 bis 0 dB: Pegel des Schlüssels, ab dem abgesenkt wird |
 | `input/<n>/duck/attack`, `/hold`, `/release` | Zahl in ms: 1 bis 1000, 0 bis 5000, 10 bis 5000 |
+| `input/<n>/sidechain/key` | Zahl: Nummer des Eingangs, auf den Gate und Kompressor hören; 0 für den Eingang selbst |
+| `input/<n>/sidechain/hpf` | Zahl, 20 (aus) bis 10000 Hz: Hochpass vor den Detektoren von Gate und Kompressor |
+| `input/<n>/sidechain/lpf` | Zahl, 100 bis 20000 Hz (aus): Tiefpass vor den Detektoren |
 | `bus/<name>/comp` | Zahl, 0 (aus) bis 10: der Bus-Kompressor |
 | `bus/<name>/comp/mix` | Zahl, 0 (trocken) bis 100 (ganz komprimiert) |
 | `bus/<name>/comp/hpf` | Zahl, 20 bis 500 Hz: Hochpass im Steuersignal |

@@ -112,6 +112,7 @@ fn showcase_inputs(t: f64) -> Vec<InputView> {
                 gate_reduction_db: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][i],
                 gate_open: true,
                 comp_reduction_db: [4.5, 1.2, 0.0, 0.0, 0.0, 0.0, 0.0][i],
+                sidechain: pult_core::sidechain::SidechainSettings::default(),
                 duck: pult_core::duck::DuckSettings::default(),
                 duck_reduction_db: 0.0,
                 strip: showcase_strip(i),
@@ -356,8 +357,10 @@ fn equalizer_inputs() {
         .duck
         .apply(pult_core::duck::DuckChange::Key(1));
     view.inputs[1].duck_reduction_db = 9.5;
+    // The first one compresses by the top of its own sound only.
+    view.inputs[0].sidechain.hpf_hz = 4000.0;
     let mut harness = Harness::builder()
-        .with_size(vec2(1280.0, 980.0))
+        .with_size(vec2(1280.0, 1100.0))
         .with_pixels_per_point(1.5)
         .build_ui(move |ui| {
             Theme::current().apply(ui.ctx());

@@ -15,6 +15,7 @@ use pult_core::limiter::{
 };
 use pult_core::multiband::{HIGH_SPLIT_HZ, LOW_SPLIT_HZ, MultibandParam};
 use pult_core::scale::{FADER_FLOOR_DB, FADER_TOP_DB, Span};
+use pult_core::sidechain::{SidechainChange, SidechainParam};
 use pult_core::strip::{HPF_RANGE_HZ, LPF_RANGE_HZ, MAX_DELAY_MS, WIDTH_RANGE};
 use pult_core::view::{AMOUNT_RANGE, Action, MixerView};
 
@@ -66,6 +67,7 @@ impl Dial {
                 both_ways: true,
             }),
             Binding::Input(_, InputParam::Duck(param)) => Self::of_ducker(param),
+            Binding::Input(_, InputParam::Sidechain(param)) => Self::of_sidechain(param),
             Binding::Input(_, InputParam::Delay) => Some(Self {
                 span: Span::even((0.0, MAX_DELAY_MS)),
                 home: 0.0,
@@ -144,6 +146,19 @@ impl Dial {
         }
     }
 
+    /// The dial of a filter of a sidechain, by octaves from the end where it is off; `None` for
+    /// its key, which is an input.
+    fn of_sidechain(param: SidechainParam) -> Option<Self> {
+        let range = param.range()?;
+        let low_pass = param == SidechainParam::Lpf;
+        Some(Self {
+            span: Span::octaves(range),
+            home: if low_pass { range.1 } else { range.0 },
+            // The arc of the low-pass grows down from the open end, as the filter closes.
+            both_ways: low_pass,
+        })
+    }
+
     /// The dial of a setting of a ducker; `None` for its key, which is an input and no number
     /// between two ends. The attack and the release turn by octaves, as times are heard; the
     /// hold starts at nothing and turns evenly.
@@ -200,8 +215,9 @@ pub fn number(value: Value) -> Option<f32> {
         | Value::Lookahead(number)
         | Value::Percent(number)
         | Value::Delay(number) => Some(number),
-        Value::Duck(DuckChange::Key(_)) => None,
+        Value::Duck(DuckChange::Key(_)) | Value::Sidechain(SidechainChange::Key(_)) => None,
         Value::Duck(change) => Some(change.number()),
+        Value::Sidechain(change) => Some(change.number()),
         _ => None,
     }
 }
@@ -220,6 +236,9 @@ fn with_number(value: Value, number: f32) -> Value {
         Value::Delay(_) => Value::Delay(number),
         Value::Duck(change) if change.param() != DuckParam::Key => {
             Value::Duck(change.param().change(number))
+        }
+        Value::Sidechain(change) if change.param() != SidechainParam::Key => {
+            Value::Sidechain(change.param().change(number))
         }
         other => other,
     }
@@ -257,6 +276,15 @@ pub fn format_for(binding: Binding, value: Value) -> String {
         }
         (Binding::Input(_, InputParam::Lpf), Value::Freq(hz)) if hz >= LPF_RANGE_HZ.1 => {
             "off".to_owned()
+        }
+        (_, Value::Sidechain(SidechainChange::Hpf(hz))) if hz <= pult_core::sidechain::HPF_HZ.0 => {
+            "off".to_owned()
+        }
+        (_, Value::Sidechain(SidechainChange::Lpf(hz))) if hz >= pult_core::sidechain::LPF_HZ.1 => {
+            "off".to_owned()
+        }
+        (_, Value::Sidechain(SidechainChange::Hpf(hz) | SidechainChange::Lpf(hz))) => {
+            format_value(Value::Freq(hz))
         }
         _ => format_value(value),
     }
@@ -517,6 +545,31 @@ mod tests {
             "-40 dB"
         );
         assert_eq!(format_value(Value::Duck(DuckChange::Hold(400.0))), "400 ms");
+    }
+
+    #[test]
+    fn a_sidechain_has_a_dial_for_each_filter_and_none_for_its_key() {
+        let at = |param| Binding::Input(0, InputParam::Sidechain(param));
+        assert_eq!(Dial::of(at(SidechainParam::Key)), None);
+        let high = Dial::of(at(SidechainParam::Hpf)).expect("a dial");
+        assert_eq!(high.home, 20.0);
+        assert!(!high.both_ways);
+        let low = Dial::of(at(SidechainParam::Lpf)).expect("a dial");
+        assert_eq!(low.home, 20_000.0);
+        assert!(low.both_ways);
+        let value = Value::Sidechain(SidechainChange::Hpf(20.0));
+        assert_eq!(format_for(at(SidechainParam::Hpf), value), "off");
+        assert_eq!(
+            with_number(value, 4000.0),
+            Value::Sidechain(SidechainChange::Hpf(4000.0))
+        );
+        assert_eq!(
+            format_for(at(SidechainParam::Hpf), with_number(value, 4000.0)),
+            "4.0k"
+        );
+        let open = Value::Sidechain(SidechainChange::Lpf(20_000.0));
+        assert_eq!(format_for(at(SidechainParam::Lpf), open), "off");
+        assert_eq!(number(Value::Sidechain(SidechainChange::Key(2))), None);
     }
 
     #[test]

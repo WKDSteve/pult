@@ -233,6 +233,19 @@ pult run --profile meinprofil.toml --log abend.csv
   Kompressor und vor seinem Fader gemessen, ein gemuteter Schlüssel senkt nichts ab, und zwei Eingänge können sich
   gegenseitig absenken. Fällt das Gerät des Schlüssels aus, gilt er nach 250 ms als still. Die Absenkung gleitet, nichts
   knackt.
+- **Sidechain:** Gate und Kompressor eines Eingangs hören normalerweise auf den Ton, den sie bearbeiten. Der Sidechain
+  ändert das auf zwei Arten. Mit einem Schlüssel (`sidechain_by = 2` am Eingang, `sidechain 1 by 2` im Lauf) hören beide
+  auf einen anderen Eingang: ein Bass, dessen Gate nur mit der Bassdrum aufgeht, oder Musik, die ein Kompressor unter
+  der Stimme zurücknimmt. Mit Filtern (`sidechain_hpf_hz = 20..10000`, `sidechain_lpf_hz = 100..20000`,
+  `sidechain 1 hpf 4000`, `sidechain 1 lpf off`) hören sie nur einen Teil des eigenen Tons: hinter einem Hochpass pumpt
+  der Kompressor nicht mehr mit dem Bass, und einer, der nur die Höhen hört, greift bei Zischlauten. Der Ton selbst geht
+  nie durch diese Filter. `sidechain 1 off` nimmt den Schlüssel weg; von außen `input/<n>/sidechain/key`, `/hpf` und
+  `/lpf`. Der Schlüssel kommt wie beim Ducking als Pegel, ein Wert je Block und höchstens einen Callback alt (ein so
+  geöffnetes Gate geht bis zu einen Block später auf), gemessen hinter dem Kanalzug des Schlüssels und vor dessen Gate
+  und Kompressor; zwei Eingänge können deshalb aufeinander hören, ohne sich zuzusperren. Ein gemuteter Schlüssel öffnet
+  und drückt nichts, und fällt sein Gerät aus, gilt er nach 250 ms als still. Mit einem Schlüssel wirken die Filter
+  nicht: von ihm gibt es nur den Pegel. Im Fenster steht der Sidechain in der Ansicht EQ unter der Kurve jedes
+  Eingangs, über dem Ducker: SELF oder eine Taste je Eingang, daneben HPF und LPF.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil

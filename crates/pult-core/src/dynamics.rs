@@ -311,6 +311,30 @@ impl Gate {
 
     /// Gates `data` (interleaved, `channels` per frame) in place as `controls` say.
     pub fn process(&mut self, controls: &GateControls, data: &mut [f32], channels: usize) {
+        self.run(controls, data, None, channels);
+    }
+
+    /// Gates `data` by the level of `key` (the same frames, for example filtered, or the level
+    /// of another input: a sidechain), as `controls` say. A `key` of another length is not
+    /// taken: `data` keys itself.
+    pub fn process_keyed(
+        &mut self,
+        controls: &GateControls,
+        data: &mut [f32],
+        key: &[f32],
+        channels: usize,
+    ) {
+        let key = (key.len() == data.len()).then_some(key);
+        self.run(controls, data, key, channels);
+    }
+
+    fn run(
+        &mut self,
+        controls: &GateControls,
+        data: &mut [f32],
+        key: Option<&[f32]>,
+        channels: usize,
+    ) {
         if channels == 0 {
             return;
         }
@@ -325,8 +349,12 @@ impl Gate {
         if !self.on && self.gain == 1.0 {
             return;
         }
-        for frame in data.chunks_exact_mut(channels) {
-            self.level = loudest(frame).max(self.level * self.level_fall);
+        for (index, frame) in data.chunks_exact_mut(channels).enumerate() {
+            let heard = match key {
+                Some(key) => loudest(&key[index * channels..(index + 1) * channels]),
+                None => loudest(frame),
+            };
+            self.level = heard.max(self.level * self.level_fall);
             let threshold = if self.open {
                 self.stays_above
             } else {

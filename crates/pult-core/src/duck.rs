@@ -339,8 +339,11 @@ pub struct KeyBoard {
 
 #[derive(Debug, Default)]
 struct KeyCell {
-    /// The loudest sample of the latest block, linear.
+    /// The loudest sample of the latest block, linear, behind gate and compressor.
     level: AtomicF32,
+    /// The same before gate and compressor: what a sidechain listens to
+    /// ([`crate::sidechain`]).
+    raw: AtomicF32,
     /// Counts the blocks: a reader that sees it stand knows the writer has stopped.
     beat: AtomicU32,
 }
@@ -376,11 +379,87 @@ impl KeyBoard {
         }
     }
 
+    /// Stores the level of input `index` before its gate and compressor, for the same block as
+    /// the next [`Self::store`], which beats for both.
+    pub fn store_raw(&self, index: usize, level: f32) {
+        if let Some(cell) = self.cells.get(index) {
+            cell.raw.store(if level.is_finite() { level } else { 0.0 });
+        }
+    }
+
     /// The level of input `index` (from 0) and its beat; `None` when the board has no such cell.
     #[must_use]
     pub fn read(&self, index: usize) -> Option<(f32, u32)> {
         let cell = self.cells.get(index)?;
         Some((cell.level.load(), cell.beat.load(Ordering::Relaxed)))
+    }
+
+    /// As [`Self::read`], with the level before gate and compressor.
+    #[must_use]
+    pub fn read_raw(&self, index: usize) -> Option<(f32, u32)> {
+        let cell = self.cells.get(index)?;
+        Some((cell.raw.load(), cell.beat.load(Ordering::Relaxed)))
+    }
+}
+
+/// Watches one key on a board from the thread of another input: its level, and silence once it
+/// no longer beats.
+#[derive(Debug)]
+pub struct KeyWatch {
+    /// Own frames after which a key without a beat counts as silent.
+    stale_frames: u32,
+    /// The beat of the key as last seen, and own frames since it moved.
+    seen_beat: Option<u32>,
+    unmoved: u32,
+}
+
+impl KeyWatch {
+    /// A watch in a thread that runs at `rate` frames per second.
+    #[must_use]
+    pub fn new(rate: u32) -> Self {
+        #[allow(clippy::cast_precision_loss)]
+        let rate = rate.max(1) as f32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let stale_frames = (STALE_MS * rate / 1000.0) as u32;
+        Self {
+            stale_frames,
+            seen_beat: None,
+            unmoved: 0,
+        }
+    }
+
+    /// Forgets what it saw: for another key, or a new stream.
+    pub fn start_over(&mut self) {
+        self.seen_beat = None;
+        self.unmoved = 0;
+    }
+
+    /// The level of `key` (a number from 1) now, `frames` own frames after the last look: before
+    /// its gate and compressor when `raw`, else behind them. Silence without a key, for a key
+    /// the board does not have and for one that has not beaten for [`STALE_MS`].
+    pub fn level(&mut self, board: &KeyBoard, key: usize, frames: usize, raw: bool) -> f32 {
+        let read = |index| {
+            if raw {
+                board.read_raw(index)
+            } else {
+                board.read(index)
+            }
+        };
+        let Some((level, beat)) = key.checked_sub(1).and_then(read) else {
+            return 0.0;
+        };
+        if self.seen_beat == Some(beat) {
+            let frames = u32::try_from(frames).unwrap_or(u32::MAX);
+            self.unmoved = self.unmoved.saturating_add(frames);
+        } else {
+            self.seen_beat = Some(beat);
+            self.unmoved = 0;
+        }
+        if self.unmoved > self.stale_frames {
+            0.0
+        } else {
+            level
+        }
     }
 }
 
@@ -454,11 +533,8 @@ pub struct Ducker {
     attack: f64,
     release: f64,
     hold_frames: u32,
-    /// Own frames after which a key without a beat counts as silent.
-    stale_frames: u32,
-    /// The beat of the key as last seen, and own frames since it moved.
-    seen_beat: Option<u32>,
-    unmoved: u32,
+    /// Its look at the key: silent once that no longer beats.
+    watch: KeyWatch,
     /// Whether the key is above the threshold.
     keyed: bool,
     /// Frames it still stays down after the key fell silent.
@@ -471,10 +547,9 @@ impl Ducker {
     /// A ducker at `rate` frames per second, off.
     #[must_use]
     pub fn new(rate: u32) -> Self {
+        let watch = KeyWatch::new(rate);
         #[allow(clippy::cast_precision_loss)]
         let rate = rate.max(1) as f32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let stale_frames = (STALE_MS * rate / 1000.0) as u32;
         let mut ducker = Self {
             rate,
             settings: DuckSettings::default(),
@@ -484,9 +559,7 @@ impl Ducker {
             attack: 0.0,
             release: 0.0,
             hold_frames: 0,
-            stale_frames,
-            seen_beat: None,
-            unmoved: 0,
+            watch,
             keyed: false,
             hold: 0,
             gain: 1.0,
@@ -498,8 +571,7 @@ impl Ducker {
     fn configure(&mut self, settings: DuckSettings) {
         if settings.key != self.settings.key {
             // Another key: what was seen of the old one says nothing about it.
-            self.seen_beat = None;
-            self.unmoved = 0;
+            self.watch.start_over();
             self.keyed = false;
         }
         self.settings = settings;
@@ -519,8 +591,7 @@ impl Ducker {
 
     /// Lets go at once, as after a new stream: what played before does not hold it down.
     pub fn start_over(&mut self) {
-        self.seen_beat = None;
-        self.unmoved = 0;
+        self.watch.start_over();
         self.keyed = false;
         self.hold = 0;
         self.gain = 1.0;
@@ -535,31 +606,6 @@ impl Ducker {
         #[allow(clippy::cast_possible_truncation)]
         let gain = self.gain as f32;
         -20.0 * gain.max(1e-5).log10()
-    }
-
-    /// The level of the key now: silence without a key, for a key the board does not have and
-    /// for one that has not beaten for [`STALE_MS`] of this input's own frames.
-    fn key_level(&mut self, board: &KeyBoard, frames: usize) -> f32 {
-        let Some((level, beat)) = self
-            .settings
-            .key
-            .checked_sub(1)
-            .and_then(|index| board.read(index))
-        else {
-            return 0.0;
-        };
-        if self.seen_beat == Some(beat) {
-            let frames = u32::try_from(frames).unwrap_or(u32::MAX);
-            self.unmoved = self.unmoved.saturating_add(frames);
-        } else {
-            self.seen_beat = Some(beat);
-            self.unmoved = 0;
-        }
-        if self.unmoved > self.stale_frames {
-            0.0
-        } else {
-            level
-        }
     }
 
     /// Ducks `data` (interleaved, `channels` per frame) in place as `controls` and the level of
@@ -582,7 +628,9 @@ impl Ducker {
         if !self.settings.is_on() && self.gain == 1.0 {
             return;
         }
-        let level = self.key_level(board, data.len() / channels);
+        let level = self
+            .watch
+            .level(board, self.settings.key, data.len() / channels, false);
         let threshold = if self.keyed {
             self.stays_above
         } else {
