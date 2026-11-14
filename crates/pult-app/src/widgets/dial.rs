@@ -412,11 +412,14 @@ pub fn labelled(
             );
             if let Some((text, active)) = reduction(values.view(), binding) {
                 let color = if active { p.accent } else { p.text_faint };
-                ui.label(
+                let line = ui.label(
                     RichText::new(text)
                         .font(Theme::value_font(8.5))
                         .color(color),
                 );
+                if let Some(parts) = held_back_parts(values.view(), binding) {
+                    line.on_hover_text(parts);
+                }
             }
         },
     );
@@ -425,10 +428,20 @@ pub fn labelled(
 
 /// What a gate or compressor of an input takes away now, as the line under its dial, and
 /// whether it is at work: a gate says `open` or how much its closed state takes, a compressor how
-/// many dB it takes. `None` for any other dial, and for one that is off.
+/// many dB it takes. Under the delay of a bus stands what holds its sound back in all
+/// (`sum 91 ms`: ring, bus and device; with `+` behind the number while the device has not said
+/// its part), never lit. `None` for any other dial, and for one that is off or knows nothing.
 #[must_use]
 pub fn reduction(view: &MixerView, binding: Binding) -> Option<(String, bool)> {
     match binding {
+        Binding::Bus(index, BusParam::Delay) => {
+            let held = view.buses.get(index)?.held_back();
+            if !held.is_known() {
+                return None;
+            }
+            let open = if held.device_ms.is_some() { "" } else { "+" };
+            Some((format!("sum {:.0}{open} ms", held.total_ms()), false))
+        }
         Binding::Input(index, InputParam::Gate) => {
             let input = view.inputs.get(index)?;
             if input.gate <= 0.0 {
@@ -452,11 +465,65 @@ pub fn reduction(view: &MixerView, binding: Binding) -> Option<(String, bool)> {
     }
 }
 
+/// The parts of the sum under the delay of a bus, for whoever points at it. `None` for any
+/// other dial.
+#[must_use]
+pub fn held_back_parts(view: &MixerView, binding: Binding) -> Option<String> {
+    let Binding::Bus(index, BusParam::Delay) = binding else {
+        return None;
+    };
+    let held = view.buses.get(index)?.held_back();
+    let device = held.device_ms.map_or_else(
+        || "the device has not said what it holds".to_owned(),
+        |ms| format!("device {ms:.1} ms"),
+    );
+    Some(format!(
+        "What holds the sound of this bus back: fullest ring {:.1} ms, bus (limiter lookahead \
+         and delay) {:.1} ms, {device}",
+        held.ring_ms, held.bus_ms
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const GATE: Binding = Binding::Input(0, InputParam::Gate);
+
+    #[test]
+    fn under_the_delay_of_a_bus_stands_what_holds_its_sound_back() {
+        use pult_core::view::RingView;
+        use pult_core::{Desk, FakeDesk};
+        let delay = Binding::Bus(0, BusParam::Delay);
+        let mut view = FakeDesk::new().view();
+        view.buses[0].limit.on = false;
+        view.buses[0].delay_ms = 0.0;
+        // Nothing plays and nothing is set: no line.
+        assert_eq!(reduction(&view, delay), None);
+        view.buses[0].delay_ms = 1.0;
+        view.buses[0].rings = vec![
+            RingView { input: 0, ms: 48.5 },
+            RingView { input: 1, ms: 20.0 },
+        ];
+        // The device has not said its part yet.
+        assert_eq!(
+            reduction(&view, delay),
+            Some(("sum 50+ ms".to_owned(), false))
+        );
+        let parts = held_back_parts(&view, delay).expect("the parts");
+        assert!(parts.contains("fullest ring 48.5 ms"), "{parts}");
+        assert!(parts.contains("has not said"), "{parts}");
+        view.buses[0].device_latency_ms = Some(41.7);
+        assert_eq!(
+            reduction(&view, delay),
+            Some(("sum 91 ms".to_owned(), false))
+        );
+        let parts = held_back_parts(&view, delay).expect("the parts");
+        assert!(parts.contains("bus (limiter lookahead and delay) 1.0 ms, device 41.7 ms"));
+        // Another dial has no parts, a bus that is not there no line.
+        assert_eq!(held_back_parts(&view, GATE), None);
+        assert_eq!(reduction(&view, Binding::Bus(99, BusParam::Delay)), None);
+    }
 
     fn band(param: BandParam) -> Binding {
         Binding::Bus(0, BusParam::EqBand(1, param))

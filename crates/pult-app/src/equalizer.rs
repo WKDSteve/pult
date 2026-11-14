@@ -22,7 +22,7 @@ use crate::theme::Theme;
 use crate::widgets::dial::labelled;
 use crate::widgets::toggle::{Role, toggle};
 
-const BAND_WIDTH: f32 = 168.0;
+const BAND_WIDTH: f32 = 154.0;
 const BAND_GAP: f32 = 10.0;
 const DIAL_SIZE: f32 = 30.0;
 const DIAL_ROW_HEIGHT: f32 = 58.0;

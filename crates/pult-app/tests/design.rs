@@ -178,8 +178,8 @@ fn showcase_buses(t: f64) -> Vec<BusView> {
             comp_mix: [100.0, 100.0, 50.0][j],
             comp_hpf_hz: [20.0, 20.0, 120.0][j],
             delay_ms: 0.0,
-            rings: Vec::new(),
-            device_latency_ms: None,
+            rings: vec![pult_core::view::RingView { input: 0, ms: 48.5 }],
+            device_latency_ms: Some(41.7),
             // The headphones dimmed.
             dim: j == 1,
             dim_db: 20.0,

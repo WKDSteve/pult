@@ -215,6 +215,33 @@ pub struct RingView {
     pub ms: f32,
 }
 
+/// What holds the sound of a bus back, part by part.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeldBack {
+    /// The fullest ring of the inputs that play on the bus, in milliseconds; 0 without one.
+    pub ring_ms: f32,
+    /// The bus itself: the lookahead of its limiter while that is on, and its delay.
+    pub bus_ms: f32,
+    /// What the device says it holds; `None` while it has not said.
+    pub device_ms: Option<f32>,
+}
+
+impl HeldBack {
+    /// All of it in milliseconds, the slowest input's way; without the device while that is
+    /// not known.
+    #[must_use]
+    pub fn total_ms(&self) -> f32 {
+        self.ring_ms + self.bus_ms + self.device_ms.unwrap_or(0.0)
+    }
+
+    /// Whether anything is known at all: a bus that does not play and has no delay holds
+    /// nothing back that could be told.
+    #[must_use]
+    pub fn is_known(&self) -> bool {
+        self.total_ms() > 0.0
+    }
+}
+
 /// One bus as its master strip shows it.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Switches of a console, each on its own.
@@ -295,6 +322,23 @@ impl BusView {
             0.0
         };
         look + self.delay_ms
+    }
+
+    /// What holds the sound of this bus back: its fullest ring, itself and its device. A ring
+    /// or device that reports nonsense counts as nothing.
+    #[must_use]
+    pub fn held_back(&self) -> HeldBack {
+        let sane = |ms: f32| ms.is_finite() && ms > 0.0;
+        HeldBack {
+            ring_ms: self
+                .rings
+                .iter()
+                .map(|ring| ring.ms)
+                .filter(|ms| sane(*ms))
+                .fold(0.0, f32::max),
+            bus_ms: self.latency_ms(),
+            device_ms: self.device_latency_ms.filter(|ms| sane(*ms)),
+        }
     }
 }
 
@@ -1349,6 +1393,48 @@ impl Desk for FakeDesk {
                 Ok(vec![format!("meters {point:?}")])
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod held_back_tests {
+    use super::*;
+    use crate::{Desk, FakeDesk};
+
+    #[test]
+    fn a_bus_is_held_back_by_its_fullest_ring_itself_and_its_device() {
+        let mut bus = FakeDesk::new().view().buses.remove(0);
+        bus.limit.on = true;
+        bus.limit.lookahead_ms = 2.0;
+        bus.delay_ms = 10.0;
+        bus.rings = vec![
+            RingView { input: 0, ms: 30.0 },
+            RingView { input: 1, ms: 45.0 },
+            RingView {
+                input: 2,
+                ms: f32::NAN,
+            },
+        ];
+        bus.device_latency_ms = None;
+        let held = bus.held_back();
+        assert!((held.ring_ms - 45.0).abs() < 1e-6);
+        assert!((held.bus_ms - 12.0).abs() < 1e-6);
+        assert_eq!(held.device_ms, None);
+        assert!((held.total_ms() - 57.0).abs() < 1e-6);
+        assert!(held.is_known());
+        bus.device_latency_ms = Some(40.0);
+        assert!((bus.held_back().total_ms() - 97.0).abs() < 1e-6);
+        // A device that reports nonsense is one that has not said.
+        bus.device_latency_ms = Some(-3.0);
+        assert_eq!(bus.held_back().device_ms, None);
+        bus.device_latency_ms = Some(f32::INFINITY);
+        assert_eq!(bus.held_back().device_ms, None);
+        // A bus that does not play and has neither lookahead nor delay.
+        bus.rings.clear();
+        bus.limit.on = false;
+        bus.delay_ms = 0.0;
+        bus.device_latency_ms = None;
+        assert!(!bus.held_back().is_known());
     }
 }
 

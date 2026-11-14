@@ -301,7 +301,7 @@ pult run --profile meinprofil.toml --log abend.csv
   (`delay_ms`) und in `show`. Damit man sie nicht blind stellt, nennt `show` je Bus, was den Ton aufhält: `rings [1]
   20.1 ms` (was je Eingang im Ring vor dem Bus wartet), `bus 13.0 ms` (Vorschau des Limiters plus Verzögerung) und
   `device 23.4 ms` (was das Gerät als Weg vom Callback zum Ausgang meldet); im Zustand `rings`, `latency_ms` und
-  `device_latency_ms`. Der Unterschied der Summen zweier Busse ist ein erster Wert für die Verzögerung. Die Zahl des
+  `device_latency_ms`. Im Fenster steht die Summe unter dem Regler DELAY (`sum 91 ms`: der vollste Ring, der Bus und das Gerät; mit `+` hinter der Zahl, solange das Gerät seinen Teil noch nicht gemeldet hat), die Teile zeigt der Mauszeiger darauf. Der Unterschied der Summen zweier Busse ist ein erster Wert für die Verzögerung. Die Zahl des
   Geräts kommt vom Treiber, Wandler und Funkstrecken nennt er oft zu kurz: den Versatz zwischen zwei Ausgängen misst
   pult nicht selbst, er gehört am Ende von Hand bestimmt (Klatschen oder ein Klick, mit einem Mikrofon zwischen
   beiden aufgenommen).
