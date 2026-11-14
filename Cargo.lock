@@ -3675,6 +3675,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pult-plughost"
+version = "0.1.0"
+dependencies = [
+ "assert_no_alloc",
+ "pult-core",
+ "windows",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"

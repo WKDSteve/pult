@@ -63,10 +63,11 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | `crates/pult-hub` | die lokale Steuerschnittstelle auf `appkit-hub` ([`docs/CONTROL.md`](docs/CONTROL.md)); hält `axum` und `tokio` von den Audio-Crates fern |
 | `crates/pult-midi` | der MIDI-Controller auf `midir`: Gerät und Belegung, außerhalb der Audio-Callbacks |
 | `crates/pult-cli` | das Programm `pult` |
+| `crates/pult-plughost` | Spike, von pult noch nicht benutzt: der Weg zu Plug-ins in einem eigenen Prozess. Ein Einschleifpunkt schreibt jeden Block in einen Ring im Shared Memory und liest den Block davor zurück (ein Block Latenz, nie ein Warten); `pult-plughost bench` misst Ausfälle, Weckzeiten und CPU und beendet auf Wunsch den Host-Prozess mittendrin. Statt eines Plug-ins rechnet ein Gain. Nicht im Release-Zip |
 
 Echtzeit-Regel wie in takt: In den Audio-Callbacks wird nichts allokiert, nichts gesperrt und nichts geloggt. Ein Debug-Build bricht mit `assert_no_alloc` ab, sobald ein Callback doch allokiert.
 
-`unsafe` gibt es nur im Modul `ffi` von `pult-engine` (die Windows-Aufrufe für den Prozess-Loopback); der Workspace verbietet es sonst, `pult-core` und `pult-cli` verbieten es ganz (`forbid`).
+`unsafe` gibt es nur in den Modulen `ffi` von `pult-engine` (die Windows-Aufrufe für den Prozess-Loopback), `pult-app` und `pult-plughost` (Shared Memory, Ereignis, Zeitgeber); der Workspace verbietet es sonst, `pult-core` und `pult-cli` verbieten es ganz (`forbid`).
 
 ## Bauen und prüfen
 

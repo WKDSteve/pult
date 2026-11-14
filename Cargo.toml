@@ -7,6 +7,7 @@ members = [
     "crates/pult-midi",
     "crates/pult-cli",
     "crates/pult-app",
+    "crates/pult-plughost",
 ]
 
 [workspace.package]
@@ -46,6 +47,9 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Diagnostics_ToolHelp",
+    # pult-plughost `ffi`: the shared memory and the clock both processes read.
+    "Win32_System_Memory",
+    "Win32_System_Performance",
     "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_Security",
