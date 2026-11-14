@@ -401,6 +401,60 @@ fn the_equalizer_view_sets_its_bands() {
 }
 
 #[test]
+fn the_equalizer_view_sets_the_ducker_of_an_input() {
+    let mut harness = harness();
+    harness.run_steps(2);
+    harness.get_by_label("EQ").click();
+    harness.run_steps(2);
+    let name = harness.state_mut().desk.view().inputs[SPOTIFY]
+        .shown_name()
+        .to_owned();
+    // An input cannot duck itself: it has no button for that.
+    let own = format!("{name} ducking key {}", SPOTIFY + 1);
+    assert!(harness.query_by_label(&own).is_none());
+
+    // Its row is far down the page: a click needs it in sight.
+    harness
+        .get_by_label(&format!("{name} ducking key 1"))
+        .scroll_to_me();
+    // The page glides there.
+    harness.run_steps(30);
+    harness
+        .get_by_label(&format!("{name} ducking key 1"))
+        .click();
+    harness.run_steps(2);
+    harness
+        .get_by_label(&format!("{name} ducking depth"))
+        .set_value_accesskit(18.0);
+    harness
+        .get_by_label(&format!("{name} ducking threshold"))
+        .set_value_accesskit(-30.0);
+    harness
+        .get_by_label(&format!("{name} ducking release"))
+        .set_value_accesskit(1200.0);
+    let view = desk_view(&mut harness);
+    let duck = view.inputs[SPOTIFY].duck;
+    assert_eq!(duck.key, 1);
+    assert!((duck.depth_db - 18.0).abs() < 1e-3, "{duck:?}");
+    assert!((duck.threshold_db + 30.0).abs() < 1e-3, "{duck:?}");
+    assert!((duck.release_ms - 1200.0).abs() < 0.5, "{duck:?}");
+    assert_eq!(view.inputs[0].duck.key, 0, "only this input");
+
+    // The key it has already: nothing is asked of the desk. NONE takes it away.
+    harness.state_mut().actions.clear();
+    harness
+        .get_by_label(&format!("{name} ducking key 1"))
+        .click();
+    harness.run_steps(2);
+    assert_eq!(harness.state_mut().actions, []);
+    harness
+        .get_by_label(&format!("{name} ducking key none"))
+        .click();
+    let view = desk_view(&mut harness);
+    assert_eq!(view.inputs[SPOTIFY].duck.key, 0);
+}
+
+#[test]
 fn keys_step_a_focused_fader() {
     let mut harness = harness();
     harness.run_steps(2);

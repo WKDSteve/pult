@@ -8,6 +8,7 @@ use std::f32::consts::PI;
 use eframe::egui::{
     Align, Layout, Response, RichText, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, vec2,
 };
+use pult_core::duck::{DuckChange, DuckParam, DuckSettings};
 use pult_core::eq::{Band, EQ_FREQ_HZ, EQ_GAIN_DB, EQ_Q};
 use pult_core::limiter::{
     DEFAULT_CEILING_DB, DEFAULT_LOOKAHEAD_MS, LIMIT_CEILING_DB, LIMIT_LOOKAHEAD_MS,
@@ -64,6 +65,7 @@ impl Dial {
                 // Its arc grows down from the open end, as the filter closes.
                 both_ways: true,
             }),
+            Binding::Input(_, InputParam::Duck(param)) => Self::of_ducker(param),
             Binding::Input(_, InputParam::Delay) => Some(Self {
                 span: Span::even((0.0, MAX_DELAY_MS)),
                 home: 0.0,
@@ -142,6 +144,23 @@ impl Dial {
         }
     }
 
+    /// The dial of a setting of a ducker; `None` for its key, which is an input and no number
+    /// between two ends. The attack and the release turn by octaves, as times are heard; the
+    /// hold starts at nothing and turns evenly.
+    fn of_ducker(param: DuckParam) -> Option<Self> {
+        let range = param.range()?;
+        let home = param.read(&DuckSettings::default()).number();
+        let span = match param {
+            DuckParam::Attack | DuckParam::Release => Span::octaves(range),
+            _ => Span::even(range),
+        };
+        Some(Self {
+            span,
+            home,
+            both_ways: false,
+        })
+    }
+
     /// The value after dragging by `dy` points (up is negative, turns up).
     #[must_use]
     pub fn dragged(self, value: f32, dy: f32, fine: bool) -> f32 {
@@ -181,6 +200,8 @@ pub fn number(value: Value) -> Option<f32> {
         | Value::Lookahead(number)
         | Value::Percent(number)
         | Value::Delay(number) => Some(number),
+        Value::Duck(DuckChange::Key(_)) => None,
+        Value::Duck(change) => Some(change.number()),
         _ => None,
     }
 }
@@ -197,6 +218,9 @@ fn with_number(value: Value, number: f32) -> Value {
         Value::Lookahead(_) => Value::Lookahead(number),
         Value::Percent(_) => Value::Percent(number),
         Value::Delay(_) => Value::Delay(number),
+        Value::Duck(change) if change.param() != DuckParam::Key => {
+            Value::Duck(change.param().change(number))
+        }
         other => other,
     }
 }
@@ -212,9 +236,14 @@ pub fn format_value(value: Value) -> String {
         Value::Freq(hz) if hz >= 1000.0 => format!("{:.1}k", hz / 1000.0),
         Value::Freq(hz) => format!("{hz:.0}"),
         Value::Width(q) => format!("{q:.2}"),
-        Value::Ceiling(db) => format!("{db:.1} dB"),
+        Value::Duck(DuckChange::Depth(db)) if db <= 0.0 => "off".to_owned(),
+        Value::Ceiling(db) | Value::Duck(DuckChange::Depth(db)) => format!("{db:.1} dB"),
         Value::Lookahead(ms) | Value::Delay(ms) => format!("{ms:.1} ms"),
         Value::Percent(percent) => format!("{percent:.0} %"),
+        Value::Duck(DuckChange::Threshold(db)) => format!("{db:.0} dB"),
+        Value::Duck(DuckChange::Attack(ms) | DuckChange::Hold(ms) | DuckChange::Release(ms)) => {
+            format!("{ms:.0} ms")
+        }
         _ => String::new(),
     }
 }
@@ -448,6 +477,46 @@ mod tests {
         assert_eq!(lookahead.home, DEFAULT_LOOKAHEAD_MS);
         assert_eq!(Dial::of(Binding::Bus(0, BusParam::Limit)), None);
         assert_eq!(Dial::of(Binding::Input(0, InputParam::Pan)), None);
+    }
+
+    #[test]
+    fn a_ducker_has_a_dial_for_every_number_and_none_for_its_key() {
+        let at = |param| Binding::Input(1, InputParam::Duck(param));
+        assert_eq!(Dial::of(at(DuckParam::Key)), None);
+        let depth = Dial::of(at(DuckParam::Depth)).expect("a dial");
+        assert_eq!((depth.span.low(), depth.span.high()), (0.0, 60.0));
+        assert_eq!(depth.home, 0.0);
+        assert_eq!(
+            Dial::of(at(DuckParam::Threshold)).expect("a dial").home,
+            -40.0
+        );
+        // A time turns by octaves: half the way from 10 ms to 5 s is their geometric middle.
+        let release = Dial::of(at(DuckParam::Release)).expect("a dial");
+        let middle = release.dragged(10.0, -80.0, false);
+        assert!((middle - 223.6).abs() < 1.0, "{middle}");
+        // The hold starts at nothing, so it turns evenly.
+        let hold = Dial::of(at(DuckParam::Hold)).expect("a dial");
+        assert!((hold.dragged(0.0, -80.0, false) - 2500.0).abs() < 1.0);
+
+        let value = Value::Duck(DuckChange::Attack(60.0));
+        assert_eq!(number(value), Some(60.0));
+        assert_eq!(
+            with_number(value, 80.0),
+            Value::Duck(DuckChange::Attack(80.0))
+        );
+        let key = Value::Duck(DuckChange::Key(2));
+        assert_eq!(number(key), None);
+        assert_eq!(with_number(key, 3.0), key);
+        assert_eq!(format_value(Value::Duck(DuckChange::Depth(0.0))), "off");
+        assert_eq!(
+            format_value(Value::Duck(DuckChange::Depth(12.0))),
+            "12.0 dB"
+        );
+        assert_eq!(
+            format_value(Value::Duck(DuckChange::Threshold(-40.0))),
+            "-40 dB"
+        );
+        assert_eq!(format_value(Value::Duck(DuckChange::Hold(400.0))), "400 ms");
     }
 
     #[test]

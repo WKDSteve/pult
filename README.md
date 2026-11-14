@@ -19,7 +19,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Mehrere Busse (Ausgänge) mit Routing-Matrix, Gain/Mute/Pan je Eingang, Gain/Mute je Bus, als Profil-Datei (`pult run --profile`) | fertig |
 | EQ und Limiter je Eingang, EQ wahlweise vor oder hinter Gate und Kompressor (`eq 2 3 gain -4`, `eq 2 pre`, `limit 2 on`; im Tab EQ unter den Bussen) | fertig |
 | Kanalzug je Eingang: Polarität, Hoch-/Tiefpass, Verzögerung, Stereobreite (`hpf 2 80`, `polarity 2 on`, HPF/LPF/Ø im Fenster) | fertig |
-| Ducking: ein Eingang wird leiser, solange ein anderer klingt (`duck 1 by 2`, `duck_by = 2` im Profil) | fertig, ohne Regler im Fenster |
+| Ducking: ein Eingang wird leiser, solange ein anderer klingt (`duck 1 by 2`, `duck_by = 2` im Profil) | fertig; im Fenster in der Ansicht EQ unter jedem Eingang |
 | Bus-Kompressor auf der Summe mit Parallel-Mix und Sidechain-Hochpass (`comp A1 3`, `comp A1 mix 50`, Spalte COMPRESSOR in der EQ-Ansicht) | fertig |
 | Multiband-Kompressor je Bus: drei Bänder mit Linkwitz-Riley-Weichen, je Band ein Regler (`mb A1 low 4`, Spalte MULTIBAND in der EQ-Ansicht) | fertig |
 | Loudness je Bus nach EBU R128 (LUFS momentary/short-term/integrated, LRA, True Peak), unter dem Bus-Fader und im Zustand | fertig |

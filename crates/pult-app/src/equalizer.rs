@@ -2,13 +2,15 @@
 //! frequency and width, and behind them its limiter with ceiling and lookahead; under the bands the
 //! curve of all of them together. A strip has no room for that; it only has the switches. Below
 //! the buses a row per input: its equalizer, the switch that puts it before gate and compressor,
-//! and its limiter.
+//! its limiter, and under its curve its ducker: the input that turns it down, how far and how
+//! fast, and how much it takes away now.
 
 use eframe::egui::{
     Align, Align2, CornerRadius, FontId, Frame, Layout, Margin, Pos2, RichText, ScrollArea, Sense,
     Stroke, Ui, pos2, vec2,
 };
 use pult_core::Band;
+use pult_core::duck::{DuckChange, DuckParam};
 use pult_core::multiband::MultibandParam;
 use pult_core::response_db;
 use pult_core::view::{Action, BandKind, BusView, EQ_BANDS, InputView, MixerView};
@@ -99,7 +101,7 @@ pub fn show(ui: &mut Ui, view: &MixerView, actions: &mut Vec<Action>) {
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new("INPUTS  the equalizer of an input sits behind its gate and compressor, or before them (PRE); its limiter has no lookahead")
+            RichText::new("INPUTS  the equalizer of an input sits behind its gate and compressor, or before them (PRE); its limiter has no lookahead; its ducker turns it down while its key sounds")
                 .size(10.0)
                 .color(p.text_faint),
         );
@@ -197,6 +199,120 @@ fn input_row(
             sample_rate: input.sample_rate,
         },
     );
+    ui.add_space(6.0);
+    duck_line(ui, index, input, values, actions);
+}
+
+const DUCK_HEAD_WIDTH: f32 = 96.0;
+const DUCK_KEY_WIDTH: f32 = 78.0;
+const DUCK_DIAL_WIDTH: f32 = 50.0;
+/// Letters of the name of an input on the button that makes it the key.
+const DUCK_KEY_LETTERS: usize = 9;
+
+/// The settings of a ducker that have a dial, with what stands over it.
+const DUCK_DIALS: [(DuckParam, &str); 5] = [
+    (DuckParam::Depth, "DEPTH"),
+    (DuckParam::Threshold, "THR"),
+    (DuckParam::Attack, "ATT"),
+    (DuckParam::Hold, "HOLD"),
+    (DuckParam::Release, "REL"),
+];
+
+/// What the button of a key says: the number of its input and the start of its name.
+fn key_text(number: usize, name: &str) -> String {
+    let mut short: String = name.chars().take(DUCK_KEY_LETTERS).collect();
+    if name.chars().count() > DUCK_KEY_LETTERS {
+        short.push('.');
+    }
+    format!("{number} {short}")
+}
+
+/// The ducker of an input: how much it takes away now, a button per input that can be its key
+/// (and one for none), and its depth, its threshold and its times.
+fn duck_line(
+    ui: &mut Ui,
+    index: usize,
+    input: &InputView,
+    values: &mut Values<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let p = &Theme::current().palette;
+    let key = Binding::Input(index, InputParam::Duck(DuckParam::Key));
+    let Some(Value::Duck(DuckChange::Key(current))) = values.read(key) else {
+        return;
+    };
+    let view = values.view();
+    let taken = if input.duck.is_on() {
+        input.duck_reduction_db
+    } else {
+        0.0
+    };
+    let (head, color) = if taken >= 0.05 {
+        (format!("DUCK  -{taken:.1} dB"), p.accent)
+    } else {
+        ("DUCK".to_owned(), p.text_faint)
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let dials_width = DUCK_DIAL_WIDTH * DUCK_DIALS.len() as f32;
+    // As wide as the bands and the limiter above it, so the row keeps its width.
+    #[allow(clippy::cast_precision_loss)]
+    let row_width = (BAND_WIDTH + BAND_GAP) * EQ_BANDS as f32 + LIMIT_WIDTH;
+    let keys_width = row_width - DUCK_HEAD_WIDTH - dials_width - 2.0 * BAND_GAP;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = BAND_GAP;
+        ui.allocate_ui_with_layout(
+            vec2(DUCK_HEAD_WIDTH, DIAL_ROW_HEIGHT),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(DUCK_HEAD_WIDTH);
+                ui.label(RichText::new(head).size(9.5).color(color));
+                ui.label(RichText::new("ducked by").size(8.5).color(p.text_faint));
+            },
+        );
+        ui.allocate_ui_with_layout(
+            vec2(keys_width, DIAL_ROW_HEIGHT),
+            Layout::left_to_right(Align::Min).with_main_wrap(true),
+            |ui| {
+                ui.set_width(keys_width);
+                ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+                let title = key.title(view);
+                let none = std::iter::once((0, "NONE".to_owned(), format!("{title} none")));
+                let others = view
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(other, _)| *other != index)
+                    .map(|(other, of)| {
+                        let number = other + 1;
+                        (
+                            number,
+                            key_text(number, of.shown_name()),
+                            format!("{title} {number}"),
+                        )
+                    });
+                for (number, text, label) in none.chain(others) {
+                    let mut on = current == number;
+                    let size = vec2(DUCK_KEY_WIDTH, KIND_HEIGHT);
+                    let response = toggle(ui, &mut on, &text, &label, Role::Assign, size);
+                    // A click on the key it has changes nothing: one of them is always on.
+                    if response.changed() && on {
+                        actions.extend(values.write(key, Value::Duck(DuckChange::Key(number))));
+                    }
+                }
+            },
+        );
+        ui.allocate_ui_with_layout(
+            vec2(dials_width, DIAL_ROW_HEIGHT),
+            Layout::left_to_right(Align::Min),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for (param, text) in DUCK_DIALS {
+                    let dial = Binding::Input(index, InputParam::Duck(param));
+                    actions.extend(labelled(ui, values, dial, text, DIAL_SIZE, DUCK_DIAL_WIDTH));
+                }
+            },
+        );
+    });
 }
 
 /// The limiter of an input: its switch, its ceiling, and how far it turns down now.

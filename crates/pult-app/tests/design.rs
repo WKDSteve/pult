@@ -351,8 +351,13 @@ fn equalizer_inputs() {
     for input in &mut view.inputs {
         input.buses.retain(|&bus| bus == 0);
     }
+    // The second one is ducked by the first, and is down now.
+    view.inputs[1]
+        .duck
+        .apply(pult_core::duck::DuckChange::Key(1));
+    view.inputs[1].duck_reduction_db = 9.5;
     let mut harness = Harness::builder()
-        .with_size(vec2(1280.0, 860.0))
+        .with_size(vec2(1280.0, 980.0))
         .with_pixels_per_point(1.5)
         .build_ui(move |ui| {
             Theme::current().apply(ui.ctx());

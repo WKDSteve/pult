@@ -227,10 +227,12 @@ pult run --profile meinprofil.toml --log abend.csv
   `duck_by` steht), `duck_threshold_db = -70..0` den Pegel, ab dem abgesenkt wird, `duck_attack_ms`, `duck_hold_ms` und
   `duck_release_ms` die Zeiten. Während des Laufs `duck 1 by 2`, `duck 1 depth 18`, `duck 1 threshold -35`,
   `duck 1 attack|hold|release <ms>`, `duck 1 off`; von außen `input/<n>/duck` (Tiefe) und `input/<n>/duck/key`,
-  `/threshold`, `/attack`, `/hold`, `/release`. Der Pegel des Schlüssels wird in dessen Eingangsstufe nach Gate und
+  `/threshold`, `/attack`, `/hold`, `/release`. Im Fenster steht der Ducker in der Ansicht EQ unter der Kurve jedes
+  Eingangs: eine Taste je Eingang, der ihn absenken kann (NONE nimmt den Schlüssel weg), Regler für Tiefe, Schwelle,
+  Attack, Hold und Release, und davor, wie viel er gerade wegnimmt. Der Pegel des Schlüssels wird in dessen Eingangsstufe nach Gate und
   Kompressor und vor seinem Fader gemessen, ein gemuteter Schlüssel senkt nichts ab, und zwei Eingänge können sich
   gegenseitig absenken. Fällt das Gerät des Schlüssels aus, gilt er nach 250 ms als still. Die Absenkung gleitet, nichts
-  knackt. Im Fenster gibt es dafür noch keine Regler.
+  knackt.
 - **EQ:** Jeder Bus hat einen Equalizer mit vier Bändern, hinter der Summe und vor seinem Fader. Am Anfang sind sie
   flach: Band 1 ein Kuhschwanz unten bei 100 Hz (`low`), Band 2 und 3 Glocken bei 500 und 2500 Hz (`bell`), Band 4 ein
   Kuhschwanz oben bei 8 kHz (`high`). Jedes Band lässt sich in Art, Frequenz, Gain und Breite (`q`) ändern; im Profil
