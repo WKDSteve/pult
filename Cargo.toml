@@ -25,9 +25,9 @@ pult-engine = { path = "crates/pult-engine" }
 pult-hub = { path = "crates/pult-hub" }
 pult-midi = { path = "crates/pult-midi" }
 # The kit the local hubs of all these apps are built on, pinned by its tag.
-appkit-core = { git = "https://github.com/WKDSteve/appkit", tag = "v0.47.0" }
-appkit-hub = { git = "https://github.com/WKDSteve/appkit", tag = "v0.47.0" }
-appkit-testkit = { git = "https://github.com/WKDSteve/appkit", tag = "v0.47.0" }
+appkit-core = { git = "https://github.com/WKDSteve/appkit", tag = "v0.50.1" }
+appkit-hub = { git = "https://github.com/WKDSteve/appkit", tag = "v0.50.1" }
+appkit-testkit = { git = "https://github.com/WKDSteve/appkit", tag = "v0.50.1" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 serde_json = "1"
 cpal = "0.18.2"
