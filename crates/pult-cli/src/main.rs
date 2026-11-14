@@ -80,6 +80,13 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         },
+        Command::RoundTrip(spec) => match measure::roundtrip(&spec) {
+            Ok(trip) => return measure::report_trip(&trip),
+            Err(why) => {
+                eprintln!("pult: {why}");
+                return ExitCode::from(2);
+            }
+        },
         Command::Tone(spec) => pult_engine::play_tone(&spec.sink, spec.frequency, spec.gain_db)
             .map_err(|e| e.to_string())
             .and_then(|playing| tone(&playing, &spec)),

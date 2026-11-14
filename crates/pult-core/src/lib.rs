@@ -36,6 +36,7 @@ pub mod protocol;
 pub mod ramp;
 pub mod rate;
 pub mod remix;
+pub mod roundtrip;
 pub mod scale;
 pub mod select;
 pub mod sidechain;

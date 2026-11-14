@@ -32,6 +32,7 @@ Ein eigener virtueller Audio-Mixer für Windows, in Rust: Ton von Programmen, Mi
 | Regler während des Laufs: `gain A1 -6`, `mute 2`, `pan`, `show`, `save profil.toml` in einer Eingabezeile unter der Statuszeile | fertig |
 | Testton auf ein Gerät (`pult tone`) | fertig |
 | Messen: ein Gerät oder das, was ein Ausgang spielt, als WAV aufnehmen (`pult record`), und Knackser in der Aufnahme eines Testtons suchen (`pult clicks`) | fertig |
+| Messen: wie lange ein Weg braucht, von einem Ausgang bis zu einem Eingang (`pult roundtrip`) | fertig |
 | Grundlage der Oberfläche (`pult_core::view`): Solo, Meter vor/nach dem Fader, Matrix während des Laufs umschalten | fertig, auch im Fenster |
 | Ausgleich der Takt-Drift zwischen Geräten: adaptiver Resampler (rubato, Sinc) je Eingang und Bus, PI-Regler auf dem geglätteten Füllstand, Korrektur in ppm live | fertig (Stufe 2) |
 | Pegel, Aussetzer, Korrekturen, Clipping, Geräte-Glitches live | fertig |

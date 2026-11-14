@@ -15,6 +15,16 @@ pub const DEFAULT_TONE_HZ: f32 = 440.0;
 /// How long `pult record` records when not told.
 const DEFAULT_RECORD_SECONDS: f64 = 10.0;
 
+/// How many bursts `pult roundtrip` plays when not told.
+pub const DEFAULT_ROUNDTRIP_COUNT: u32 = 20;
+
+/// Milliseconds between two bursts of `pult roundtrip` when not told.
+pub const DEFAULT_ROUNDTRIP_GAP_MS: u32 = 500;
+
+/// The level of the bursts of `pult roundtrip` when not told: clear above a converter's noise,
+/// not painful on a speaker left on by mistake.
+pub const DEFAULT_ROUNDTRIP_DB: f32 = -12.0;
+
 /// The tone `pult clicks` expects when not told: the one of the click tests, low, so that a
 /// jump stands far above its steepest step.
 pub const DEFAULT_CLICK_TONE_HZ: f32 = 103.0;
@@ -38,6 +48,8 @@ USAGE:
     pult tone --to <OUTPUT> [--gain-db <DB>] [--freq <HZ>]
     pult record --from <INPUT|out:OUTPUT> --to <FILE.wav> [--seconds <S>]
     pult clicks <FILE.wav> [--freq <HZ>] [--quiet <S>] [--skip <S>] [--until <S>]
+    pult roundtrip --to <OUTPUT> --from <INPUT|out:OUTPUT> [--count <N>] [--gap-ms <MS>]
+                   [--gain-db <DB>] [--keep <FILE.wav>]
     pult help | --help
     pult --version
 
@@ -87,7 +99,14 @@ for clicks in a recording of a steady tone of --freq Hz (default 103): steps ste
 that tone can make at its level. --quiet says how many seconds at its start hold no tone
 yet (their noise sets the floor), --skip how many to leave out at the start, --until
 where to stop (a route that ends cuts its sound off); its status is 0
-for no click, 1 for clicks and 2 when the recording cannot be judged. `run` takes commands while it runs (type help: gain, mute, solo, pan, show, save) and
+for no click, 1 for clicks and 2 when the recording cannot be judged. `roundtrip` measures
+how long a way takes: it plays --count short bursts (default 20, one every --gap-ms, default
+500, at --gain-db, default -12) on an output, records an input (or with out: what an output
+plays) meanwhile and prints per burst the time between both, then median, minimum, maximum
+and spread. The time contains the buffers of its own two streams: measure once straight and
+once with the way in question in between, the difference is that way. --keep writes the
+recording to a WAV file. Its status is 0 when every burst arrived, 1 when some were lost and
+2 when none arrived. `run` takes commands while it runs (type help: gain, mute, solo, pan, show, save) and
 stops on an empty line, quit or Ctrl+C.
 
 EXAMPLE:
@@ -131,6 +150,15 @@ pub struct RecordSpec {
     pub file: PathBuf,
     /// How long to record.
     pub seconds: f64,
+}
+
+/// A way to measure: bursts on an output, heard on an input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoundTripSpec {
+    /// What to play and where to listen.
+    pub trip: pult_engine::RoundTripSpec,
+    /// A WAV file for the recording, if it is to be kept.
+    pub keep: Option<PathBuf>,
 }
 
 /// A recording of a test tone to look through for clicks.
@@ -201,6 +229,8 @@ pub enum Command {
     Record(RecordSpec),
     /// Look for clicks in a recording.
     Clicks(ClicksSpec),
+    /// Measure how long a way takes.
+    RoundTrip(RoundTripSpec),
     /// Ask the pult that is running.
     Remote(Remote),
     /// Print the usage.
@@ -240,6 +270,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, UsageEr
         "tone" => parse_tone(args).map(Command::Tone),
         "record" => parse_record(args).map(Command::Record),
         "clicks" => parse_clicks(args).map(Command::Clicks),
+        "roundtrip" => parse_roundtrip(args).map(Command::RoundTrip),
         "scenes" => no_more(args).map(|()| Command::Remote(Remote::Scenes)),
         "show" => match args.next().as_deref() {
             None => Ok(Command::Remote(Remote::Show { json: false })),
@@ -452,6 +483,61 @@ fn parse_record(mut args: impl Iterator<Item = String>) -> Result<RecordSpec, Us
         source: source.ok_or_else(|| usage("record needs a device (--from)"))?,
         file: file.ok_or_else(|| usage("record needs a file (--to)"))?,
         seconds: length,
+    })
+}
+
+fn parse_roundtrip(mut args: impl Iterator<Item = String>) -> Result<RoundTripSpec, UsageError> {
+    let mut sink = None;
+    let mut source = None;
+    let mut keep = None;
+    let mut count = DEFAULT_ROUNDTRIP_COUNT;
+    let mut gap_ms = DEFAULT_ROUNDTRIP_GAP_MS;
+    let mut gain_db = DEFAULT_ROUNDTRIP_DB;
+    while let Some(arg) = args.next() {
+        let mut value = |name: &str| {
+            args.next()
+                .ok_or_else(|| usage(format!("{name} needs a value")))
+        };
+        let whole = |name: &str, raw: String, range: std::ops::RangeInclusive<u32>| {
+            raw.trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|v| range.contains(v))
+                .ok_or_else(|| {
+                    let (lo, hi) = range.into_inner();
+                    usage(format!("{name} must be {lo} to {hi}, not \"{raw}\""))
+                })
+        };
+        match arg.as_str() {
+            "--to" => once(&mut sink, value("--to")?, "--to")?,
+            "--from" => once(&mut source, value("--from")?, "--from")?,
+            "--keep" => once(&mut keep, PathBuf::from(value("--keep")?), "--keep")?,
+            "--count" => count = whole("--count", value("--count")?, 1..=1000)?,
+            "--gap-ms" => {
+                let shortest = pult_engine::SHORTEST_GAP_MS;
+                gap_ms = whole("--gap-ms", value("--gap-ms")?, shortest..=10_000)?;
+            }
+            "--gain-db" => {
+                let raw = value("--gain-db")?;
+                gain_db = raw
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|v| (-96.0..=0.0).contains(v))
+                    .ok_or_else(|| usage(format!("--gain-db must be -96 to 0, not \"{raw}\"")))?;
+            }
+            other => return Err(usage(format!("unknown option \"{other}\""))),
+        }
+    }
+    Ok(RoundTripSpec {
+        trip: pult_engine::RoundTripSpec {
+            sink: sink.ok_or_else(|| usage("roundtrip needs an output (--to)"))?,
+            source: source.ok_or_else(|| usage("roundtrip needs a device to hear (--from)"))?,
+            count,
+            gap_ms,
+            gain_db,
+        },
+        keep,
     })
 }
 
@@ -671,6 +757,40 @@ mod tests {
 
     fn words(line: &str) -> Result<Command, UsageError> {
         parse(line.split_whitespace().map(String::from))
+    }
+
+    #[test]
+    fn roundtrip_takes_two_devices_and_how_to_play() {
+        let Ok(Command::RoundTrip(spec)) = words("roundtrip --to Focusrite --from out:In5") else {
+            panic!("a roundtrip command");
+        };
+        assert_eq!(spec.trip.sink, "Focusrite");
+        assert_eq!(spec.trip.source, "out:In5");
+        assert_eq!(spec.trip.count, DEFAULT_ROUNDTRIP_COUNT);
+        assert_eq!(spec.trip.gap_ms, DEFAULT_ROUNDTRIP_GAP_MS);
+        assert!((spec.trip.gain_db - DEFAULT_ROUNDTRIP_DB).abs() < f32::EPSILON);
+        assert_eq!(spec.keep, None);
+        let line =
+            "roundtrip --from mic --to out --count 5 --gap-ms 250 --gain-db -20 --keep a.wav";
+        let Ok(Command::RoundTrip(spec)) = words(line) else {
+            panic!("a roundtrip command");
+        };
+        assert_eq!((spec.trip.count, spec.trip.gap_ms), (5, 250));
+        assert!((spec.trip.gain_db + 20.0).abs() < f32::EPSILON);
+        assert_eq!(spec.keep, Some(PathBuf::from("a.wav")));
+        for (line, why) in [
+            ("roundtrip --from mic", "--to"),
+            ("roundtrip --to out", "--from"),
+            ("roundtrip --to out --from mic --count 0", "1 to 1000"),
+            ("roundtrip --to out --from mic --gap-ms 10", "50 to 10000"),
+            ("roundtrip --to out --from mic --gain-db 3", "-96 to 0"),
+            ("roundtrip --to out --from mic --count", "needs a value"),
+            ("roundtrip --to out --to out --from mic", "only once"),
+            ("roundtrip --to out --from mic --loud", "unknown option"),
+        ] {
+            let error = words(line).expect_err(line);
+            assert!(error.0.contains(why), "{line}: {error}");
+        }
     }
 
     #[test]

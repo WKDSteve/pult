@@ -1,6 +1,7 @@
 //! Measuring a real route: `pult record` writes what a device captures or plays to a WAV file,
 //! `pult clicks` looks for clicks in a recording of a test tone, with the detector the click
-//! tests of the engine use (`pult_core::clicks`).
+//! tests of the engine use (`pult_core::clicks`), `pult roundtrip` plays bursts and says how long
+//! they take to an input (`pult_core::roundtrip`).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -11,17 +12,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use pult_core::Clicks;
 use pult_core::wav::Wav;
 
-use crate::args::{ClicksSpec, RecordSpec};
+use crate::args::{ClicksSpec, RecordSpec, RoundTripSpec};
 
 /// How many clicks `pult clicks` lists one by one.
 const LISTED: usize = 20;
 
-/// Records as `spec` says, until its time is over or Enter is pressed.
-///
-/// # Errors
-///
-/// A text for the terminal: the device, the stream or the file failed.
-pub fn record(spec: &RecordSpec) -> Result<Vec<String>, String> {
+/// A switch that Enter turns on.
+fn stop_on_enter() -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let on_enter = Arc::clone(&stop);
     // Left running when the time ends first: it ends with the process.
@@ -32,6 +29,16 @@ pub fn record(spec: &RecordSpec) -> Result<Vec<String>, String> {
             on_enter.store(true, Ordering::Release);
         }
     });
+    stop
+}
+
+/// Records as `spec` says, until its time is over or Enter is pressed.
+///
+/// # Errors
+///
+/// A text for the terminal: the device, the stream or the file failed.
+pub fn record(spec: &RecordSpec) -> Result<Vec<String>, String> {
+    let stop = stop_on_enter();
     let recording =
         pult_engine::record(&spec.source, spec.seconds, || !stop.load(Ordering::Acquire))
             .map_err(|e| e.to_string())?;
@@ -63,6 +70,119 @@ pub fn record(spec: &RecordSpec) -> Result<Vec<String>, String> {
         ));
     }
     Ok(lines)
+}
+
+/// What `pult roundtrip` measured.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Trip {
+    /// The lines for the terminal.
+    pub lines: Vec<String>,
+    /// How many bursts were asked for.
+    pub asked: usize,
+    /// How many of them arrived.
+    pub arrived: usize,
+}
+
+/// Puts what a measurement saw into words: per burst its time, then the sums.
+#[must_use]
+pub fn trip_of(seen: &pult_engine::RoundTrip, asked: u32) -> Trip {
+    let asked = asked as usize;
+    let ways = pult_core::roundtrip::latencies(&seen.seen());
+    let mut lines = vec![format!(
+        "round trip {} ({} Hz) -> {}{} ({} Hz, {} ch), {} bursts every {:.0} ms",
+        seen.sink,
+        seen.out_rate,
+        if seen.loopback { "what plays on " } else { "" },
+        seen.source,
+        seen.in_rate,
+        seen.channels,
+        asked,
+        seen.gap_s * 1000.0
+    )];
+    for (number, way) in ways.iter().enumerate() {
+        lines.push(match way {
+            Some(ms) => format!("{:>4}  {ms:8.2} ms", number + 1),
+            None => format!("{:>4}  lost", number + 1),
+        });
+    }
+    let arrived: Vec<f64> = ways.iter().flatten().copied().collect();
+    if let Some(sum) = pult_core::roundtrip::summarize(&arrived) {
+        lines.push(format!(
+            "median {:.2} ms, min {:.2}, max {:.2}, spread {:.2} ms ({} of {} bursts)",
+            sum.median,
+            sum.min,
+            sum.max,
+            sum.spread,
+            arrived.len(),
+            asked
+        ));
+    } else {
+        lines.push(format!(
+            "no burst of {asked} arrived: nothing leads from the output to what was recorded, \
+             or it takes longer than the time between two bursts"
+        ));
+    }
+    let unplayed = asked.saturating_sub(ways.len());
+    if unplayed > 0 {
+        lines.push(format!(
+            "note: {unplayed} bursts were not played, the run ended early"
+        ));
+    }
+    if seen.lost > 0 {
+        lines.push(format!(
+            "note: the run lost {} frames or callbacks of its own; do not trust these times",
+            seen.lost
+        ));
+    }
+    lines.push(
+        "The time contains the buffers of both streams of this measurement: compare it with a \
+         run straight from the output to the input."
+            .to_owned(),
+    );
+    Trip {
+        lines,
+        asked,
+        arrived: arrived.len(),
+    }
+}
+
+/// Measures as `spec` says, until its bursts are played or Enter is pressed.
+///
+/// # Errors
+///
+/// A text for the terminal: a device, a stream or the file failed.
+pub fn roundtrip(spec: &RoundTripSpec) -> Result<Trip, String> {
+    let stop = stop_on_enter();
+    let seen = pult_engine::roundtrip(&spec.trip, || !stop.load(Ordering::Acquire))
+        .map_err(|e| e.to_string())?;
+    let mut trip = trip_of(&seen, spec.trip.count);
+    if let Some(file) = &spec.keep {
+        let wav = Wav {
+            sample_rate: seen.in_rate,
+            channels: seen.channels,
+            samples: seen.samples,
+        };
+        std::fs::write(file, wav.encode()?)
+            .map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+        trip.lines
+            .push(format!("recording kept in {}", file.display()));
+    }
+    Ok(trip)
+}
+
+/// Prints `trip` and says by the status how it went: 0 when every burst arrived, 1 when some
+/// were lost, 2 when none arrived.
+pub fn report_trip(trip: &Trip) -> ExitCode {
+    for line in &trip.lines {
+        println!("{line}");
+    }
+    if trip.arrived == 0 {
+        ExitCode::from(2)
+    } else if trip.arrived < trip.asked {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// What `pult clicks` found in one recording.
@@ -299,5 +419,92 @@ mod tests {
         let verdict = judge(&silent, &spec(0.0, 0.0)).expect("judged");
         assert!(verdict.lines.iter().any(|line| line.contains("no tone")));
         assert!(clicks(&spec(0.0, 0.0)).unwrap_err().contains("cannot read"));
+    }
+
+    /// A measurement of three bursts every 500 ms, each recorded `late_ms[n]` after it was
+    /// played (none for one that never arrived), with callbacks every 10 ms on both sides.
+    fn measured(late_ms: &[Option<f64>]) -> pult_engine::RoundTrip {
+        use pult_core::roundtrip::{Mark, burst, burst_frames};
+        let frames = 3 * RATE as usize;
+        let played: Vec<u64> = (0..late_ms.len() as u64)
+            .map(|n| 48_000 + n * 24_000)
+            .collect();
+        let mut samples = vec![0.0_f32; frames];
+        for (&start, late) in played.iter().zip(late_ms) {
+            let Some(late) = late else { continue };
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let at = start as usize + (late * 48.0).round() as usize;
+            for n in 0..burst_frames(RATE) {
+                #[allow(clippy::cast_possible_truncation)]
+                let frame = at + n as usize;
+                samples[frame] = 0.25 * burst(n, RATE);
+            }
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let mark = |frames: u64| Mark {
+            at: frames as f64 / f64::from(RATE),
+            frames,
+        };
+        pult_engine::RoundTrip {
+            sink: "out".to_owned(),
+            source: "in".to_owned(),
+            loopback: false,
+            out_rate: RATE,
+            in_rate: RATE,
+            channels: 1,
+            played,
+            out_marks: (0..300).map(|n| mark(n * 480)).collect(),
+            in_marks: (1..=300).map(|n| mark(n * 480)).collect(),
+            samples,
+            lost: 0,
+            gap_s: 0.5,
+        }
+    }
+
+    #[test]
+    fn a_round_trip_lists_every_burst_and_sums_them_up() {
+        let trip = trip_of(&measured(&[Some(10.0), Some(12.0), Some(11.0)]), 3);
+        assert_eq!((trip.asked, trip.arrived), (3, 3));
+        assert!(trip.lines[0].contains("out (48000 Hz) -> in (48000 Hz, 1 ch), 3 bursts"));
+        assert!(trip.lines[1].ends_with("10.00 ms"), "{}", trip.lines[1]);
+        assert!(trip.lines[2].ends_with("12.00 ms"), "{}", trip.lines[2]);
+        assert!(
+            trip.lines[4].starts_with("median 11.00 ms, min 10.00, max 12.00, spread 0.82 ms"),
+            "{}",
+            trip.lines[4]
+        );
+        assert!(trip.lines[4].ends_with("(3 of 3 bursts)"));
+        assert_eq!(report_trip(&trip), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn a_round_trip_names_what_was_lost_and_what_cannot_be_trusted() {
+        let trip = trip_of(&measured(&[Some(10.0), None, Some(10.0)]), 3);
+        assert_eq!((trip.asked, trip.arrived), (3, 2));
+        assert!(trip.lines[2].ends_with("lost"));
+        assert!(trip.lines[4].ends_with("(2 of 3 bursts)"));
+        assert_eq!(report_trip(&trip), ExitCode::FAILURE);
+
+        let none = trip_of(&measured(&[None, None, None]), 3);
+        assert_eq!(none.arrived, 0);
+        assert!(
+            none.lines
+                .iter()
+                .any(|line| line.contains("no burst of 3 arrived"))
+        );
+        assert_eq!(report_trip(&none), ExitCode::from(2));
+
+        // Stopped after two of five bursts, and the run lost frames of its own.
+        let mut early = measured(&[Some(10.0), Some(10.0)]);
+        early.lost = 7;
+        let trip = trip_of(&early, 5);
+        assert_eq!((trip.asked, trip.arrived), (5, 2));
+        assert!(
+            trip.lines
+                .iter()
+                .any(|line| line.contains("3 bursts were not played"))
+        );
+        assert!(trip.lines.iter().any(|line| line.contains("lost 7 frames")));
+        assert_eq!(report_trip(&trip), ExitCode::FAILURE);
     }
 }
