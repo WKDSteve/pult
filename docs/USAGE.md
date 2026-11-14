@@ -43,7 +43,7 @@ Zum Messen gibt es zwei Befehle dazu. `pult record --from <Gerät> --to aufnahme
 pult run --from "CABLE Output" --to Focusrite
 ```
 
-pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.). Enter auf leerer Zeile beendet:
+pult zeigt eine Statuszeile, darunter eine Eingabezeile für Befehle (siehe 7.). Enter auf leerer Zeile beendet (jeder Bus blendet dabei in 5 ms aus, damit das Ende nicht knackt; das dauert samt dem, was das Gerät noch hält, rund eine Zehntelsekunde):
 
 ```
 0:12:41 [1]  -18.3 dB out 0 lost 0 drift +12 ppm resync 0 | A1  -18.3 dB clipped 0 | glitches 0 | 0.0 dropouts/h

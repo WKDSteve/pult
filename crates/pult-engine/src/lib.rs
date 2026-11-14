@@ -34,7 +34,7 @@ mod slot;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use assert_no_alloc::assert_no_alloc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -833,6 +833,30 @@ pub struct Running {
     alarm: alarm::Alarm,
 }
 
+/// How long a route waits at its end for a bus to fade out: a bus whose device stalls must not
+/// hold up the end.
+const LEAVE_WAIT: Duration = Duration::from_millis(150);
+/// How long the faded sound gets to leave a device that does not say how long it takes.
+const LEAVE_UNKNOWN_MS: f32 = 50.0;
+/// What a route waits on top of what the device says: the fade lies somewhere inside a callback's
+/// buffer, and a device holds more than it reports. Measured with `tools/click-run.py` on a
+/// virtual WASAPI device: without it the stream fell 10 to 20 ms before the fade was played.
+const LEAVE_MARGIN_MS: f32 = 40.0;
+/// The longest a route waits for the faded sound to leave the devices.
+const LEAVE_MOST_MS: f32 = 300.0;
+
+impl Drop for Running {
+    /// Fades every bus out before the streams fall, so the end of a route does not click:
+    /// `pult stop`, the empty line of `pult run`, a change of profile and the end of the window
+    /// all end here.
+    fn drop(&mut self) {
+        // A route without devices has nobody who would call back.
+        if self.host.is_some() {
+            self.leave();
+        }
+    }
+}
+
 impl fmt::Debug for Running {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Running")
@@ -843,6 +867,48 @@ impl fmt::Debug for Running {
 }
 
 impl Running {
+    /// Tells every bus to fade to silence ([`pult_core::BusControls::leaving`]). The fade
+    /// happens in the next callbacks of each bus; nothing sounds on the route after it.
+    pub fn fade_out(&self) {
+        for bus in &self.buses {
+            bus.handle.controls.leaving.store(true, Ordering::Release);
+        }
+    }
+
+    /// Whether every bus that plays has finished the fade of [`Self::fade_out`].
+    #[must_use]
+    pub fn faded_out(&self) -> bool {
+        self.buses
+            .iter()
+            .filter(|bus| bus.present)
+            .all(|bus| bus.handle.stats.left.load(Ordering::Acquire))
+    }
+
+    /// Fades out and waits until the silence has reached the devices: first for the fade (the
+    /// callbacks of the buses do it), then for what the devices still hold of the sound before it.
+    fn leave(&self) {
+        if !self.buses.iter().any(|bus| bus.present) {
+            return;
+        }
+        self.fade_out();
+        let asked = Instant::now();
+        while !self.faded_out() && asked.elapsed() < LEAVE_WAIT {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let held_ms = self
+            .buses
+            .iter()
+            .filter(|bus| bus.present)
+            .map(|bus| {
+                let known = bus.handle.stats.device_latency.get();
+                known.unwrap_or(LEAVE_UNKNOWN_MS)
+            })
+            .fold(0.0_f32, f32::max);
+        // A device that reports nonsense (NaN, a negative time) waits the margin alone.
+        let wait_ms = (held_ms.max(0.0) + LEAVE_MARGIN_MS).min(LEAVE_MOST_MS);
+        std::thread::sleep(Duration::from_secs_f32(wait_ms / 1000.0));
+    }
+
     /// Glitches the devices reported (buffer under- or overruns inside the audio system).
     #[must_use]
     pub fn xruns(&self) -> u64 {
@@ -1382,7 +1448,12 @@ pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
             Err(_) => None,
         };
         set_up_bus(&handle, bus);
-        slots.push(Slot::new(Role::Output, &bus.device, Feed::Bus(mixer), now));
+        slots.push(Slot::new(
+            Role::Output,
+            &bus.device,
+            Feed::Bus(Box::new(mixer)),
+            now,
+        ));
         opening.push(Opening::Device(found.device, found.config));
         buses.push(RunningBus {
             name: bus.name.clone(),

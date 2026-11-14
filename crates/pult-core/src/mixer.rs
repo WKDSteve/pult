@@ -46,7 +46,7 @@ use crate::dynamics::{CompressorControls, GateControls};
 use crate::eq::{EqControls, Equalizer};
 use crate::level::{AtomicF32, Counter, Latency, PeakMeter};
 use crate::limiter::{Limiter, LimiterControls};
-use crate::ramp::{Aim, Follower, Glide, MIN_RAMP_MS};
+use crate::ramp::{Aim, Follower, Glide, MIN_RAMP_MS, Ramp};
 use crate::rate::RateControl;
 use crate::remix::{remix_add, remix_add_ramped};
 
@@ -205,6 +205,10 @@ pub struct BusControls {
     /// Solo on this bus listens before the fader (PFL): a soloed input plays at unity, whatever
     /// its fader, mute, send, automix share and routing say. False at first (AFL: after them).
     pub pfl: AtomicBool,
+    /// The route ends: the bus fades to silence at the very end of its chain, behind limiter
+    /// and delay, in the shortest ramp, and says so in [`BusStats::left`]. Whoever stops the
+    /// output sets this first and waits, so the sound does not break off inside a wave.
+    pub leaving: AtomicBool,
 }
 
 impl Default for BusControls {
@@ -220,6 +224,7 @@ impl Default for BusControls {
             multiband: crate::multiband::MultibandControls::default(),
             solo_here: AtomicBool::new(true),
             pfl: AtomicBool::new(false),
+            leaving: AtomicBool::new(false),
         }
     }
 }
@@ -237,6 +242,8 @@ pub struct BusStats {
     pub most_limited_db: PeakMeter,
     /// How long the device says sound takes from its callback to the output, averaged.
     pub device_latency: Latency,
+    /// The fade of [`BusControls::leaving`] is over: every callback from now on is silence.
+    pub left: AtomicBool,
 }
 
 /// The control thread's side of one input ring.
@@ -770,6 +777,10 @@ pub struct Mixer {
     opening: bool,
     /// Where the output goes to be measured for loudness, off this thread.
     loudness: Option<crate::loudness::LoudnessTap>,
+    /// The last factor of the chain: 1 while the route plays, down to 0 when it leaves.
+    end: Ramp,
+    /// What `end` aims at: [`BusControls::leaving`] as the latest callback saw it.
+    leaving: bool,
 }
 
 impl Mixer {
@@ -798,6 +809,8 @@ impl Mixer {
             stats: Arc::clone(&handle.stats),
             opening: false,
             loudness: None,
+            end: Ramp::new(rate, 1.0),
+            leaving: false,
         };
         (mixer, handle)
     }
@@ -824,6 +837,9 @@ impl Mixer {
         self.limiter.prepare(out_channels);
         self.delay.prepare(out_channels);
         self.opening = true;
+        // Nothing played for a while: where the end stands needs no ramp.
+        self.leaving = self.controls.leaving.load(Ordering::Acquire);
+        self.end.snap(if self.leaving { 0.0 } else { 1.0 });
         for input in &mut self.inputs {
             input.open.store(false, Ordering::Release);
             input.gain.start_over();
@@ -883,6 +899,7 @@ impl Mixer {
         self.stats.most_limited_db.record(reduced);
         self.delay
             .process(&self.controls.delay, out, self.out_channels);
+        self.leave(out);
         let clipped: u64 = out.iter_mut().map(limited).sum();
         if clipped > 0 {
             self.stats.clipped.add(clipped);
@@ -890,6 +907,30 @@ impl Mixer {
         self.stats.peak.record_scaled(out, 1.0);
         if let Some(tap) = &mut self.loudness {
             tap.feed(out, self.out_channels);
+        }
+    }
+
+    /// The end of the chain: follows [`BusControls::leaving`] in the shortest ramp and reports
+    /// in [`BusStats::left`] when a callback ended in silence.
+    fn leave(&mut self, out: &mut [f32]) {
+        let leaving = self.controls.leaving.load(Ordering::Acquire);
+        if leaving != self.leaving {
+            self.leaving = leaving;
+            self.end.aim(if leaving { 0.0 } else { 1.0 }, MIN_RAMP_MS);
+        }
+        if !self.end.is_steady() {
+            for frame in out.chunks_exact_mut(self.out_channels) {
+                let factor = self.end.next_value();
+                for sample in frame {
+                    *sample *= factor;
+                }
+            }
+        } else if leaving {
+            out.fill(0.0);
+        }
+        let left = leaving && self.end.is_steady();
+        if left != self.stats.left.load(Ordering::Relaxed) {
+            self.stats.left.store(left, Ordering::Release);
         }
     }
 

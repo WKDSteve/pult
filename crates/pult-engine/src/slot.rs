@@ -52,7 +52,7 @@ pub(crate) enum Feed {
     /// The stage and the captures of an input; boxed, a stage is several times a mixer.
     Input(Box<InputFeed>),
     /// The mixer of a bus.
-    Bus(Mixer),
+    Bus(Box<Mixer>),
 }
 
 /// What one stream's callbacks report to the control thread.
@@ -492,7 +492,7 @@ mod tests {
         let ms = Duration::from_millis;
         let now = Instant::now();
         let (mixer, _handle) = Mixer::new(Vec::new(), 2);
-        let mut slot = Slot::new(Role::Output, "speakers", Feed::Bus(mixer), now);
+        let mut slot = Slot::new(Role::Output, "speakers", Feed::Bus(Box::new(mixer)), now);
         // Without the alarm, as always: the first look at once, then one every second.
         assert!(slot.retry_due(now));
         assert!(!slot.retry_due(now + ms(10)));

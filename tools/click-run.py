@@ -10,7 +10,8 @@ real callbacks and real clocks: a 103 Hz tone plays to a device, `pult run` rout
 `pult record` records what that bus plays while the changes of the sequence (ramps, scene changes,
 mutes, the matrix, the equalizer's switch, the limiter's lookahead and switch) go to that pult
 through its control interface. `pult clicks` then looks through the recording with the detector of
-the offline test. A probe at the end cuts a piece out of a copy of the recording and must find it.
+the offline test, the end of the route (`pult stop`, where every bus fades out) included. A probe
+at the end cuts a piece out of a copy of the recording and must find it.
 
 Without options nothing is heard and no cable is needed: the tone goes to "Voicemeeter In 4", pult
 captures the tone's program and plays to "Voicemeeter In 5", and the recording is what In 5 plays
@@ -24,6 +25,10 @@ The matrix button of the sequence (the input off the bus and on again) needs a s
 stays on, since pult keeps every input on at least one: --side-bus names its device. In the silent
 setup that is "Voicemeeter In 4"; with devices of one's own and no --side-bus those two changes
 are left out, and the run says so.
+
+An automated session uses the silent setup only ("Voicemeeter In 4" and "In 5"): every other
+device, VB-CABLE included, may be part of the audio the user hears, so runs over them are the
+user's own, by hand.
 
 The pult of this run has a config folder and a port of its own (PULT_CONFIG_DIR, PULT_PORT), so
 its commands never reach a pult the user has running. Use a debug build, so that the allocation
@@ -197,7 +202,7 @@ def main():
     config.mkdir()
     env = dict(os.environ, PULT_CONFIG_DIR=str(config), PULT_PORT=str(free_port()))
     wav = out / "click-run.wav"
-    total = QUIET + SETTLE + STEP * (len(sequence) + 3) + 3.0
+    total = QUIET + SETTLE + STEP * (len(sequence) + 3) + 6.0
     report = []
 
     def say(line):
@@ -294,16 +299,19 @@ def main():
     found = probed.returncode == 1
     say("probe: the cut of 5 ms in a copy " + ("was found" if found else "was NOT found"))
 
-    # Not part of the sequence, but worth knowing: what the end of the route sounds like.
+    # The end of the route (pult stop): every bus fades out before its stream falls.
     ending = subprocess.run(
         [str(pult), "clicks", str(wav), "--freq", str(TONE_HZ), "--quiet", str(QUIET / 2),
          "--skip", f"{until:.2f}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         check=False)
-    say("the end of the route (pult stop), not part of the result: "
+    say("the end of the route (pult stop): "
         + (ending.stdout.strip().splitlines() or ["not judged"])[-1])
+    if ending.returncode not in (0, 1):
+        print(f"click-run: {ending.stderr.strip()}", file=sys.stderr)
+        return 2
 
-    clicks = verdict.returncode == 1
+    clicks = verdict.returncode == 1 or ending.returncode == 1
     if clicks and (dropouts or glitches):
         say("note: a dropout or glitch is a jump the sequence did not make; compare the times")
     say("RESULT: " + ("clicks" if clicks else "no clicks")
