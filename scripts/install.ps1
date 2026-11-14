@@ -10,7 +10,8 @@ for pult):
   pult.exe, pult-app.exe, uninstall.ps1, example-profile.toml, LICENSE, README.md, VERSION
 
 plus a Start menu entry "pult" (the window) and an entry in Settings > Apps (which runs the installed
-uninstall.ps1). No administrator rights. The files are all copied first and then swapped in; a copy
+window as "pult-app.exe --uninstall": no PowerShell, no console window; uninstall.ps1 is the same for
+the terminal). No administrator rights. The files are all copied first and then swapped in; a copy
 or a swap that fails puts the old ones back, so the install is never a mix of versions.
 
 A pult that runs goes on with the old program until it is closed: Windows lets a running program be
@@ -236,13 +237,16 @@ if ($DesktopShortcut) {
     $desk.Save()
 }
 
-# The entry of Settings > Apps runs the copy of uninstall.ps1 with the places of this install.
+# The entry of Settings > Apps runs the installed window itself (pult-app --uninstall): the program
+# removes the folder it lies in, in its own process, and asks in a window. No PowerShell and no console
+# window. The other places are named only when they are not the ones of the user (a test, or a folder
+# you chose); Get-Place left no quote and no trailing backslash in them.
 $uninstallKey = "$RegistryRoot\Microsoft\Windows\CurrentVersion\Uninstall\pult"
 Write-Output "==> Settings > Apps entry ($uninstallKey)"
-$ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-# -PauseOnError: Settings opens a console window that would close before an error could be read.
-$command = "`"$ps`" -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'uninstall.ps1')`"" +
-" -InstallDir `"$InstallDir`" -StartMenuDir `"$StartMenuDir`" -DesktopDir `"$DesktopDir`" -RegistryRoot `"$RegistryRoot`" -PauseOnError"
+$command = "`"$app`" --uninstall"
+if ($StartMenuDir -ne (Get-Place ([Environment]::GetFolderPath('Programs')))) { $command += " --start-menu-dir `"$StartMenuDir`"" }
+if ($DesktopDir -ne (Get-Place ([Environment]::GetFolderPath('Desktop')))) { $command += " --desktop-dir `"$DesktopDir`"" }
+if ($RegistryRoot -ne 'HKCU:\Software') { $command += " --registry-root `"$RegistryRoot`"" }
 $size = [int](((Get-ChildItem -LiteralPath $InstallDir -File | Measure-Object -Property Length -Sum).Sum) / 1KB)
 # There is one entry: an install in another folder loses it (its files stay there), so say so.
 $previous = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue

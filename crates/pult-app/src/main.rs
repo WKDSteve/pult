@@ -5,6 +5,9 @@
 //!
 //! A release build is a window program: no console window opens with it. Text for the
 //! command line goes to the terminal it was started from (`ffi`).
+//!
+//! `pult-app --uninstall` (Windows) removes the install the program is part of; it is what the
+//! entry in Settings > Apps runs (`uninstall`).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![deny(unsafe_code)]
@@ -15,6 +18,8 @@ mod ffi;
 #[cfg(not(windows))]
 #[path = "ffi_elsewhere.rs"]
 mod ffi;
+#[cfg(windows)]
+mod uninstall;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -459,6 +464,13 @@ fn later_start(start: &Start, shown: bool) -> (Option<&'static str>, ExitCode) {
 }
 
 fn main() -> ExitCode {
+    // The entry in Settings > Apps: the program removes its own install and never opens the
+    // console window (see `uninstall`).
+    #[cfg(windows)]
+    if std::env::args().skip(1).any(|arg| arg == "--uninstall") {
+        ffi::attach_parent_console();
+        return uninstall::run(&uninstall::PRODUCT, std::env::args().skip(1));
+    }
     let start = start::parse(std::env::args().skip(1));
     if !matches!(
         start,

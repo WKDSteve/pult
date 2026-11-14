@@ -15,10 +15,14 @@ Packs the release zip from stand-ins (copies of cmd.exe: nothing is built) and c
 - the zip unpacked into a folder and its install.ps1 run into temp places (a throw-away registry root,
   a temp Start menu and install folder; the account's own are never touched): the Settings > Apps
   entry, the Run value, a pult that keeps running through an update, a swap that fails, folders that
-  are no release and no install; then the installed uninstall.ps1.
+  are no release and no install; then the installed uninstall.ps1;
+- with -AppExe (or -BuildDir), the entry of Settings > Apps itself: its command names no PowerShell,
+  and run as it stands (plus --yes, so no window asks) the real pult-app.exe removes the temp install
+  in its own process, with the checks of uninstall.ps1.
 
 With -Zip the same checks run on that zip too, against the programs of -BuildDir (the workflows check
-the zip they are about to publish this way). The real programs are only compared, never started.
+the zip they are about to publish this way). The real programs are only compared; only pult-app.exe
+is started, and only as "--uninstall" of the temp install.
 
 Exit 0 when all checks pass.
 
@@ -28,6 +32,9 @@ A release zip made from -BuildDir, checked as well.
 .PARAMETER BuildDir
 The folder with the pult.exe and pult-app.exe the -Zip was made from.
 
+.PARAMETER AppExe
+A real pult-app.exe (default: the one of -BuildDir). With it the entry of Settings > Apps is run.
+
 .PARAMETER Label
 The version label the -Zip must say (X.Y.Z, or X.Y.Z+<short commit> for the rolling build). Without it
 the zip's own VERSION is believed, which checks less.
@@ -36,6 +43,7 @@ the zip's own VERSION is believed, which checks less.
 param(
     [string] $Zip = '',
     [string] $BuildDir = '',
+    [string] $AppExe = '',
     [string] $Label = ''
 )
 
@@ -92,6 +100,43 @@ function Invoke-Child([string] $Script, [string[]] $Arguments, [string] $Shell =
     return [pscustomobject]@{ Code = $code; Text = $output }
 }
 
+# The command of a Settings > Apps entry, run as it stands plus --yes (no window asks). The program
+# gets a temp folder of the test and no CLAUDECODE; nothing of this process changes.
+function Invoke-Entry([string] $Command) {
+    if ($Command -notmatch '^"([^"]+)"(.*)$') { return [pscustomobject]@{ Code = -1; Text = "not a command: $Command" } }
+    $exe = $Matches[1]
+    $arguments = @($Matches[2].Trim(), '--yes')
+    if ($elevated) { $arguments += '--allow-elevated' }
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $exe
+    $info.Arguments = $arguments -join ' '
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $info.StandardErrorEncoding = [Text.Encoding]::UTF8
+    # From inside the folder that is to go, as a terminal standing in it would.
+    $info.WorkingDirectory = Split-Path -Parent $exe
+    $info.EnvironmentVariables.Remove('CLAUDECODE')
+    $info.EnvironmentVariables['TEMP'] = $script:appTemp
+    $info.EnvironmentVariables['TMP'] = $script:appTemp
+    $process = [Diagnostics.Process]::Start($info)
+    try {
+        $out = $process.StandardOutput.ReadToEndAsync()
+        $err = $process.StandardError.ReadToEndAsync()
+        # A window that asks would wait for ever: that is a failure, not a hang of the test.
+        if (-not $process.WaitForExit(60000)) {
+            $process.Kill()
+            return [pscustomobject]@{ Code = -1; Text = 'did not end within a minute (does a window ask?)' }
+        }
+        return [pscustomobject]@{ Code = $process.ExitCode; Text = ($out.Result + $err.Result) }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Get-Sha([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 
 # The names of a folder's files, sorted the way the zip sorts them.
@@ -138,7 +183,7 @@ function Test-Archive([string] $Path, [string] $Programs, [string] $Label, [stri
     $script:archiveDir = $dir
 }
 
-$envNames = 'PULT_INSTALL_DIR', 'PULT_START_MENU_DIR', 'PULT_REGISTRY_ROOT'
+$envNames = 'PULT_INSTALL_DIR', 'PULT_START_MENU_DIR', 'PULT_REGISTRY_ROOT', 'PULT_DESKTOP_DIR'
 $savedEnv = @{}
 foreach ($name in $envNames) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name) }
 $keepRunning = $null
@@ -252,7 +297,10 @@ try {
     $entryKey = "$regRoot\Microsoft\Windows\CurrentVersion\Uninstall\pult"
     $entry = Get-ItemProperty -LiteralPath $entryKey -ErrorAction SilentlyContinue
     Write-Check ($null -ne $entry -and $entry.DisplayVersion -eq $version -and $entry.InstallLocation -eq $install) 'the Settings > Apps entry says the version of the zip'
-    Write-Check ($null -ne $entry -and $entry.UninstallString -match [regex]::Escape("-InstallDir `"$install`"") -and $entry.UninstallString -match 'PauseOnError') 'and its command names the places of this install'
+    $entryCommand = "`"$(Join-Path $install 'pult-app.exe')`" --uninstall --start-menu-dir `"$startMenu`" --desktop-dir `"$desktopDir`" --registry-root `"$regRoot`""
+    Write-Check ($null -ne $entry -and $entry.UninstallString -ceq $entryCommand) 'its command is the installed window with --uninstall and the places of this install'
+    if ($null -ne $entry -and $entry.UninstallString -cne $entryCommand) { Write-Output "  it says: $($entry.UninstallString)" }
+    Write-Check ($null -ne $entry -and $entry.UninstallString -notmatch '(powershell|pwsh|cmd)\.exe|\.ps1|-File') 'and names no PowerShell, no shell and no script'
     $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startMenu 'pult.lnk'))
     Write-Check ($link.TargetPath -eq (Join-Path $install 'pult-app.exe')) 'the Start menu entry opens the window'
     Write-Check (-not (Test-Path -LiteralPath (Join-Path $desktopDir 'pult.lnk'))) 'no desktop shortcut without -DesktopShortcut'
@@ -382,7 +430,81 @@ try {
     Write-Check ($r.Code -eq 0 -and (Get-Tree $install) -ceq $wanted) 'an install of programs only is taken over'
     $r = Invoke-Child (Join-Path $install 'uninstall.ps1') $places
 
-    # 16. The zip the workflow is about to publish.
+    # 16. The entry of Settings > Apps, run as it stands: the real window program removes its install.
+    if (-not $AppExe -and $BuildDir) { $AppExe = Join-Path $BuildDir 'pult-app.exe' }
+    if (-not $AppExe) {
+        Write-Output 'skip the entry of Settings > Apps run by the program itself (no -AppExe, no -BuildDir)'
+    }
+    else {
+        if (-not (Test-Path -LiteralPath $AppExe -PathType Leaf)) { throw "no such program: $AppExe" }
+        $script:appTemp = Join-Path $tmp 'app temp'
+        New-Item -ItemType Directory -Path $script:appTemp | Out-Null
+        $real = Join-Path $tmp 'real payload'
+        Copy-Item -LiteralPath $dir1 -Destination $real -Recurse
+        Copy-Item -LiteralPath $AppExe -Destination (Join-Path $real 'pult-app.exe') -Force
+        $realInstaller = Join-Path $real 'install.ps1'
+        $r = Invoke-Child $realInstaller ($places + '-DesktopShortcut')
+        Write-Check ($r.Code -eq 0 -and (Get-Tree $install) -ceq $wanted) 'an install with the real window program'
+        if ($r.Code -ne 0) { Write-Output $r.Text }
+        $command = [string](Get-ItemProperty -LiteralPath $entryKey).UninstallString
+
+        # Refused before anything goes: a program that runs from the install, a registry root of another hive.
+        $keepRunning = Start-Process -FilePath (Join-Path $install 'pult.exe') -ArgumentList '/c', 'ping -n 60 127.0.0.1 >nul' -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 300
+        $r = Invoke-Entry $command
+        Write-Check ($r.Code -ne 0 -and $r.Text -match 'running from' -and $r.Text -match "PID $($keepRunning.Id)" -and (Get-Tree $install) -ceq $wanted) 'the entry refuses while pult runs from the install, names the PID and takes nothing'
+        if ($r.Code -eq 0 -or $r.Text -notmatch 'running from') { Write-Output $r.Text }
+        Stop-Process -Id $keepRunning.Id -Force -ErrorAction SilentlyContinue
+        $keepRunning.WaitForExit(5000) | Out-Null
+        $keepRunning = $null
+        Start-Sleep -Milliseconds 300
+        $r = Invoke-Entry "`"$app`" --uninstall --start-menu-dir `"$startMenu`" --desktop-dir `"$desktopDir`" --registry-root `"HKLM:\Software\x`""
+        Write-Check ($r.Code -ne 0 -and $r.Text -match 'below HKCU' -and (Get-Tree $install) -ceq $wanted) 'and a registry root outside HKCU'
+
+        # What is not of this install stays: a Run value in another form, a shortcut that leads elsewhere.
+        New-Item -Path $runKey -Force | Out-Null
+        New-ItemProperty -LiteralPath $runKey -Name 'pult' -Value 'cmd /c something-of-yours' -PropertyType String -Force | Out-Null
+        $foreignLink = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startMenu 'pult.lnk'))
+        $foreignLink.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+        $foreignLink.Save()
+        $r = Invoke-Entry $command
+        Write-Check ($r.Code -eq 0 -and -not (Test-Path -LiteralPath $install)) 'the entry removes the install'
+        if ($r.Code -ne 0) { Write-Output $r.Text }
+        Write-Check ((Get-ItemProperty -LiteralPath $runKey).pult -ceq 'cmd /c something-of-yours' -and $r.Text -match 'kept the Run value') 'a Run value in another form is left alone, and named'
+        Write-Check ((Test-Path -LiteralPath (Join-Path $startMenu 'pult.lnk')) -and $r.Text -match 'kept .*pult\.lnk') 'and so is a Start menu entry that starts another program'
+        Write-Check (-not (Test-Path -LiteralPath (Join-Path $desktopDir 'pult.lnk'))) 'the desktop shortcut of this install goes'
+        Remove-Item -LiteralPath (Join-Path $startMenu 'pult.lnk')
+        Remove-ItemProperty -LiteralPath $runKey -Name 'pult'
+
+        # The whole of it: files with the rest of a cut short install, both shortcuts, the start with
+        # Windows, the entry; and the program itself, which is moved to the temp folder.
+        $r = Invoke-Child $realInstaller ($places + '-DesktopShortcut')
+        New-ItemProperty -LiteralPath $runKey -Name 'pult' -Value "`"$app`" --tray" -PropertyType String -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $install 'pult.exe.new') -Value 'cut short'
+        Get-ChildItem -LiteralPath $script:appTemp -Force | Remove-Item -Force
+        Set-Content -LiteralPath (Join-Path $script:appTemp 'pult-app-removed-1.exe') -Value 'left by an earlier removal'
+        $command = [string](Get-ItemProperty -LiteralPath $entryKey).UninstallString
+        $r = Invoke-Entry $command
+        Write-Check ($r.Code -eq 0 -and -not (Test-Path -LiteralPath $install) -and -not (Test-Path -LiteralPath (Join-Path $startMenu 'pult.lnk')) -and -not (Test-Path -LiteralPath (Join-Path $desktopDir 'pult.lnk'))) 'the entry removes it all: the files, the folder, both shortcuts'
+        if ($r.Code -ne 0) { Write-Output $r.Text }
+        Write-Check (-not (Test-Path -LiteralPath $entryKey)) 'and the Settings > Apps entry itself'
+        Write-Check ($null -eq (Get-ItemProperty -LiteralPath $runKey -Name 'pult' -ErrorAction SilentlyContinue)) 'and the start with Windows of this install'
+        $moved = @(Get-ChildItem -LiteralPath $script:appTemp -Force)
+        Write-Check ($moved.Count -eq 1 -and $moved[0].Name -match '^pult-app-removed-[0-9]+\.exe$' -and $moved[0].Name -ne 'pult-app-removed-1.exe' -and (Get-Sha $moved[0].FullName) -eq (Get-Sha $AppExe)) 'the program moved itself to the temp folder (it cannot delete its own file) and took the one an earlier removal left'
+        if ($moved.Count -ne 1) { Write-Output "  the temp folder holds: $(($moved | ForEach-Object { $_.Name }) -join ', ')" }
+        Write-Check ($r.Text -match 'removed the Settings > Apps entry' -and $r.Text -match 'were not touched') 'and says what it removed and what stays'
+
+        # A folder that is no install loses nothing.
+        $loose = Join-Path $tmp 'loose'
+        New-Item -ItemType Directory -Path $loose | Out-Null
+        Copy-Item -LiteralPath $AppExe -Destination (Join-Path $loose 'pult-app.exe')
+        Set-Content -LiteralPath (Join-Path $loose 'README.md') -Value 'mine'
+        $r = Invoke-Entry "`"$(Join-Path $loose 'pult-app.exe')`" --uninstall --start-menu-dir `"$startMenu`" --desktop-dir `"$desktopDir`" --registry-root `"$regRoot`""
+        Write-Check ($r.Code -ne 0 -and $r.Text -match 'not an install of pult' -and (Get-Tree $loose) -ceq 'README.md|pult-app.exe') 'the program in a folder that is no install removes nothing'
+        if ($r.Code -eq 0) { Write-Output $r.Text }
+    }
+
+    # 17. The zip the workflow is about to publish.
     if ($Zip) {
         if (-not (Test-Path -LiteralPath $Zip -PathType Leaf)) { throw "no such zip: $Zip" }
         if (-not $BuildDir) { throw '-Zip needs -BuildDir' }

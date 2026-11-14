@@ -111,7 +111,7 @@ Alles für den eigenen Benutzer, ohne Setup und ohne Adminrechte: Programme und 
 - **Release:** Ein Tag `vX.Y.Z` macht einen Entwurf mit `pult-X.Y.Z-x86_64-pc-windows-msvc.zip`, den ein Mensch ansieht und veröffentlicht (`.github/workflows/release.yml`).
 - **Aus dem Checkout:** `scripts\build-install.ps1` baut und ruft denselben `install.ps1` (`-BuildOnly` baut nur).
 
-Entfernen: *Einstellungen > Apps > pult* oder `uninstall.ps1` im Installationsordner.
+Entfernen: *Einstellungen > Apps > pult* (das Fenster-Programm entfernt seine Installation selbst, `pult-app.exe --uninstall`, mit Rückfrage in einem Fenster, ohne PowerShell und ohne Konsolenfenster) oder im Terminal `uninstall.ps1` im Installationsordner.
 
 ## Planung
 

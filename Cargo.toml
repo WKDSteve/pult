@@ -59,7 +59,7 @@ windows-core = "0.62.2"
 [workspace.lints.rust]
 # Denied everywhere; only the `ffi` modules allow it: pult-engine's (process loopback, realtime
 # priority, the session mark) and that of the pult-app binary (console, one instance, start with
-# Windows). The other crates, and the library of pult-app, forbid it outright.
+# Windows, uninstall). The other crates, and the library of pult-app, forbid it outright.
 unsafe_code = "deny"
 
 [workspace.lints.clippy]

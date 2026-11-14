@@ -1,8 +1,11 @@
 //! The Windows calls of the window that have no safe wrapper: the console of the terminal,
-//! the one instance per session, and the start with Windows.
+//! the one instance per session, and the start with Windows; in `uninstall`, those of
+//! `pult-app --uninstall`.
 //!
 //! This is the only module of `pult-app` with `unsafe` code; it belongs to the binary, the
 //! library forbids `unsafe` outright. Every block names the condition it relies on.
+
+pub mod uninstall;
 
 use std::sync::mpsc;
 use std::thread;

@@ -19,6 +19,9 @@ usage: pult-app [PROFILE | --demo | --tray]
   --tray    the profile opened last, with the window in the tray
   --help    this text
   --version the version
+  --uninstall
+            (Windows) remove the install this program is part of, as Settings > Apps does;
+            it asks first, in a window (--yes: no question and no window)
 
 Without an argument the profile opened last starts again; before the first one the window
 says how to start. Whether pult starts on signing in, in the tray or with the window open, is

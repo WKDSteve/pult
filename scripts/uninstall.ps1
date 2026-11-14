@@ -5,8 +5,12 @@ Remove pult for the current user on Windows, without administrator rights.
 .DESCRIPTION
 Takes away what scripts/install.ps1 made (also through build-install.ps1): the files of the install
 folder (%LOCALAPPDATA%\pult\bin, or $env:PULT_INSTALL_DIR), the Start menu entry, the entry in
-Settings > Apps (which runs this script from there) and the start with Windows when it starts this
-install. Only the files the installer puts there go; a folder that holds anything else stays.
+Settings > Apps and the start with Windows when it starts this install. Only the files the installer
+puts there go; a folder that holds anything else stays.
+
+This is the way for the terminal. The entry in Settings > Apps does the same without a script and
+without a console window: it runs the installed window as "pult-app.exe --uninstall"
+(crates/pult-app/src/uninstall.rs, which keeps the checks of this script).
 
 Your profiles and %APPDATA%\pult (settings, logs) are never touched. A second run finds nothing to do
 and says so; it is not an error. A program that still runs cannot be removed: that is an error, not a
@@ -16,8 +20,8 @@ and says so; it is not an error. A program that still runs cannot be removed: th
 Remove although the session is elevated (for a build machine).
 
 .PARAMETER PauseOnError
-On an error, print it and wait for Enter (the Settings > Apps entry passes it: its console window
-would close before the message could be read).
+On an error, print it and wait for Enter (the Settings > Apps entry of an install made before the
+program removed itself passes it: its console window would close before the message could be read).
 
 .PARAMETER InstallDir
 The install folder (default $env:PULT_INSTALL_DIR, else %LOCALAPPDATA%\pult\bin).

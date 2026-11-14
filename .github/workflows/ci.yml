@@ -50,6 +50,10 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # pult-app's snapshot tests render through wgpu on this machine's GPU (or WARP).
       - run: cargo test --workspace --locked
+      # The entry of Settings > Apps is the window program itself (pult-app --uninstall): the build of
+      # this job removes a temp install with it, through the same script that checks the release zip.
+      - run: cargo build -p pult-app --locked
+      - run: pwsh -NoProfile -File scripts/test-release.ps1 -AppExe target/debug/pult-app.exe
       # A snapshot that does not match leaves <name>.new.png and <name>.diff.png beside it.
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (node24)

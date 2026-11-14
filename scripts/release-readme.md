@@ -71,7 +71,9 @@ above. The checksum tells you the zip is the release's; it is no signature.
 
 ## Uninstall
 
-*Settings > Apps > pult*, or:
+*Settings > Apps > pult*: the window program removes its own install (`pult-app.exe --uninstall`). It
+asks first, in a window; no PowerShell and no console window opens. From a terminal the script does
+the same:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\pult\bin\uninstall.ps1"
@@ -79,3 +81,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\pult\bin\
 
 Close pult first (*Quit pult* in the tray menu). Your profiles and `%APPDATA%\pult` stay; delete that
 folder by hand if you want the settings gone too.
+
+Windows does not let a running program delete its own file, so *Settings > Apps* moves `pult-app.exe`
+into your folder for temporary files (`%TEMP%\pult-app-removed-<number>.exe`) and leaves it there.
+Nothing starts it; delete it when you like, or let the cleanup of Windows take it.
