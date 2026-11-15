@@ -145,5 +145,8 @@ jobs:
       - run: python tools/check-workflows.py
       # appkit by one tag in Cargo.lock and one commit in the workflows, and the tag still names that commit.
       - run: python tools/check-appkit-pin.py
+      # scripts/uninstall-entry.ps1 is the file of appkit's release kit at the commit the workflows pin it to. Copy of
+      # appkit's tool.
+      - run: python tools/check-release-kit-copy.py
       # The release zip from stand-ins for the programs, and its install and uninstall into temp places.
       - run: pwsh -NoProfile -File scripts/test-release.ps1

@@ -12,7 +12,8 @@ for pult):
 plus a Start menu entry "pult" (the window) and an entry in Settings > Apps (which runs the installed
 window as "pult-app.exe --uninstall": no PowerShell, no console window; uninstall.ps1 is the same for
 the terminal). No administrator rights. The files are all copied first and then swapped in; a copy
-or a swap that fails puts the old ones back, so the install is never a mix of versions.
+or a swap that fails puts the old ones back, so the install is never a mix of versions. The entry is
+written by uninstall-entry.ps1 beside this script (appkit's release kit); it is not installed.
 
 A pult that runs goes on with the old program until it is closed: Windows lets a running program be
 renamed, so the sound does not stop for an update.
@@ -72,7 +73,7 @@ $ErrorActionPreference = 'Stop'
 
 $programs = @('pult', 'pult-app')
 # What a payload holds, no more and no less: anything else is a folder that is not a release.
-$payloadFiles = @('pult.exe', 'pult-app.exe', 'install.ps1', 'uninstall.ps1', 'example-profile.toml', 'LICENSE', 'README.md', 'VERSION')
+$payloadFiles = @('pult.exe', 'pult-app.exe', 'install.ps1', 'uninstall-entry.ps1', 'uninstall.ps1', 'example-profile.toml', 'LICENSE', 'README.md', 'VERSION')
 
 function Exit-Install([string] $Message) {
     throw "install.ps1: $Message"
@@ -161,8 +162,8 @@ if ((Test-Path -LiteralPath $InstallDir -PathType Container) -and -not (Test-Ins
     Exit-Install "$InstallDir holds files but no pult install: nothing was installed; use an empty folder (-InstallDir) or none"
 }
 
-# Everything in the payload but this script goes.
-$files = @($payloadFiles | Where-Object { $_ -cne 'install.ps1' })
+# Everything in the payload but this script and the text of the entry it writes goes.
+$files = @($payloadFiles | Where-Object { $_ -cne 'install.ps1' -and $_ -cne 'uninstall-entry.ps1' })
 $stillRunning = @(Get-Process -Name $programs -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -and (Test-Under $_.Path $InstallDir) })
 
@@ -241,41 +242,11 @@ if ($DesktopShortcut) {
 # removes the folder it lies in, in its own process, and asks in a window. No PowerShell and no console
 # window. The other places are named only when they are not the ones of the user (a test, or a folder
 # you chose); Get-Place left no quote and no trailing backslash in them.
-$uninstallKey = "$RegistryRoot\Microsoft\Windows\CurrentVersion\Uninstall\pult"
-Write-Output "==> Settings > Apps entry ($uninstallKey)"
-$command = "`"$app`" --uninstall"
-# An account without such a folder (a service account) has no place of its own to compare with.
-$ownStartMenu = [Environment]::GetFolderPath('Programs')
-$ownDesktop = [Environment]::GetFolderPath('Desktop')
-if (-not $ownStartMenu -or $StartMenuDir -ne $ownStartMenu.TrimEnd('\')) { $command += " --start-menu-dir `"$StartMenuDir`"" }
-if (-not $ownDesktop -or $DesktopDir -ne $ownDesktop.TrimEnd('\')) { $command += " --desktop-dir `"$DesktopDir`"" }
-if ($RegistryRoot -ne 'HKCU:\Software') { $command += " --registry-root `"$RegistryRoot`"" }
-$size = [int](((Get-ChildItem -LiteralPath $InstallDir -File | Measure-Object -Property Length -Sum).Sum) / 1KB)
-# There is one entry: an install in another folder loses it (its files stay there), so say so.
-$previous = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
-$previousDir = ''
-if ($previous -and $previous.PSObject.Properties['InstallLocation']) { $previousDir = ([string]$previous.InstallLocation).TrimEnd('\') }
-if ($previousDir -and $previousDir -ne $InstallDir) {
-    Write-Output "the Settings > Apps entry was for the install in $previousDir; it now names this one, that copy stays:"
-    Write-Output "  remove it with: & `"$(Join-Path $previousDir 'uninstall.ps1')`" -InstallDir `"$previousDir`""
-}
-if (Test-Path -LiteralPath $uninstallKey) { Remove-Item -LiteralPath $uninstallKey -Recurse -Force }
-New-Item -Path $uninstallKey -Force | Out-Null
-$values = [ordered]@{
-    DisplayName     = 'pult'
-    DisplayVersion  = [string]$version
-    Publisher       = 'WKDSteve'
-    InstallLocation = $InstallDir
-    DisplayIcon     = "$app,0"
-    UninstallString = $command
-}
-foreach ($k in $values.Keys) {
-    New-ItemProperty -LiteralPath $uninstallKey -Name $k -Value $values[$k] -PropertyType String -Force | Out-Null
-}
-foreach ($k in 'NoModify', 'NoRepair') {
-    New-ItemProperty -LiteralPath $uninstallKey -Name $k -Value 1 -PropertyType DWord -Force | Out-Null
-}
-New-ItemProperty -LiteralPath $uninstallKey -Name 'EstimatedSize' -Value $size -PropertyType DWord -Force | Out-Null
+# The text of the entry is the release kit's (appkit release-kit/scripts/uninstall-entry.ps1), shipped beside
+# this script; tools/check-release-kit-copy.py holds the copy to the kit.
+. (Join-Path $PSScriptRoot 'uninstall-entry.ps1')
+Set-UninstallEntry -RegistryRoot $RegistryRoot -Name 'pult' -DisplayName 'pult' -Version ([string]$version) `
+    -InstallDir $InstallDir -App $app -StartMenuDir $StartMenuDir -DesktopDir $DesktopDir
 
 # The start with Windows stays what you chose, in the tray or with the window open. When it is on, it
 # starts this install from now on (it may name a program that moved, or a build in a checkout). A value

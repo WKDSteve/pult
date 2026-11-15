@@ -66,7 +66,7 @@ function Write-Check([bool] $Passed, [string] $Name) {
 
 $packager = Join-Path $here 'package-release.ps1'
 $programs = 'pult', 'pult-app'
-$entries = @('LICENSE', 'README.md', 'VERSION', 'example-profile.toml', 'install.ps1', 'pult-app.exe', 'pult.exe', 'uninstall.ps1')
+$entries = @('LICENSE', 'README.md', 'VERSION', 'example-profile.toml', 'install.ps1', 'pult-app.exe', 'pult.exe', 'uninstall-entry.ps1', 'uninstall.ps1')
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $elevated = ([Security.Principal.WindowsPrincipal] $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -100,41 +100,14 @@ function Invoke-Child([string] $Script, [string[]] $Arguments, [string] $Shell =
     return [pscustomobject]@{ Code = $code; Text = $output }
 }
 
-# The command of a Settings > Apps entry, run as it stands plus --yes (no window asks). The program
-# gets a temp folder of the test and no CLAUDECODE; nothing of this process changes.
+# The command of a Settings > Apps entry, run as it stands plus --yes (no window asks): the release kit's
+# runner (uninstall-entry.ps1). The program gets a temp folder of the test and no CLAUDECODE; nothing of
+# this process changes.
+. (Join-Path $here 'uninstall-entry.ps1')
 function Invoke-Entry([string] $Command) {
-    if ($Command -notmatch '^"([^"]+)"(.*)$') { return [pscustomobject]@{ Code = -1; Text = "not a command: $Command" } }
-    $exe = $Matches[1]
-    $arguments = @($Matches[2].Trim(), '--yes')
-    if ($elevated) { $arguments += '--allow-elevated' }
-    $info = New-Object Diagnostics.ProcessStartInfo
-    $info.FileName = $exe
-    $info.Arguments = $arguments -join ' '
-    $info.UseShellExecute = $false
-    $info.CreateNoWindow = $true
-    $info.RedirectStandardOutput = $true
-    $info.RedirectStandardError = $true
-    $info.StandardOutputEncoding = [Text.Encoding]::UTF8
-    $info.StandardErrorEncoding = [Text.Encoding]::UTF8
-    # From inside the folder that is to go, as a terminal standing in it would.
-    $info.WorkingDirectory = Split-Path -Parent $exe
-    $info.EnvironmentVariables.Remove('CLAUDECODE')
-    $info.EnvironmentVariables['TEMP'] = $script:appTemp
-    $info.EnvironmentVariables['TMP'] = $script:appTemp
-    $process = [Diagnostics.Process]::Start($info)
-    try {
-        $out = $process.StandardOutput.ReadToEndAsync()
-        $err = $process.StandardError.ReadToEndAsync()
-        # A window that asks would wait for ever: that is a failure, not a hang of the test.
-        if (-not $process.WaitForExit(60000)) {
-            $process.Kill()
-            return [pscustomobject]@{ Code = -1; Text = 'did not end within a minute (does a window ask?)' }
-        }
-        return [pscustomobject]@{ Code = $process.ExitCode; Text = ($out.Result + $err.Result) }
-    }
-    finally {
-        $process.Dispose()
-    }
+    $extra = @('--yes')
+    if ($elevated) { $extra += '--allow-elevated' }
+    return Invoke-UninstallEntry -Command $Command -Temp $script:appTemp -Extra $extra
 }
 
 function Get-Sha([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -170,6 +143,7 @@ function Test-Archive([string] $Path, [string] $Programs, [string] $Label, [stri
     $sources = @{
         'install.ps1'          = (Join-Path $here 'install.ps1')
         'uninstall.ps1'        = (Join-Path $here 'uninstall.ps1')
+        'uninstall-entry.ps1'  = (Join-Path $here 'uninstall-entry.ps1')
         'example-profile.toml' = (Join-Path $root 'examples\pult.toml')
         'LICENSE'              = (Join-Path $root 'LICENSE')
         'README.md'            = (Join-Path $here 'release-readme.md')
@@ -291,8 +265,8 @@ try {
     $r = Invoke-Child $installer $places -Shell $windowsPowerShell
     Write-Check ($r.Code -eq 0) 'install.ps1 of the unpacked zip installs'
     if ($r.Code -ne 0) { Write-Output $r.Text }
-    $wanted = ($entries | Where-Object { $_ -cne 'install.ps1' }) -join '|'
-    Write-Check ((Get-Tree $install) -ceq $wanted) 'the install holds exactly the zip but install.ps1, in one folder'
+    $wanted = ($entries | Where-Object { $_ -cne 'install.ps1' -and $_ -cne 'uninstall-entry.ps1' }) -join '|'
+    Write-Check ((Get-Tree $install) -ceq $wanted) 'the install holds exactly the zip but install.ps1 and uninstall-entry.ps1, in one folder'
     if ((Get-Tree $install) -cne $wanted) { Write-Output "  it holds: $(Get-Tree $install)" }
     $entryKey = "$regRoot\Microsoft\Windows\CurrentVersion\Uninstall\pult"
     $entry = Get-ItemProperty -LiteralPath $entryKey -ErrorAction SilentlyContinue
@@ -301,6 +275,10 @@ try {
     Write-Check ($null -ne $entry -and $entry.UninstallString -ceq $entryCommand) 'its command is the installed window with --uninstall and the places of this install'
     if ($null -ne $entry -and $entry.UninstallString -cne $entryCommand) { Write-Output "  it says: $($entry.UninstallString)" }
     Write-Check ($null -ne $entry -and $entry.UninstallString -notmatch '(powershell|pwsh|cmd)\.exe|\.ps1|-File') 'and names no PowerShell, no shell and no script'
+    $problems = @(Test-UninstallEntry -RegistryRoot $regRoot -Name 'pult' -DisplayName 'pult' -Version $version -InstallDir $install `
+            -App (Join-Path $install 'pult-app.exe') -StartMenuDir $startMenu -DesktopDir $desktopDir)
+    Write-Check ($problems.Count -eq 0) 'the entry is the one of the release kit'
+    if ($problems.Count) { $problems | ForEach-Object { Write-Output "  $_" } }
     $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startMenu 'pult.lnk'))
     Write-Check ($link.TargetPath -eq (Join-Path $install 'pult-app.exe')) 'the Start menu entry opens the window'
     Write-Check (-not (Test-Path -LiteralPath (Join-Path $desktopDir 'pult.lnk'))) 'no desktop shortcut without -DesktopShortcut'

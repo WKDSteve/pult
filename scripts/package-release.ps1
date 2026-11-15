@@ -7,6 +7,7 @@ Nothing is built here. The zip holds, in one folder, exactly what scripts\instal
 
   pult.exe, pult-app.exe    the command line and the window
   install.ps1               installs this zip's content for the current user
+  uninstall-entry.ps1       the entry in Settings > Apps that install.ps1 writes (appkit's release kit)
   uninstall.ps1, example-profile.toml (examples\pult.toml), LICENSE, README.md (how to install), VERSION
 
 The zip is reproducible: entries are sorted, use forward slashes and a fixed timestamp, so the same
@@ -130,6 +131,7 @@ try {
     foreach ($name in $programs) { Copy-Into (Join-Path $BuildDir "$name.exe") "$name.exe" }
     Copy-Into (Join-Path $PSScriptRoot 'install.ps1') 'install.ps1'
     Copy-Into (Join-Path $PSScriptRoot 'uninstall.ps1') 'uninstall.ps1'
+    Copy-Into (Join-Path $PSScriptRoot 'uninstall-entry.ps1') 'uninstall-entry.ps1'
     Copy-Into (Join-Path $root 'examples\pult.toml') 'example-profile.toml'
     Copy-Into (Join-Path $root 'LICENSE') 'LICENSE'
     Copy-Into (Join-Path $PSScriptRoot 'release-readme.md') 'README.md'
