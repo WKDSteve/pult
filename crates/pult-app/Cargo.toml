@@ -36,16 +36,16 @@ tray-icon = { version = "0.26.1", default-features = false }
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "system_fonts", "wgpu"] }
 
 [target.'cfg(windows)'.dependencies]
+# src/uninstall.rs: `pult-app --uninstall`, what the entry in Settings > Apps runs. The crate of the kit removes
+# the install in the program's own process; its Windows calls are its own (no dependency).
+appkit-uninstall.workspace = true
 # src/ffi.rs: AttachConsole, so a release build without a console window can still answer
 # --help in the terminal it was started from; a named mutex and event, so a second start shows
 # the running window instead of starting a second route; the Run value of the start with
-# Windows. src/ffi/uninstall.rs (`pult-app --uninstall`): the folders of the shell and where a
-# shortcut leads (Shell, with the find data its call names), the question in a window.
+# Windows.
 windows = { workspace = true, features = [
-    "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Registry",
-    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
