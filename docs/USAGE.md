@@ -20,7 +20,7 @@ Programme ──► CABLE Input ══ VB-CABLE ══ CABLE Output ──► pu
 pult devices
 ```
 
-Das zeigt alle Ein- und Ausgänge mit Kanälen, Rate und Format; `*` markiert das Standardgerät. Für `--from` und `--to` reicht ein eindeutiger Teil des Namens, Groß- und Kleinschreibung zählen nicht: `Focusrite` findet `Lautsprecher (2- Focusrite USB Audio)`. Passt ein Teil auf mehrere Geräte, nennt pult alle Treffer.
+Das zeigt alle Ein- und Ausgänge mit Kanälen, Rate und Format; `*` markiert das Standardgerät. Dahinter steht die Periode, in der Windows das Gerät im Shared Mode bedient (`period 10.00 ms`), und, wo das Gerät kürzere zulässt, ihr Bereich (`2.67 to 10.00 ms`). pult läuft heute immer mit der eigenen Periode des Geräts; der Bereich zeigt, was kurze Perioden dort bringen könnten. Für `--from` und `--to` reicht ein eindeutiger Teil des Namens, Groß- und Kleinschreibung zählen nicht: `Focusrite` findet `Lautsprecher (2- Focusrite USB Audio)`. Passt ein Teil auf mehrere Geräte, nennt pult alle Treffer.
 
 ## 3. Kette mit dem Testton prüfen
 

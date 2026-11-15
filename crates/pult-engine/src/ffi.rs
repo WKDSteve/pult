@@ -20,7 +20,7 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS,
     AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
     AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, ActivateAudioInterfaceAsync,
-    IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient,
+    IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient, IAudioClient3,
     IMMDeviceEnumerator, IMMNotificationClient, MMDeviceEnumerator,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX,
@@ -31,7 +31,7 @@ use windows::Win32::System::Com::StructuredStorage::{
 };
 use windows::Win32::System::Com::{
     BLOB, CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemAlloc,
-    CoUninitialize,
+    CoTaskMemFree, CoUninitialize,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -531,4 +531,71 @@ impl Drop for DeviceWatch {
             let _ = thread.join();
         }
     }
+}
+
+/// The engine periods of the endpoints `ids` (as `IMMDevice::GetId` names them), one per id
+/// and in their order; `None` for a missing id and wherever Windows does not tell. Asks on a
+/// thread of its own with COM of its own, so whatever the calling thread did with COM (cpal
+/// sets it up there) does not matter. Opens no stream: the client is only activated.
+pub(crate) fn engine_periods(ids: &[Option<String>]) -> Vec<Option<crate::EnginePeriod>> {
+    let ids = ids.to_vec();
+    let count = ids.len();
+    std::thread::Builder::new()
+        .name("pult engine periods".to_owned())
+        .spawn(move || {
+            let Ok(com) = Com::init() else {
+                return vec![None; ids.len()];
+            };
+            // SAFETY: COM is initialised on this thread (`com` lives to the end).
+            let enumerator: Option<IMMDeviceEnumerator> =
+                unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.ok();
+            let periods = ids
+                .iter()
+                .map(|id| {
+                    let (enumerator, id) = (enumerator.as_ref()?, id.as_ref()?);
+                    engine_period(enumerator, id).ok()
+                })
+                .collect();
+            drop(enumerator);
+            drop(com);
+            periods
+        })
+        .ok()
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_else(|| vec![None; count])
+}
+
+/// The engine period of endpoint `id` at its mix format. Needs [`Com`] on the calling thread.
+fn engine_period(enumerator: &IMMDeviceEnumerator, id: &str) -> Result<crate::EnginePeriod> {
+    // SAFETY: COM is initialised on this thread (the caller's `Com`); the id lives across
+    // the call.
+    let device = unsafe { enumerator.GetDevice(&HSTRING::from(id))? };
+    // SAFETY: as above; no activation parameters.
+    let client: IAudioClient3 = unsafe { device.Activate(CLSCTX_ALL, None)? };
+    // SAFETY: the client is live; Windows allocates the format with `CoTaskMemAlloc`.
+    let format = unsafe { client.GetMixFormat()? };
+    let (mut default, mut fundamental, mut min, mut max) = (0, 0, 0, 0);
+    // SAFETY: `format` is the client's own mix format, valid until freed below; the four out
+    // pointers are valid locals.
+    let asked = unsafe {
+        client.GetSharedModeEnginePeriod(
+            format,
+            &raw mut default,
+            &raw mut fundamental,
+            &raw mut min,
+            &raw mut max,
+        )
+    };
+    // SAFETY: `format` came from `GetMixFormat` and is read before it is freed, once.
+    let rate = unsafe { (*format).nSamplesPerSec };
+    // SAFETY: as above; nothing reads it after this.
+    unsafe { CoTaskMemFree(Some(format.cast_const().cast())) };
+    asked?;
+    Ok(crate::EnginePeriod {
+        rate,
+        default,
+        fundamental,
+        min,
+        max,
+    })
 }

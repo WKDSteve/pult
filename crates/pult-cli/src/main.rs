@@ -20,7 +20,7 @@ use console::{Console, Input};
 use monitor::{LOG_INTERVAL, Log, Snapshot};
 use pult_core::view::{Action, MixerView};
 use pult_core::{Desk, Dropouts, control};
-use pult_engine::{Devices, EngineDesk, Running, Tone};
+use pult_engine::{Devices, EngineDesk, EnginePeriod, Running, Tone};
 use pult_hub::{Control, Pump};
 use pult_midi::Midi;
 
@@ -108,13 +108,33 @@ fn print_devices(devices: &Devices) {
         }
         for d in list {
             let mark = if d.is_default { '*' } else { ' ' };
+            let period = d.period.map(|p| format!("  {}", period_text(&p)));
             println!(
-                "{mark} {}  [{} ch, {} Hz, {}]",
-                d.name, d.channels, d.sample_rate, d.sample_format
+                "{mark} {}  [{} ch, {} Hz, {}]{}",
+                d.name,
+                d.channels,
+                d.sample_rate,
+                d.sample_format,
+                period.unwrap_or_default()
             );
         }
     }
-    println!("(* = system default)");
+    println!("(* = system default; period: the engine's own, and what a client may ask for)");
+}
+
+/// The engine period of a device as `pult devices` shows it.
+fn period_text(period: &EnginePeriod) -> String {
+    let ms = |frames| period.ms(frames);
+    if period.min == period.max {
+        return format!("period {:.2} ms", ms(period.default));
+    }
+    format!(
+        "period {:.2} ms ({:.2} to {:.2} ms in steps of {:.2})",
+        ms(period.default),
+        ms(period.min),
+        ms(period.max),
+        ms(period.fundamental)
+    )
 }
 
 /// Reads the profile and opens the log (before any device, so a bad file costs nothing),
@@ -406,4 +426,32 @@ fn wait_for_enter(fault: impl Fn() -> Option<String>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pult_engine::EnginePeriod;
+
+    use super::period_text;
+
+    #[test]
+    fn the_period_of_a_device_is_shown_in_milliseconds() {
+        let mut period = EnginePeriod {
+            rate: 48_000,
+            default: 480,
+            fundamental: 8,
+            min: 128,
+            max: 480,
+        };
+        assert_eq!(
+            period_text(&period),
+            "period 10.00 ms (2.67 to 10.00 ms in steps of 0.17)"
+        );
+        // A device with nothing to choose shows only its period.
+        period.min = 480;
+        assert_eq!(period_text(&period), "period 10.00 ms");
+        // A broken rate shows zeros instead of dividing by zero.
+        period.rate = 0;
+        assert_eq!(period_text(&period), "period 0.00 ms");
+    }
 }

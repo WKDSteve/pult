@@ -228,6 +228,37 @@ pub struct DeviceInfo {
     pub sample_format: String,
     /// Whether this is the system's default device for its role.
     pub is_default: bool,
+    /// What its shared-mode engine offers; `None` where Windows does not tell (before
+    /// Windows 10, or a device gone while listing) and on other systems.
+    pub period: Option<EnginePeriod>,
+}
+
+/// The periods the shared-mode audio engine of a device offers (`IAudioClient3`), in frames
+/// at `rate`: how often it wakes by default, and the range a client may ask for in steps of
+/// `fundamental`. Every pult route runs at the default today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnginePeriod {
+    /// The engine's rate in Hz (that of its mix format).
+    pub rate: u32,
+    /// The period of a client that asks for none.
+    pub default: u32,
+    /// The step between the periods a client may ask for.
+    pub fundamental: u32,
+    /// The shortest period.
+    pub min: u32,
+    /// The longest period.
+    pub max: u32,
+}
+
+impl EnginePeriod {
+    /// `frames` at the engine's rate, in milliseconds; 0 for a rate of 0.
+    #[must_use]
+    pub fn ms(&self, frames: u32) -> f64 {
+        if self.rate == 0 {
+            return 0.0;
+        }
+        f64::from(frames) * 1000.0 / f64::from(self.rate)
+    }
 }
 
 /// All input and output devices.
@@ -249,16 +280,22 @@ pub fn list_devices() -> Result<Devices, Error> {
     let host = cpal::default_host();
     let default_in = host.default_input_device().and_then(|d| d.id().ok());
     let default_out = host.default_output_device().and_then(|d| d.id().ok());
-    let describe = |device: &Device,
-                    config: SupportedStreamConfig,
-                    default: Option<cpal::DeviceId>| DeviceInfo {
-        name: device.to_string(),
-        channels: config.channels(),
-        sample_rate: config.sample_rate(),
-        sample_format: config.sample_format().to_string(),
-        is_default: default.is_some() && device.id().ok() == default,
-    };
-    let inputs = host
+    // The endpoint of each device listed, inputs first, for the engine periods below.
+    let mut endpoints: Vec<Option<String>> = Vec::new();
+    let mut describe =
+        |device: &Device, config: SupportedStreamConfig, default: Option<cpal::DeviceId>| {
+            let id = device.id().ok();
+            endpoints.push(id.as_ref().map(|id| id.id().to_owned()));
+            DeviceInfo {
+                name: device.to_string(),
+                channels: config.channels(),
+                sample_rate: config.sample_rate(),
+                sample_format: config.sample_format().to_string(),
+                is_default: default.is_some() && id == default,
+                period: None,
+            }
+        };
+    let mut inputs: Vec<DeviceInfo> = host
         .input_devices()
         .map_err(audio("listing input devices"))?
         .filter_map(|d| {
@@ -266,7 +303,7 @@ pub fn list_devices() -> Result<Devices, Error> {
             Some(describe(&d, config, default_in.clone()))
         })
         .collect();
-    let outputs = host
+    let mut outputs: Vec<DeviceInfo> = host
         .output_devices()
         .map_err(audio("listing output devices"))?
         .filter_map(|d| {
@@ -274,6 +311,15 @@ pub fn list_devices() -> Result<Devices, Error> {
             Some(describe(&d, config, default_out.clone()))
         })
         .collect();
+    #[cfg(windows)]
+    {
+        let periods = ffi::engine_periods(&endpoints);
+        for (info, period) in inputs.iter_mut().chain(outputs.iter_mut()).zip(periods) {
+            info.period = period;
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (&mut inputs, &mut outputs, endpoints);
     Ok(Devices { inputs, outputs })
 }
 
