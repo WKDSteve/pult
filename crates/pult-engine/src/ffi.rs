@@ -38,7 +38,9 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows::Win32::System::Threading::{
     AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, CreateMutexW,
-    OpenMutexW, OpenProcess, PROCESS_SYNCHRONIZE, SYNCHRONIZATION_SYNCHRONIZE,
+    GetCurrentProcess, OpenMutexW, OpenProcess, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+    PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE, PROCESS_SYNCHRONIZE,
+    ProcessPowerThrottling, SYNCHRONIZATION_SYNCHRONIZE, SetProcessInformation,
     WaitForMultipleObjects,
 };
 use windows::Win32::System::Variant::VT_BLOB;
@@ -108,6 +110,33 @@ impl Drop for ProAudio {
         // SAFETY: the handle came from a successful AvSetMmThreadCharacteristicsW and is
         // given back once.
         let _ = unsafe { AvRevertMmThreadCharacteristics(self.0) };
+    }
+}
+
+/// Takes this process out of Windows' power throttling (EcoQoS): without it Windows may run a
+/// process with no visible window, such as a minimised pult or `pult run` in a hidden console,
+/// on lower clocks. The MMCSS class protects the audio callbacks, not the supervisor and the
+/// hub. Asked once per route; asking again changes nothing.
+///
+/// # Errors
+///
+/// Why Windows refused (older than Windows 10 1709, which does not know the setting).
+pub(crate) fn keep_full_speed() -> Result<()> {
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        // Decide execution speed ourselves, and decide against throttling it.
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    // SAFETY: the pseudo handle of this process needs no closing; `state` is a complete
+    // structure of the size passed and lives across the call.
+    unsafe {
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            (&raw const state).cast(),
+            u32::try_from(size_of::<PROCESS_POWER_THROTTLING_STATE>()).unwrap_or(u32::MAX),
+        )
     }
 }
 
@@ -605,8 +634,13 @@ mod tests {
     use std::time::Duration;
 
     use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetProcessInformation, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
+        ProcessPowerThrottling,
+    };
 
-    use super::{Com, LoopbackCapture};
+    use super::{Com, LoopbackCapture, keep_full_speed};
 
     /// Measurement M15 (`pult/messung-windows-fragen`): a process capture takes one or two
     /// channels and refuses more, and its client tells no mix format, so there is nothing to
@@ -634,5 +668,35 @@ mod tests {
             };
             assert_eq!(mix.err().map(|e| e.code()), Some(E_NOTIMPL));
         }
+    }
+
+    #[test]
+    fn the_process_is_taken_out_of_power_throttling() {
+        keep_full_speed().expect("Windows 10 1709 or later");
+        let mut state = PROCESS_POWER_THROTTLING_STATE {
+            Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+            ..Default::default()
+        };
+        // SAFETY: the pseudo handle needs no closing; `state` is a complete structure of the
+        // size passed and Windows writes only into it.
+        unsafe {
+            GetProcessInformation(
+                GetCurrentProcess(),
+                ProcessPowerThrottling,
+                (&raw mut state).cast(),
+                u32::try_from(size_of::<PROCESS_POWER_THROTTLING_STATE>()).unwrap(),
+            )
+        }
+        .expect("the state reads back");
+        assert_eq!(
+            state.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+            PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+            "pult decides the execution speed itself"
+        );
+        assert_eq!(
+            state.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+            0,
+            "and decides against throttling"
+        );
     }
 }

@@ -1454,6 +1454,9 @@ fn set_up_bus(handle: &BusHandle, bus: &BusSpec) {
 /// unsupported format or rate, or a stream cannot be opened or started.
 pub fn start(spec: &RouteSpec) -> Result<Running, Error> {
     spec.validate()?;
+    // Best effort: a Windows too old for the setting runs as before.
+    #[cfg(windows)]
+    let _ = ffi::keep_full_speed();
     let host = cpal::default_host();
     let now = Instant::now();
 
