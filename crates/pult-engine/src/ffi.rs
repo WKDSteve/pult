@@ -599,3 +599,40 @@ fn engine_period(enumerator: &IMMDeviceEnumerator, id: &str) -> Result<crate::En
         max,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
+
+    use super::{Com, LoopbackCapture};
+
+    /// Measurement M15 (`pult/messung-windows-fragen`): a process capture takes one or two
+    /// channels and refuses more, and its client tells no mix format, so there is nothing to
+    /// ask for more. Found on Windows 11 build 26200 (2026-11-15). Captures this test's own
+    /// process, so no device is touched; needs the Windows audio service, hence by hand:
+    /// `cargo test -p pult-engine --lib process_capture_channels -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs the Windows audio service"]
+    fn process_capture_channels() {
+        let _com = Com::init().expect("COM");
+        for channels in [1_u16, 2, 4, 6, 8] {
+            let opened =
+                LoopbackCapture::open(std::process::id(), 48_000, channels, Duration::from_secs(5));
+            println!("{channels} channels: {:?}", opened.as_ref().map(|_| ()));
+            if channels > 2 {
+                assert_eq!(opened.err().map(|e| e.code()), Some(E_INVALIDARG));
+                continue;
+            }
+            let capture = opened.expect("one or two channels open");
+            // SAFETY: the client is live; a format it might return is freed at once.
+            let mix = unsafe {
+                capture.client.GetMixFormat().map(|format| {
+                    windows::Win32::System::Com::CoTaskMemFree(Some(format.cast_const().cast()));
+                })
+            };
+            assert_eq!(mix.err().map(|e| e.code()), Some(E_NOTIMPL));
+        }
+    }
+}

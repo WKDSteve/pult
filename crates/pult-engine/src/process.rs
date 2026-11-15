@@ -20,7 +20,9 @@ use pult_core::{SelectError, fits, is_pattern, select};
 use crate::ffi;
 use crate::{Error, Role};
 
-/// Channels of a process capture: Windows converts the program's sound to stereo.
+/// Channels of a process capture: Windows converts the program's sound to stereo. More is not
+/// to be had: the capture refuses more than two channels and tells no mix format (measured,
+/// `ffi::tests::process_capture_channels`).
 pub(crate) const PROCESS_CHANNELS: u16 = 2;
 
 /// How long the capture thread sleeps at most between looks for packets.
