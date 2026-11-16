@@ -141,6 +141,9 @@ jobs:
       # tool of the tasks vault); a hex colour or a colour function in any other stylesheet is refused. Copy of
       # appkit's tool.
       - run: python tools/check-color-literals.py --root crates/pult-hub/ui --tokens crates/pult-hub/ui/palette.css
+      # No process is started by hand outside the files of tools/process-starts.allow (docs/PROCESSES.md). Copy of
+      # appkit's tool.
+      - run: python tools/check-process-starts.py
       # The rules the workflows must keep (pins, runner, rights, a release stays a draft).
       - run: python tools/check-workflows.py
       # appkit by one tag in Cargo.lock and one commit in the workflows, and the tag still names that commit.

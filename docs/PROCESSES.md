@@ -3,7 +3,8 @@
 Every program pult starts, with why, how long it lives and which way of
 [appkit's `docs/PROCESSES.md`](https://github.com/WKDSteve/appkit/blob/main/docs/PROCESSES.md)
 (rule `RS-08`) starts it. **A process that is not in this list is a bug.** The list is taken
-from the code (`python ../appkit/tools/check-process-starts.py` and the `browser::open` calls)
+from the code (`tools/process-starts.allow`, checked by `tools/check-process-starts.py` in the CI, and the `launch`
+and `browser::open` calls)
 and checked against a measurement with `app-proc-watch`.
 
 pult does its work in its own process: the window (`pult-app`) mixes the devices, runs the
@@ -22,5 +23,5 @@ login entry goes through the registry API). The login entry starts `pult-app --t
 program, so no console window opens at the login.
 
 `pult-plughost` is a spike outside the release (see the README); its bench is the one place that
-starts a process by hand (`crates/pult-plughost/src/bench.rs`). It moves to `appkit_core::child`
-or into an allow file of `tools/check-process-starts.py` when the spike becomes part of pult.
+starts a process by hand (`crates/pult-plughost/src/bench.rs`). It is the one entry of
+`tools/process-starts.allow`; `tools/check-process-starts.py` (in the CI) refuses any other start by hand.

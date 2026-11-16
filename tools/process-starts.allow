@@ -1,0 +1,7 @@
+# Files that start a process themselves (tools/check-process-starts.py, a copy of appkit's; docs/PROCESSES.md):
+# <path> <count of lines found> <reason>
+# pult-app and pult start no program by hand: the window comes from appkit_hub::launch, the browser from
+# appkit_hub::browser.
+
+# The plug-in spike, not in the release: its bench starts its own host to measure the insert (by hand).
+crates/pult-plughost/src/bench.rs 1 the bench of the plug-in spike starts its own host (a measurement by hand, not in the release)
