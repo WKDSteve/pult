@@ -73,6 +73,8 @@ Echtzeit-Regel wie in takt: In den Audio-Callbacks wird nichts allokiert, nichts
 
 `unsafe` gibt es nur in den Modulen `ffi` von `pult-engine` (die Windows-Aufrufe für den Prozess-Loopback), `pult-app` und `pult-plughost` (Shared Memory, Ereignis, Zeitgeber); der Workspace verbietet es sonst, `pult-core` und `pult-cli` verbieten es ganz (`forbid`).
 
+Welche Programme pult startet (das Fenster aus `pult start`, den Browser für die Fernbedienung, sonst keins): [docs/PROCESSES.md](docs/PROCESSES.md).
+
 ## Bauen und prüfen
 
 ```
