@@ -425,7 +425,7 @@ selbst und ihre Kommentare bleiben unberührt. Solo gehört nicht dazu.
 ## 6. Ton einzelner Programme
 
 Statt eines Geräts kann ein Eingang der Ton eines laufenden Programms sein (Prozess-Loopback, ab Windows 10 Version
-2004). So lässt sich etwa Musik getrennt vom Spiel regeln oder nur ein Programm auf einen zweiten Bus legen.
+2004; Microsofts Doku nennt Build 20348, OBS nutzt dieselbe Aufnahme ab 2004, geprüft ist es hier nur auf Windows 11). So lässt sich etwa Musik getrennt vom Spiel regeln oder nur ein Programm auf einen zweiten Bus legen.
 
 ```
 pult programs
@@ -624,6 +624,6 @@ Update behält deine Wahl, eine Deinstallation nimmt den Wert mit.
 | `note: no control interface: …` | die Steuerschnittstelle läuft nicht, meist weil ein anderer pult sie hat; der Ton läuft trotzdem |
 | `not done: …` | ein Befehl während des Laufs passte nicht (Tippfehler, Wert außerhalb des Bereichs); nichts wurde geändert |
 | `no running program matches "…"` | das Programm läuft nicht oder heißt anders: `pult programs` |
-| `capturing …: …` | Windows hat die Aufnahme des Programms abgelehnt (älter als Windows 10 2004?) |
+| `capturing …: …` | Windows hat die Aufnahme des Programms abgelehnt (älter als Windows 10 2004, oder ein Windows 10, das sie erst ab Build 20348 kennt?) |
 
 Exit-Codes: 0 fertig, 1 Fehler beim Öffnen oder im Lauf, 2 falscher Aufruf.

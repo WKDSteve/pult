@@ -1,6 +1,7 @@
 //! The Windows calls behind process loopback: listing processes, and capturing the sound of
-//! one process tree through a WASAPI loopback client (Windows 10 2004 or later). Also the
-//! device notifications that wake the supervisor when an audio device comes or goes.
+//! one process tree through a WASAPI loopback client (Windows 10 2004 or later, as OBS uses it;
+//! Microsoft's documentation names build 20348, and only Windows 11 is tested). Also the device
+//! notifications that wake the supervisor when an audio device comes or goes.
 //!
 //! This is the only module of pult with `unsafe` code. Every block names the condition it
 //! relies on; everything outside works with the safe types below.
