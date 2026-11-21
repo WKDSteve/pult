@@ -37,10 +37,10 @@ dark). Test sheets: `TESTS/sheets`, started through `.testing.lua` (testing.nvim
 - Browser Support: Baseline Newly available (`.mwgrc`; no `browserslist`, the page has no package.json and no build
   step). The hub listens on `127.0.0.1` only, so the page opens in the local desktop browser (`pult open`), an
   evergreen Chrome, Edge or Firefox; the page check runs in Chrome. Newer features only behind feature detection with
-  a fallback; polyfills where browsers still in use need them (rather one too many), run only after the check: dynamic `import()`, or bundled in a `file://` page (rules-vault `BASE-02`).
+  a fallback; polyfills where browsers still in use need them (rather one too many), run only after the check: dynamic `import()`, or bundled in a `file://` page.
 - Before writing or changing HTML, CSS or client-side JS, use the `modern-web-guidance` skill (`search` → `retrieve` →
   verify). Not for Rust, backend, CI or build config.
 - For open-ended modernisation: `npx -y modern-web-guidance@latest legacy-scan crates/pult-hub/ui --json`, check each
   finding against `keepWhen`/`dropWhen`. Local and agent sessions only, no CI step.
-- Rules: rules-vault ruleset `web` (plus the app rules `WEB-*` in ruleset `native`).
+- Rules: the maintainer's ruleset for the web platform (private, so not named or cited here by id).
 - `.claude/settings.json` turns the tool's telemetry off and allows only `npx -y modern-web-guidance@latest *`.
