@@ -44,3 +44,4 @@ dark). Test sheets: `TESTS/sheets`, started through `.testing.lua` (testing.nvim
   finding against `keepWhen`/`dropWhen`. Local and agent sessions only, no CI step.
 - Rules: the maintainer's ruleset for the web platform (private, so not named or cited here by id).
 - `.claude/settings.json` turns the tool's telemetry off and allows only `npx -y modern-web-guidance@latest *`.
+- Git: in a cloud session (`CLAUDE_CODE_REMOTE` is set) never push to `main`, only to your own `claude/…` branch; a local session lands it by rebase and the device key re-signs it (`GIT-09`). "Push to main" (`GIT-01`) applies locally only.
