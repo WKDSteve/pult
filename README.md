@@ -136,3 +136,10 @@ Konzept, Stufenplan und Tasks liegen im privaten Vault unter `tasks-vault/pult/`
 
 - [hub-desktop](https://github.com/WKDSteve/hub-desktop): hub-desktop shows pult as a tile and starts its hub. ([picture](assets/graphs/pair/hub-desktop--pult.png))
 <!-- connections:end -->
+
+## Release channels
+
+The rolling build has one channel, `latest`: the newest commit of `main` whose CI is green, rebuilt after every
+green CI run and only ever moving forward. Releases are separate (`vX.Y.Z`). The channels an app has switched on
+are the `channels:` line of the prepare step in `.github/workflows/rolling.yml`; `nightly` (the tip of `main`) and
+`stable` (a `latest` that has stayed up for 14 days) are not switched on.
