@@ -63,7 +63,7 @@ impl Control {
                     }
                 };
                 runtime.block_on(async move {
-                    match serve(&env, hub_link).await {
+                    match Box::pin(serve(&env, hub_link)).await {
                         Ok((running, dir)) => {
                             let _ = started_tx.send(Ok(running.addr().port()));
                             // A sender that is gone stops the hub as well.
@@ -137,7 +137,7 @@ async fn serve(
 ) -> Result<(RunningServer, std::path::PathBuf), String> {
     let dir = appkit_hub::instance::config_folder(env, &IDENTITY)?;
     let want = wanted_port(env)?;
-    if let Some(other) = appkit_hub::instance::running_hub(&dir, &IDENTITY).await {
+    if let Some(other) = Box::pin(appkit_hub::instance::running_hub(&dir, &IDENTITY)).await {
         return Err(format!(
             "another pult has it (port {}, process {})",
             other.port, other.pid
@@ -162,7 +162,7 @@ async fn serve(
     let running = match start(make(want)).await {
         Ok(running) => running,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            if appkit_hub::instance::hello_of(want, &IDENTITY)
+            if Box::pin(appkit_hub::instance::hello_of(want, &IDENTITY))
                 .await
                 .is_some()
             {
