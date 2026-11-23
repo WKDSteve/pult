@@ -245,6 +245,10 @@ fn first_events() -> Vec<EventView> {
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "wgpu in WSL (Mesa) dies with SIGSEGV: tasks-vault pult/design-test-crashes-with-sigsegv-in-wsl-mesa-egl"
+)]
 fn channel_strip() {
     let mut meters = Meters::default();
     let mut frame = 0_u32;
@@ -401,6 +405,10 @@ fn equalizer_inputs() {
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "wgpu in WSL (Mesa) dies with SIGSEGV: tasks-vault pult/design-test-crashes-with-sigsegv-in-wsl-mesa-egl"
+)]
 fn start_screen() {
     let mut harness = Harness::builder()
         .with_size(vec2(1280.0, 760.0))
@@ -449,6 +457,10 @@ fn options_dialog() {
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "wgpu in WSL (Mesa) dies with SIGSEGV: tasks-vault pult/design-test-crashes-with-sigsegv-in-wsl-mesa-egl"
+)]
 fn tray_hint() {
     let mut harness = Harness::builder()
         .with_size(vec2(1280.0, 760.0))
