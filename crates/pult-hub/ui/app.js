@@ -9,7 +9,13 @@ const TOKEN_KEY = "pult.session";
 // The stream says something at least every 15 s; three silences mean it is dead.
 const IDLE_MS = 45_000;
 const MAX_BUFFER = 1024 * 1024;
-const RETRY_MS = 2000;
+// A hub that went away usually comes back within seconds (pult restarted, a profile reloaded), so the
+// first retry is quick. A hub that stays away gets asked less and less often, but never rarer than every
+// 30 s, so a page left open finds a pult that was started later within about that time. Up to a fifth is
+// added at random, so tabs of one browser do not ask in step.
+const RETRY_MIN_MS = 1000;
+const RETRY_MAX_MS = 30_000;
+const RETRY_SPREAD = 0.2;
 const GAIN_MIN = -96;
 const GAIN_MAX = 24;
 const METER_FLOOR = -60;
@@ -399,18 +405,49 @@ function show(state) {
 
 // ── following ────────────────────────────────────────────────────────────────────────────────
 
-const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+let openStream = null;
+let wakeUp = null;
+
+// Waits `ms` (for ever when it is not finite), or until the page is shown or hidden.
+function nap(ms) {
+  return new Promise((done) => {
+    const timer = Number.isFinite(ms) ? setTimeout(finish, ms) : null;
+    function finish() {
+      clearTimeout(timer);
+      wakeUp = null;
+      done();
+    }
+    wakeUp = finish;
+  });
+}
+
+function retryDelay(failures) {
+  const base = Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** Math.min(failures, 16));
+  return base * (1 + RETRY_SPREAD * Math.random());
+}
+
+// A page nobody sees needs no state: its stream (one of the four a session has, docs/CONTROL.md) is
+// closed, and a new one is opened at once when the page is seen again. The levels come with the stream,
+// so they stop with it.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    openStream?.abort();
+  }
+  wakeUp?.();
+});
 
 // Reads server-sent events until the stream ends, with limits a dead or endless stream cannot pass.
-// `fetch`, since an EventSource can send no header.
+// `fetch`, since an EventSource can send no header. The result says whether it showed a state.
 async function followStream() {
   const stop = new AbortController();
+  openStream = stop;
+  let delivered = false;
   let idle = setTimeout(() => stop.abort(), IDLE_MS);
   try {
     const reply = await fetch(`${API}/stream`, { headers: authorized(), signal: stop.signal });
     if (reply.status === 401) {
       needsPairing("This page has no session (any more).");
-      return;
+      return false;
     }
     if (!reply.ok || !reply.body) {
       throw new Error(`stream: ${reply.status}`);
@@ -423,7 +460,7 @@ async function followStream() {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) {
-        return;
+        return delivered;
       }
       clearTimeout(idle);
       idle = setTimeout(() => stop.abort(), IDLE_MS);
@@ -441,12 +478,18 @@ async function followStream() {
           .join("\n");
         if (data !== "") {
           show(JSON.parse(data));
+          delivered = true;
         }
       }
     }
+  } catch (error) {
+    // Whatever was shown before the end counts for the pace of the retries.
+    error.delivered = delivered;
+    throw error;
   } finally {
     clearTimeout(idle);
     stop.abort();
+    openStream = null;
   }
 }
 
@@ -458,15 +501,29 @@ async function follow() {
     return;
   }
   following = true;
+  let failures = 0;
   while (token !== null) {
+    if (document.hidden) {
+      await nap(Infinity);
+      failures = 0;
+      continue;
+    }
+    let delivered = false;
     try {
-      await followStream();
-    } catch {
+      delivered = await followStream();
+    } catch (error) {
       // Told below, and tried again.
+      delivered = error?.delivered === true;
+    }
+    if (document.hidden) {
+      continue; // Closed on purpose, not a route that ended.
     }
     if (token !== null) {
       notice("pult does not answer: the route has ended, or is about to start.", true);
-      await sleep(RETRY_MS);
+      // A stream that showed something and then ended starts the pace again; one that failed slows it.
+      const wait = retryDelay(delivered ? 0 : failures);
+      failures = delivered ? 1 : failures + 1;
+      await nap(wait);
     }
   }
   following = false;
