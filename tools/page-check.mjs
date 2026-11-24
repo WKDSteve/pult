@@ -57,7 +57,12 @@ const link = await new Promise((done, fail) => {
 });
 const origin = new URL(link).origin;
 
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+// PULT_CHROME=<path>: a Chrome or Chromium binary of its own (a Linux box without the Chrome channel).
+const browser = await chromium.launch(
+  process.env.PULT_CHROME
+    ? { executablePath: process.env.PULT_CHROME, headless: true, args: ["--no-sandbox"] }
+    : { channel: "chrome", headless: true },
+);
 const context = await browser.newContext();
 const page = await context.newPage();
 const problems = [];
