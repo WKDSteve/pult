@@ -400,6 +400,43 @@ try {
   await page.locator("#inputs .strip").first().waitFor();
   problems.length = 0;
 
+  // Numbers and the clock in the notation of the browser: English and German, with and without
+  // Intl.DurationFormat (the clock must read the same without it).
+  const numbered = {
+    elapsed_s: 3725.4, dropouts_per_hour: 1.25, glitches: 2, scenes: [], profile: null,
+    inputs: [{ number: 1, name: "CABLE", label: null, present: true, buses: ["A1"], peak_db: -3.04,
+      gain_db: -0.04, muted: false }],
+    buses: [],
+  };
+  for (const [locale, withDuration, point] of [["en-US", true, "."], ["en-US", false, "."], ["de-DE", true, ","]]) {
+    const own = await browser.newContext({ locale });
+    await own.addInitScript((withDuration) => {
+      sessionStorage.setItem("pult.session", "stubbed");
+      if (!withDuration) {
+        delete Intl.DurationFormat;
+      }
+    }, withDuration);
+    const view = await own.newPage();
+    await view.route("**/api/pult/stream", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `event: state\ndata: ${JSON.stringify(numbered)}\n\n`,
+      }));
+    await view.goto(`${origin}/`);
+    await view.locator("#inputs .strip").first().waitFor();
+    const health = await view.locator("#health").textContent();
+    const level = await view.locator("#inputs .strip .level").first().textContent();
+    const gain = await view.locator("#inputs .strip .level").nth(1).textContent();
+    const what = `${locale}${withDuration ? "" : " without DurationFormat"}`;
+    check(`${what}: the clock reads h:mm:ss`, health.includes("1:02:05,") || health.includes("1:02:05 "), health);
+    check(`${what}: tenths in the notation of the language`,
+      health.includes(`1${point}3 dropouts`) && new RegExp(`^[-\u2212]3\\${point}0 dB$`).test(level),
+      `${health} | ${level}`);
+    check(`${what}: a rounded zero has no sign`, gain === `0${point}0 dB`, gain);
+    await own.close();
+  }
+
   // A hub that does not answer is asked less and less often: gaps of about 1, 2, 4 s.
   const asked = [];
   await page.route("**/api/pult/stream", (route) => {
