@@ -20,6 +20,15 @@ const GAIN_MIN = -96;
 const GAIN_MAX = 24;
 const METER_FLOOR = -60;
 
+// Numbers in the notation of the browser's language, always with one decimal so a changing level keeps
+// its width (the level and the status line use tabular digits). A rounded -0.0 loses its sign.
+const tenths = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+  signDisplay: "negative",
+});
+const decibels = (value) => `${tenths.format(value)} dB`;
+
 const element = (id) => document.getElementById(id);
 
 // The pairing code leaves the address before anything else happens.
@@ -200,7 +209,7 @@ function makeKnob(address, word, what) {
   slider.step = 0.5;
   const value = make("span", "level");
   label.append(name, slider, value);
-  const says = (amount) => (amount > 0 ? amount.toFixed(1) : "off");
+  const says = (amount) => (amount > 0 ? tenths.format(amount) : "off");
 
   slider.addEventListener("input", () => {
     value.textContent = says(Number(slider.value));
@@ -271,7 +280,7 @@ function makeStrip(address, title, isInput) {
     ask({ op: "set", address: `${address}/mute`, value: !shown.muted });
   });
   slider.addEventListener("input", () => {
-    gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
+    gain.textContent = decibels(Number(slider.value));
   });
   const held = holdSlider(slider, (value) =>
     ask({ op: "set", address: `${address}/gain`, value }),
@@ -299,10 +308,10 @@ function makeStrip(address, title, isInput) {
         limit.setAttribute("aria-label", `LIM of ${called}`);
       }
       meter.value = state.peak_db === null ? METER_FLOOR : state.peak_db;
-      level.textContent = state.peak_db === null ? "silence" : `${state.peak_db.toFixed(1)} dB`;
+      level.textContent = state.peak_db === null ? "silence" : decibels(state.peak_db);
       if (!held()) {
         slider.value = state.gain_db;
-        gain.textContent = `${state.gain_db.toFixed(1)} dB`;
+        gain.textContent = decibels(state.gain_db);
       }
     },
   };
@@ -351,10 +360,24 @@ function showScenes(scenes) {
   }
 }
 
+// Intl.DurationFormat is not in every browser yet: without it the same h:mm:ss is put together by hand.
+const durations =
+  typeof Intl.DurationFormat === "function"
+    ? new Intl.DurationFormat(undefined, { style: "digital", hoursDisplay: "always" })
+    : null;
+
 function clock(seconds) {
   const whole = Math.floor(seconds);
+  const parts = {
+    hours: Math.floor(whole / 3600),
+    minutes: Math.floor(whole / 60) % 60,
+    seconds: whole % 60,
+  };
+  if (durations !== null) {
+    return durations.format(parts);
+  }
   const part = (value) => String(value).padStart(2, "0");
-  return `${Math.floor(whole / 3600)}:${part(Math.floor(whole / 60) % 60)}:${part(whole % 60)}`;
+  return `${parts.hours}:${part(parts.minutes)}:${part(parts.seconds)}`;
 }
 
 function show(state) {
@@ -369,7 +392,7 @@ function show(state) {
   }
   element("health").textContent =
     `Running for ${clock(state.elapsed_s)}, ` +
-    `${state.dropouts_per_hour.toFixed(1)} dropouts per hour, ${state.glitches} glitches`;
+    `${tenths.format(state.dropouts_per_hour)} dropouts per hour, ${state.glitches} glitches`;
   showScenes(state.scenes ?? []);
   showStrips(
     element("inputs"),
