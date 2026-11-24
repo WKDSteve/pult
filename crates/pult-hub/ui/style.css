@@ -16,6 +16,10 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 15px/1.4 system-ui, sans-serif;
+  /* A tap is a tap: no wait for a second one, no zoom by double tap (pinching stays). */
+  touch-action: manipulation;
+  /* The press is shown by button:active below, not by the browser's flash. */
+  -webkit-tap-highlight-color: transparent;
   /* Names come from the mixer and can be long: they wrap instead of widening the page. */
   overflow-wrap: break-word;
 }
@@ -166,6 +170,11 @@ button {
 
 button:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+button:not([aria-pressed="true"]):active:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-2);
 }
 
 button[aria-pressed="true"] {
