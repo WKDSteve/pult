@@ -26,6 +26,7 @@ h1 {
 }
 
 h2 {
+  text-wrap: balance;
   margin: 1.25rem 0 0.5rem;
   font-size: 0.85rem;
   color: var(--muted);
@@ -43,6 +44,11 @@ p {
 #route,
 #health {
   overflow-wrap: anywhere;
+}
+
+/* The clock and the counts change every second: equal-width digits keep the line from shaking. */
+#health {
+  font-variant-numeric: tabular-nums;
 }
 
 /* What a section says when it has nothing to show. */

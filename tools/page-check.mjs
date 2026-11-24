@@ -100,6 +100,14 @@ try {
   const route = await page.locator("#route").textContent();
   check("the route is named", route.includes("pult.toml"), route);
 
+  // The status line changes every second: its digits keep one width, and the headings wrap evenly.
+  const looks = await page.evaluate(() => [
+    getComputedStyle(document.getElementById("health")).fontVariantNumeric,
+    getComputedStyle(document.querySelector("h2:not([hidden])")).textWrapStyle,
+  ]);
+  check("the status line has digits of one width", looks[0].includes("tabular-nums"), looks[0]);
+  check("headings wrap evenly", looks[1] === "balance", looks[1]);
+
   // What the mixer calls things stays text.
   const hostile = page.locator("#inputs .strip").nth(2).locator(".name");
   check("a hostile name is text", (await hostile.textContent()).startsWith("<img"));
