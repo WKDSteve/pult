@@ -108,6 +108,39 @@ try {
   check("the status line has digits of one width", looks[0].includes("tabular-nums"), looks[0]);
   check("headings wrap evenly", looks[1] === "balance", looks[1]);
 
+  // The bar of the browser takes the background of the page, in either scheme; a tap is not waited for.
+  const bar = async () =>
+    page.evaluate(() => [
+      document.querySelector('meta[name="theme-color"]')?.content,
+      getComputedStyle(document.body).backgroundColor,
+      getComputedStyle(document.body).touchAction,
+      getComputedStyle(document.body).webkitTapHighlightColor,
+    ]);
+  const seenBars = [];
+  for (const colorScheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme });
+    await page.waitForTimeout(50);
+    const [content, background, touch, flash] = await bar();
+    check(`${colorScheme}: the bar of the browser follows the page`,
+      Boolean(content) && content === background, `${content} / ${background}`);
+    check(`${colorScheme}: a tap is not waited for`, touch === "manipulation", touch);
+    check(`${colorScheme}: the browser's flash is off`, flash === "rgba(0, 0, 0, 0)", flash);
+    seenBars.push(content);
+  }
+  check("the two schemes have two bars", seenBars[0] !== seenBars[1], seenBars.join(" | "));
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // With the flash gone, a press shows itself: the background of a button changes while it is down.
+  const scene = page.getByRole("button", { name: "Laut", exact: true });
+  const before = await scene.evaluate((node) => getComputedStyle(node).backgroundColor);
+  const spot = await scene.boundingBox();
+  await page.mouse.move(spot.x + spot.width / 2, spot.y + spot.height / 2);
+  await page.mouse.down();
+  const during = await scene.evaluate((node) => getComputedStyle(node).backgroundColor);
+  await page.mouse.up();
+  await page.mouse.move(0, 0);
+  check("a press shows itself", before !== during, `${before} / ${during}`);
+
   // What the mixer calls things stays text.
   const hostile = page.locator("#inputs .strip").nth(2).locator(".name");
   check("a hostile name is text", (await hostile.textContent()).startsWith("<img"));

@@ -86,6 +86,21 @@ async function exchange(code) {
   return true;
 }
 
+// The colour of the browser's own bar (a phone's address bar) is the page's background, in the scheme
+// the system is in. The tokens hold it as light-dark(), which a meta tag cannot read, so the resolved
+// colour of the body is copied; the meta tag is made here, since its content cannot name a token.
+function followThemeColor() {
+  const meta = document.querySelector('meta[name="theme-color"]') ?? make("meta");
+  meta.name = "theme-color";
+  const copy = () => {
+    meta.content = getComputedStyle(document.body).backgroundColor;
+  };
+  copy();
+  document.head.append(meta);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", copy);
+}
+followThemeColor();
+
 // ── asking ───────────────────────────────────────────────────────────────────────────────────
 
 let writing = Promise.resolve();
