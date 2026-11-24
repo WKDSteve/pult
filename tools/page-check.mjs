@@ -84,6 +84,8 @@ try {
   await page.goto(`${origin}/`);
   await page.getByText('Run "pult open"').waitFor();
   check("without a link it says how to get one", await page.locator("#mixer").isHidden());
+  check("the command is not for a translator",
+    (await page.locator("#notice span").evaluate((node) => node.translate)) === false);
   problems.length = 0; // The refused stream is not looked for, but a browser may log it.
 
   await page.goto(link);
@@ -99,6 +101,20 @@ try {
     (await page.locator("#buses .strip").count()) === 2);
   const route = await page.locator("#route").textContent();
   check("the route is named", route.includes("pult.toml"), route);
+
+  // Names of devices, profiles and scenes, the command and the mark are not for a translator.
+  const untranslated = await page.evaluate(() => ({
+    mark: document.querySelector("h1").translate,
+    name: document.querySelector(".strip .name").translate,
+    detail: document.querySelector(".strip .detail").translate,
+    profile: document.querySelector("#route span").translate,
+    scene: document.querySelector("#scenes button").translate,
+    words: document.querySelector("#route").translate,
+  }));
+  check("names stay as they are for a translator",
+    untranslated.mark === false && untranslated.name === false && untranslated.detail === false &&
+    untranslated.profile === false && untranslated.scene === false && untranslated.words === true,
+    JSON.stringify(untranslated));
 
   // The status line changes every second: its digits keep one width, and the headings wrap evenly.
   const looks = await page.evaluate(() => [
