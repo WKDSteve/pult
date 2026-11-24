@@ -137,6 +137,12 @@ Server-Sent Events: je ein `event: state` mit dem ganzen Zustand, höchstens zeh
 Nachricht ist vollständig, ein langsamer Client verpasst also nur Zustände. Je Sitzung sind 4 Streams offen, darüber
 `429 too_many_streams`.
 
+Die Pegel (`peak_db`) kommen mit diesem Strom und sind kein Zusatz, den man abschalten könnte: Sie sind der Zweck der
+Fernbedienung, und zehn Zustände je Sekunde über Loopback kosten wenig. Gespart wird dort, wo niemand hinsieht: Die
+Fernbedienungsseite schließt den Strom, solange sie versteckt ist, und öffnet ihn beim Sichtbarwerden sofort neu. Verliert
+sie den Hub, fragt sie nach 1 s, dann 2, 4 … s, höchstens alle 30 s (ein später gestartetes pult wird so in etwa dieser
+Zeit gefunden).
+
 ### `POST /api/pult/ops`
 
 Eine Operation als JSON-Objekt, `Content-Type: application/json`. Unbekannte Felder oder Operationen ergeben
