@@ -193,6 +193,45 @@ try {
   );
   check("gain arrives", true);
 
+  // A page nobody sees closes its stream and opens it again when seen: the levels stop and go on.
+  const streams = [];
+  const streamEnds = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/pult/stream")) {
+      streams.push(Date.now());
+    }
+  });
+  page.on("requestfailed", (request) => {
+    if (request.url().endsWith("/api/pult/stream")) {
+      streamEnds.push(Date.now());
+    }
+  });
+  const show = (hidden) =>
+    page.evaluate((hidden) => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, hidden);
+  const meter = page.locator("#inputs .strip").first().locator(".level").first();
+  const opened = streams.length;
+  await show(true);
+  await page.waitForTimeout(300);
+  check("a hidden page closes its stream", streamEnds.length === 1, String(streamEnds.length));
+  const frozen = await meter.textContent();
+  await page.waitForTimeout(3500); // Longer than the first two pauses of a retry.
+  check("and does not ask again while hidden", streams.length === opened, `${streams.length - opened} new`);
+  check("and the levels hold still", (await meter.textContent()) === frozen);
+  check("and does not call a closed stream an error",
+    !(await page.locator("#notice").textContent()).includes("does not answer"));
+  await show(false);
+  await page.waitForTimeout(600);
+  check("a page seen again opens it at once", streams.length === opened + 1, String(streams.length - opened));
+  const live = new Set();
+  for (let i = 0; i < 10; i += 1) {
+    live.add(await meter.textContent());
+    await page.waitForTimeout(150);
+  }
+  check("and the levels move again", live.size > 2, [...live].join(" | "));
+
   // Asks past the page, like another client: what a slider then shows came through the state.
   const setOutside = (address, value) =>
     page.evaluate(
@@ -360,6 +399,26 @@ try {
   await page.reload();
   await page.locator("#inputs .strip").first().waitFor();
   problems.length = 0;
+
+  // A hub that does not answer is asked less and less often: gaps of about 1, 2, 4 s.
+  const asked = [];
+  await page.route("**/api/pult/stream", (route) => {
+    asked.push(Date.now());
+    return route.fulfill({ status: 503, body: "" });
+  });
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById("notice").textContent.includes("does not answer"));
+  while (asked.length < 4) {
+    await page.waitForTimeout(250);
+  }
+  const gaps = asked.slice(1).map((time, i) => time - asked[i]);
+  check("the first retry is quick", gaps[0] >= 900 && gaps[0] < 1800, gaps.join(" "));
+  check("a hub that stays away is asked less often", gaps[1] >= gaps[0] * 1.6 && gaps[2] >= gaps[1] * 1.6,
+    gaps.join(" "));
+  await page.unroute("**/api/pult/stream");
+  await page.reload();
+  await page.locator("#inputs .strip").first().waitFor();
+  problems.length = 0; // The refusals above.
 
   // axe in both themes: as the page is, with a button under the pointer, and with one focused from the keyboard
   // (the colours of pult come from palette.css, generated from its icon: the accent, the hover and the focus ring
