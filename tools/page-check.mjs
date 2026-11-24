@@ -437,6 +437,40 @@ try {
     await own.close();
   }
 
+  // What is hit is big enough: 24 px with a pointer, 44 px where a finger does it.
+  const targets = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll("#mixer button, #mixer input[type=range]")].map((node) => {
+        const box = node.getBoundingClientRect();
+        return [node.getAttribute("aria-label") ?? node.textContent, box.width, box.height];
+      }),
+    );
+  const small = (list, least) => list.filter(([, w, h]) => w < least || h < least).map(([n]) => n);
+  check("buttons and sliders are 24 px or more", small(await targets(), 24).length === 0,
+    small(await targets(), 24).join(", "));
+  const touch = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
+  await touch.addInitScript(() => sessionStorage.setItem("pult.session", "stubbed"));
+  const fingers = await touch.newPage();
+  await fingers.route("**/api/pult/stream", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: `event: state\ndata: ${JSON.stringify({ ...numbered, scenes: ["Abend"],
+        inputs: [{ ...numbered.inputs[0], gate: 0, comp: 0 }],
+        buses: [{ name: "A1", label: null, device: "d", present: true, peak_db: null, gain_db: 0, muted: false,
+          eq_on: false, limit_on: false }] })}\n\n`,
+    }));
+  await fingers.goto(`${origin}/`);
+  await fingers.locator("#buses .strip").first().waitFor();
+  check("a touch screen is asked as one", await fingers.evaluate(() => matchMedia("(pointer: coarse)").matches));
+  const reach = await fingers.evaluate(() =>
+    [...document.querySelectorAll("#mixer button, #mixer input[type=range]")].map((node) => {
+      const box = node.getBoundingClientRect();
+      return [node.getAttribute("aria-label") ?? node.textContent, box.width, box.height];
+    }));
+  check("on a touch screen they are 44 px or more", small(reach, 43.5).length === 0, small(reach, 43.5).join(", "));
+  await touch.close();
+
   // A hub that does not answer is asked less and less often: gaps of about 1, 2, 4 s.
   const asked = [];
   await page.route("**/api/pult/stream", (route) => {
