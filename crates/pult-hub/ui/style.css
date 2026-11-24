@@ -16,6 +16,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 15px/1.4 system-ui, sans-serif;
+  /* Names come from the mixer and can be long: they wrap instead of widening the page. */
+  overflow-wrap: break-word;
 }
 
 h1 {
@@ -34,6 +36,18 @@ p {
 }
 
 .dim {
+  color: var(--muted);
+}
+
+/* The profile and the status line carry a file name: one word can be longer than the screen. */
+#route,
+#health {
+  overflow-wrap: anywhere;
+}
+
+/* What a section says when it has nothing to show. */
+.empty {
+  margin: 0 0 0.5rem;
   color: var(--muted);
 }
 
@@ -60,6 +74,13 @@ p {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+/* A scene named like a path still fits the row: its button shrinks and wraps the name. */
+.row button {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .strips {

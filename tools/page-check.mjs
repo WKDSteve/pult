@@ -265,6 +265,45 @@ try {
   check("a string as markup is refused", blocked);
   problems.length = 0; // The refusal just provoked.
 
+  // A state of the stub below: the stream answered with what the test says, in a narrow window.
+  const longName = "x".repeat(90);
+  const stub = async (state) => {
+    await page.route("**/api/pult/stream", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `event: state\ndata: ${JSON.stringify(state)}\n\n`,
+      }),
+    );
+    await page.reload();
+  };
+  const bare = { elapsed_s: 3725, dropouts_per_hour: 0, glitches: 0, scenes: [], inputs: [], buses: [] };
+  await page.setViewportSize({ width: 320, height: 640 });
+  await stub({ ...bare, profile: `${longName}.toml`, scenes: [longName] });
+  await page.locator("#route").waitFor();
+  await page.waitForFunction(() => !document.getElementById("mixer").hidden);
+  check("no inputs say so", await page.locator("#inputs-empty").isVisible());
+  check("no buses say so", await page.locator("#buses-empty").isVisible());
+  check("long names of a profile and a scene wrap", await page.evaluate(
+    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  await page.unroute("**/api/pult/stream");
+  await stub({
+    ...bare,
+    inputs: [{ number: 1, name: longName, label: null, present: true, buses: [longName], peak_db: null,
+      gain_db: 0, muted: false }],
+    buses: [{ name: "A1", label: longName, device: longName, present: true, peak_db: null, gain_db: 0,
+      muted: false, eq_on: false, limit_on: false }],
+  });
+  await page.locator("#inputs .strip").first().waitFor();
+  check("a strip with nothing to say hides the empty text", await page.locator("#inputs-empty").isHidden());
+  check("long names of a device and a bus wrap", await page.evaluate(
+    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  await page.unroute("**/api/pult/stream");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.reload();
+  await page.locator("#inputs .strip").first().waitFor();
+  problems.length = 0;
+
   // axe in both themes: as the page is, with a button under the pointer, and with one focused from the keyboard
   // (the colours of pult come from palette.css, generated from its icon: the accent, the hover and the focus ring
   // are all its own).
