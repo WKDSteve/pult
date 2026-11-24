@@ -65,6 +65,26 @@ mod tests {
     /// `SRV-20`.
     const MOST_BYTES: usize = 4 * 1024 * 1024;
 
+    /// All distinct files of the page together. Today about 23 KB: a page of one HTML, one script and two style
+    /// sheets that a phone loads over Wi-Fi in one round trip, with no build step to shrink it. The budget is
+    /// about twice that, so a feature has room but a library, a font or an image fails here and has to be
+    /// argued for. Raise it on purpose, with a reason, never to make a failing run pass.
+    const BUDGET_BYTES: usize = 48 * 1024;
+
+    #[test]
+    fn the_whole_page_stays_small() {
+        // "/" answers with the same file as "/index.html": counted once.
+        let total: usize = FILES
+            .iter()
+            .filter(|(path, _, _)| *path != "/")
+            .map(|(_, bytes, _)| bytes.len())
+            .sum();
+        assert!(
+            total <= BUDGET_BYTES,
+            "the page is {total} bytes, the budget {BUDGET_BYTES}"
+        );
+    }
+
     #[test]
     fn only_the_files_of_the_table_are_answered() {
         assert!(Remote.has_index());
