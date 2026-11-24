@@ -282,6 +282,7 @@ function makeStrip(address, title, isInput) {
 
 // Keeps one strip per key: a new key is a new strip, a key that went takes its strip along.
 function showStrips(list, strips, wanted) {
+  element(`${list.id}-empty`).hidden = wanted.length > 0;
   const keys = wanted.map((entry) => entry.key);
   const same = strips.size === keys.length && keys.every((key) => strips.has(key));
   if (!same) {
