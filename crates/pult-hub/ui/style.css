@@ -3,6 +3,15 @@
    the system. The names are those of appkit-ui. No colour is written in this file (tools/check-color-literals.py). */
 :root {
   color-scheme: light dark;
+  /* The least size of a button or a slider to hit: 24 px for a pointer (and a button is more than that),
+     44 px where a finger does it. */
+  --target: max(24px, 2rem);
+}
+
+@media (pointer: coarse) {
+  :root {
+    --target: 44px;
+  }
 }
 
 * {
@@ -127,6 +136,10 @@ p {
   width: 100%;
 }
 
+.strip input[type="range"] {
+  min-block-size: var(--target);
+}
+
 /* The fader in the colour of pult, not the browser's blue. */
 .strip input[type="range"] {
   accent-color: var(--accent);
@@ -158,7 +171,8 @@ p {
 }
 
 button {
-  min-height: 2rem;
+  min-block-size: var(--target);
+  min-inline-size: var(--target);
   padding: 0.2rem 0.7rem;
   border: 1px solid var(--line);
   border-radius: 3px;
