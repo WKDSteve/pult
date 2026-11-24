@@ -61,7 +61,11 @@ function needsPairing(why) {
   token = null;
   storeToken(null);
   element("mixer").hidden = true;
-  notice(`${why} Run "pult open" to get a new link to this page.`, true);
+  notice(why, true);
+  // The command is not a word of the page's language: a translator leaves it alone.
+  const command = make("span", null, "pult open");
+  command.translate = false;
+  element("notice").append(' Run "', command, '" to get a new link to this page.');
 }
 
 function authorized(extra = {}) {
@@ -214,10 +218,13 @@ function makeKnob(address, word, what) {
 function makeStrip(address, title, isInput) {
   const li = make("li", "strip");
   const name = make("span", "name");
+  // Names are the mixer's, not words to translate.
+  name.translate = false;
   const mute = make("button");
   mute.type = "button";
   mute.textContent = "Mute";
   const detail = make("span", "detail");
+  detail.translate = false;
   const meter = make("meter");
   meter.min = METER_FLOOR;
   meter.max = 0;
@@ -330,6 +337,7 @@ function showScenes(scenes) {
   for (const name of scenes) {
     const button = make("button", null, name);
     button.type = "button";
+    button.translate = false;
     button.addEventListener("click", () => {
       ask({ op: "scene", name });
     });
@@ -345,7 +353,14 @@ function clock(seconds) {
 
 function show(state) {
   element("mixer").hidden = false;
-  element("route").textContent = `Profile: ${state.profile ?? "none (from the command line)"}`;
+  const route = element("route");
+  if (state.profile === null || state.profile === undefined) {
+    route.textContent = "Profile: none (from the command line)";
+  } else {
+    const profile = make("span", null, state.profile);
+    profile.translate = false;
+    route.replaceChildren("Profile: ", profile);
+  }
   element("health").textContent =
     `Running for ${clock(state.elapsed_s)}, ` +
     `${state.dropouts_per_hour.toFixed(1)} dropouts per hour, ${state.glitches} glitches`;
