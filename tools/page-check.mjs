@@ -135,7 +135,12 @@ try {
   const seenBars = [];
   for (const colorScheme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme });
-    await page.waitForTimeout(50);
+    // The page copies the colour in a listener of the media query, which runs after emulateMedia
+    // returns: wait for the bar to catch up with the body instead of for a fixed time.
+    await page.waitForFunction(() => {
+      const meta = document.querySelector('meta[name="theme-color"]');
+      return Boolean(meta?.content) && meta.content === getComputedStyle(document.body).backgroundColor;
+    }, null, { timeout: 5000 }).catch(() => {});
     const [content, background, touch, flash] = await bar();
     check(`${colorScheme}: the bar of the browser follows the page`,
       Boolean(content) && content === background, `${content} / ${background}`);
