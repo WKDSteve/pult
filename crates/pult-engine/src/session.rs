@@ -97,25 +97,26 @@ pub fn claimed(name: &str) -> bool {
         .is_ok_and(|file| matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock)))
 }
 
+/// Waits until nobody holds the mark `name`, for tests. A process another test starts just now
+/// has a copy of every open file until it runs its program, and a lock goes with the last copy.
+#[cfg(test)]
+pub(crate) fn free(name: &str) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while Mark::claim(name).expect("asked").is_none() {
+        if std::time::Instant::now() > until {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn name(what: &str) -> String {
         format!(r"Local\pult-test-{what}-{}", std::process::id())
-    }
-
-    /// Waits until nobody holds the mark `name`. A process another test starts just now has a
-    /// copy of every open file until it runs its program, and a lock goes with the last copy.
-    fn free(name: &str) -> bool {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while Mark::claim(name).expect("asked").is_none() {
-            if std::time::Instant::now() > until {
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        true
     }
 
     /// Takes the mark's file away when the test ends.

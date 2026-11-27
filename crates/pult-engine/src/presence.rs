@@ -79,6 +79,43 @@ mod tests {
         file
     }
 
+    /// Waits until nobody holds the mark `name` any more. On Linux and macOS a process another
+    /// test starts just now holds a copy of the mark's file until it runs its program, and the
+    /// lock goes with the last copy; a named mutex of Windows is no inherited handle.
+    #[cfg(windows)]
+    fn let_go(_name: &str) {}
+
+    #[cfg(not(windows))]
+    fn let_go(name: &str) {
+        assert!(crate::session::free(name), "the mark {name} is let go");
+    }
+
+    /// Holds the mark `name` along with its runs for a moment from another process, as a process
+    /// another test starts just then does with its copy of the file. Nothing when flock(1) is
+    /// missing (macOS).
+    #[cfg(not(windows))]
+    fn linger(name: &str) -> Option<std::process::Child> {
+        let path = crate::session::file(name, "lock").expect("a path");
+        let mut holder = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exec 9<\"$0\"; flock -s 9 2>/dev/null || exit 3; echo held; exec sleep 0.3")
+            .arg(&path)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        let mut line = String::new();
+        let told = std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(holder.stdout.take().expect("its output")),
+            &mut line,
+        );
+        if told.is_err() || line.trim() != "held" {
+            let _ = holder.kill();
+            let _ = holder.wait();
+            return None;
+        }
+        Some(holder)
+    }
+
     #[test]
     fn a_run_sees_the_runs_before_it_and_the_window() {
         let id = std::process::id();
@@ -91,15 +128,26 @@ mod tests {
         let second = Presence::announce_as(&run, &window);
         assert!(second.note().expect("a note").contains("another pult run"));
 
-        // The mark goes with the runs that hold it.
+        // The race of a process another test starts while the runs hold the mark, made sure of.
+        #[cfg(not(windows))]
+        let lingering = linger(&run);
+
+        // The mark goes with the runs that hold it, and with every copy of them.
         drop(first);
         drop(second);
+        let_go(&run);
         let open_window = open_a_window(&window);
         let alone = Presence::announce_as(&run, &window);
         assert!(alone.note().expect("a note").contains("window is open"));
         drop(open_window);
         drop(alone);
+        let_go(&run);
+        let_go(&window);
         assert_eq!(Presence::announce_as(&run, &window).note(), None);
+        #[cfg(not(windows))]
+        if let Some(mut holder) = lingering {
+            let _ = holder.wait();
+        }
         #[cfg(not(windows))]
         for name in [&run, &window] {
             let _ = std::fs::remove_file(crate::session::file(name, "lock").expect("a path"));
