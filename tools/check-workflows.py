@@ -433,8 +433,13 @@ def check_rolling(name, text, wf):
         problems.append(f"{name}: job build must be cancelled by a newer build (concurrency rolling-build, cancel-in-progress: true)")
     if publish.get("concurrency") != {"group": "rolling-publish", "cancel-in-progress": "false"}:
         problems.append(f"{name}: job publish must never be cancelled (concurrency rolling-publish, cancel-in-progress: false)")
-    if prepare.get("if") != "${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}":
-        problems.append(f"{name}: missing: only a green CI builds (the if of prepare)")
+    # Every finished CI run of a push reaches prepare, red ones too (appkit v0.85.0): prepare builds nothing while a
+    # descendant of the newest green commit is still in CI, and the run of that descendant builds the older green
+    # commit when it is red. Which commit is green is prepare's to decide, from the CI runs it reads.
+    if prepare.get("if") != "${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push' }}":
+        problems.append(f"{name}: missing: only the CI of a push reaches prepare (the if of prepare)")
+    if (prepare.get("permissions") or {}).get("actions") != "read":
+        problems.append(f"{name}: job prepare needs actions: read (it reads which CI runs of main are green or still run)")
     if build.get("if") != "${{ needs.prepare.outputs.current == 'true' }}":
         problems.append(f"{name}: missing: the build must wait for prepare's word that it is the tip")
     if not needs_of(build) >= {"prepare"}:

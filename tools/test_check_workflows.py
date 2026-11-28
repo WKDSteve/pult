@@ -308,8 +308,15 @@ class Rules(unittest.TestCase):
     def test_a_rolling_build_that_does_not_wait_for_prepare_is_found(self):
         self.found(sabotaged("rolling.yml", "needs.prepare.outputs.current == 'true'", "true"), "the tip")
 
-    def test_a_rolling_build_that_ignores_a_failed_ci_is_found(self):
-        self.found(sabotaged("rolling.yml", "    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}", "    if: ${{ true }}"), "green CI builds")
+    def test_a_rolling_build_after_any_ci_run_is_found(self):
+        self.found(sabotaged("rolling.yml", "    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push' }}", "    if: ${{ true }}"), "CI of a push")
+
+    def test_a_rolling_build_after_green_runs_only_is_found(self):
+        # The gate before appkit v0.85.0: a red descendant would then never let prepare build the older green commit.
+        self.found(sabotaged("rolling.yml", "    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push' }}", "    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}"), "CI of a push")
+
+    def test_a_prepare_that_cannot_read_the_ci_runs_is_found(self):
+        self.found(sabotaged("rolling.yml", "      actions: read        # the CI runs of main: which are green, which still run\n", ""), "actions: read")
 
     def test_a_rolling_build_to_another_tag_is_found(self):
         self.found(sabotaged("rolling.yml", "tag: latest", "tag: nightly"), "latest")
